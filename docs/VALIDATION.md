@@ -70,7 +70,28 @@ All three reviewers ran the suite themselves (`66 passed` at the time) and then 
 
 What the review did **not** change: the fail-open design, the `decision: block` Stop format, the rule texts' substance, the additive installer. What remains open by design and is documented: a call merely *named* "…review…" still satisfies the gate; wrappers other than `sh/bash/zsh/dash/ksh -c` and `eval` are not parsed by the push guard; the snapshot cannot make repository text un-seeable by the model.
 
-### Live run
+### Live run (2026-09-20, this machine)
+
+**Live install — done, verified.** `./install.sh` against the real `~/.claude` (backup first: `~/.claude/backups/groundwork-pre-1.1.0-20260920-072240/`, SHA-256 recorded): ECC and OpenSpec detected and skipped; legacy `rules/harness/{engineering-workflow,evidence-policy}.md` moved to `~/.claude/backups/groundwork-legacy-20260920-073720/`; `settings.json` changed by the `hooks.SessionStart` entry only (`diff` against the backup shows exactly those 12 lines); `cmp` confirms all six installed files are byte-identical to the repo; `~/.claude/rules/harness/` no longer exists. The installer's notice about `~/.claude/CLAUDE.md` still pointing at `rules/harness` was acted on by hand (pointer updated to `rules/groundwork/`).
+
+**Installed hooks executed with real payloads — done.**
+```
+echo '{"hook_event_name":"SessionStart","source":"startup","cwd":"~/projects/ai-projects/groundwork",...}' | python3 ~/.claude/hooks/groundwork_session_snapshot.py
+  → 1,314 chars: branch feat/intelligent-harness; HEAD ae04db7 …; 0 modified, 0 untracked; no upstream
+… same for ~/projects/sre-agent-gateway
+  → 2,081 chars: branch phase1-final-readiness-review; 2 modified, 22 untracked; 2 ahead / 0 behind upstream; make/pytest/ruff/terraform/CI commands discovered
+echo '{"cwd":"~/projects/ai-projects/groundwork","transcript_path":"/dev/null"}' | python3 ~/.claude/hooks/require_material_review.py
+  → (no output, exit 0) — the change is committed, so the gate correctly does not fire
+```
+Proves: the files Claude Code will invoke from `settings.json` run and produce the expected output on real repositories. Does not prove: that a fresh interactive session actually received the text.
+
+**Fresh-session proof via `claude -p` — BLOCKED, not done.** Both attempts (`claude -p 'Quote the first two lines of the "[Groundwork] Project snapshot"…'` and `claude -p 'Continue this project. Read-only…'`) returned in ~120 ms with:
+```
+Failed to authenticate: OAuth session expired and could not be refreshed
+```
+`claude auth status` → `"loggedIn": false`. The CLI on this machine has no login (the desktop-app session this work ran in authenticates separately). Status for this row: **RUNTIME VALIDATION REQUIRED** — run `claude login`, then in `~/projects/ai-projects/groundwork` run the first command above; the snapshot's first line should be quoted back. Task 6.4 in `openspec/changes/intelligent-engineering-harness/tasks.md` stays unchecked and the change is deliberately **not archived** until that runs.
+
+**Agent Teams — not exercised live** (see Model-behaviour observations above). "A simple task does not create a team" holds deterministically while `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is unset; "a complex task can use a team" is covered by rule text and hook unit tests only.
 
 ---
 

@@ -34,4 +34,5 @@
 
 - [x] 6.1 Install into a temporary `CLAUDE_CONFIG_DIR` copy of the live config; prove idempotency and no overwrite
 - [x] 6.2 Independent fresh-context review (code + Python + security reviewers); fix MUST FIX; re-run tests
-- [ ] 6.3 Live install on this machine with a settings backup; `claude -p` run proving the snapshot is injected in a fresh session
+- [x] 6.3 Live install on this machine with a settings backup; installed hooks executed with real SessionStart/Stop payloads
+- [ ] 6.4 Fresh-session proof via `claude -p` (BLOCKED 2026-09-20: `Failed to authenticate: OAuth session expired and could not be refreshed` — needs `claude login` on this machine, then re-run)
