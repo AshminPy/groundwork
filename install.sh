@@ -8,7 +8,14 @@
 #   2. OpenSpec CLI (github.com/Fission-AI/OpenSpec) globally via npm.
 #   3. Groundwork's own rules and hooks into ~/.claude/, and merges the required
 #      settings.json entries (never overwrites your existing settings — see
-#      scripts/merge_settings.py for exactly what it touches).
+#      scripts/merge_settings.py for exactly what it touches). A pre-Groundwork
+#      copy of the rules under ~/.claude/rules/harness/ is moved to a backup so
+#      nothing is loaded twice (scripts/migrate_legacy_rules.py).
+#
+# Options:
+#   --agent-teams   also set CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in settings.json
+#                   (Claude Code's experimental Agent Teams; opt-in, never default —
+#                   it changes how named subagents launch, see docs/en/agent-teams).
 #
 # Safe to re-run: every step is idempotent.
 #
@@ -18,6 +25,14 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+MERGE_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --agent-teams) MERGE_ARGS+=("--agent-teams") ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "Unknown option: $arg (see --help)"; exit 1 ;;
+  esac
+done
 
 echo "== Groundwork installer =="
 echo "Target: $CLAUDE_DIR"
@@ -57,17 +72,23 @@ openspec config set telemetry.enabled false >/dev/null 2>&1 || true
 # ---- 3. Groundwork's own rules and hooks -----------------------------------
 echo ""
 echo "-- Installing Groundwork rules and hooks --"
+python3 "$HERE/scripts/migrate_legacy_rules.py" "$CLAUDE_DIR"
 mkdir -p "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/hooks"
 cp "$HERE"/rules/*.md "$CLAUDE_DIR/rules/groundwork/"
 cp "$HERE"/hooks/*.py "$CLAUDE_DIR/hooks/"
-chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py "$CLAUDE_DIR"/hooks/require_material_review.py
+chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
+         "$CLAUDE_DIR"/hooks/require_material_review.py \
+         "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py
 
-python3 "$HERE/scripts/merge_settings.py" "$CLAUDE_DIR/settings.json"
+python3 "$HERE/scripts/merge_settings.py" "${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"}" "$CLAUDE_DIR/settings.json"
 
 echo ""
 echo "== Groundwork installed. =="
 echo ""
 echo "Next steps:"
 echo "  1. In any project you want spec-driven MATERIAL work in, run: openspec init --tools claude"
-echo "  2. Read README.md and docs/WORKFLOW.md for how the harness behaves."
-echo "  3. Optional sanity check: docs/VALIDATION.md has a copy-pasteable smoke test."
+echo "  2. Read README.md and docs/ARCHITECTURE.md for how the harness behaves."
+echo "  3. Optional sanity check: python3 $HERE/tests/test_hooks.py"
+if [ ${#MERGE_ARGS[@]} -eq 0 ]; then
+  echo "  4. Agent Teams stay off. To opt in later: ./install.sh --agent-teams (interactive sessions only)."
+fi
