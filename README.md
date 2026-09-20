@@ -102,6 +102,12 @@ Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED
 ```
 Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime. `N/A` is only legitimate when the step genuinely doesn't apply, stated why; it is never used to reach COMPLETE by omission.
 
+## Future direction
+
+Groundwork stays the engineering-quality and governance layer, and it stays small. The agreed direction for the wider harness — a tiny always-loaded universal core (evidence, uncertainty, safe autonomy, untrusted-content discipline, truthful status), domain capabilities that load only when relevant (engineering via Groundwork/ECC/OpenSpec; cloud, research, documentation, presentations and others as scoped skills or rules), an automatically chosen execution model, fresh-session continuation from repository evidence rather than growing conversations, optional least-privilege MCP tooling, deterministic safety boundaries beyond Git, and a reproducible version-controlled setup — is written down in [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).
+
+Everything there is labelled **CURRENT (1.1.0)** or **FUTURE**. Nothing marked FUTURE exists yet, and nothing is added until a real task exposes a gap that native Claude Code, Groundwork, ECC or OpenSpec cannot already cover. The SRE Agent pilot is the first such test.
+
 ## Does it actually work?
 
 [docs/VALIDATION.md](docs/VALIDATION.md) is the real evidence: the actual test prompts, the actual transcripts, and what happened — including the times it didn't work on the first try and what was fixed, and a clear line between deterministic test evidence and observed model behaviour. Groundwork does not ask you to trust marketing copy about itself.
@@ -130,7 +136,8 @@ groundwork/
     ├── ARCHITECTURE.md
     ├── VALIDATION.md                  real test transcripts and results
     ├── TROUBLESHOOTING.md
-    └── UPGRADE-ROLLBACK.md
+    ├── UPGRADE-ROLLBACK.md
+    └── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
 ```
 
 ## License and attribution
