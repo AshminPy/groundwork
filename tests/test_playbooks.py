@@ -6,6 +6,7 @@ Proves the artefacts and the install layout. It does NOT prove that Claude route
 that is model behaviour; see scripts/check_routing.py for the live scenario check.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,7 @@ def test_router_and_playbooks() -> None:
                    "Omit any section that has nothing useful", "Never imply verification that did not happen",
                    "Do not print routing or playbook debug lines", "Clean output never hides",
                    "written in user language", "no file names or paths", "it never removes it",
+                   "## Harness metadata", "never invented", "This block is what the telemetry hook records",
                    "## Checklist style", "`[x]` completed or verified", "`[ ]` pending", "`[!]` an important risk",
                    "`[-]` not applicable", "no emojis or decorative symbols", "never on every sentence",
                    "never to imply failure", "Heading `Technical details`", "Heading `Evidence & references`"):
@@ -114,13 +116,20 @@ def test_install_copies_playbooks() -> None:
         check("all ten playbooks installed", installed == sorted(f"{c}.md" for c in CATEGORIES), str(installed))
         check("router installed under rules/groundwork", (cfg / "rules" / "groundwork" / "task-routing.md").is_file())
         check("output contract installed under rules/groundwork", (cfg / "rules" / "groundwork" / "output-contract.md").is_file())
+        version_text = (cfg / "groundwork" / "VERSION").read_text().strip() if (cfg / "groundwork" / "VERSION").exists() else ""
+        check("VERSION written from CHANGELOG", re.fullmatch(r"\d+\.\d+\.\d+", version_text) is not None, version_text or "missing")
+        check("telemetry hook installed", (cfg / "hooks" / "groundwork_telemetry.py").is_file())
+        (cfg / "groundwork" / "telemetry").mkdir(exist_ok=True)
+        (cfg / "groundwork" / "telemetry" / "events.jsonl").write_text("{}\n")
         check("no playbook installed under rules/", not list((cfg / "rules").rglob("research.md")))
         for cat in CATEGORIES:
             check(f"installed {cat}.md identical to repo",
                   (cfg / "groundwork" / "playbooks" / f"{cat}.md").read_bytes() == (PLAYBOOKS / f"{cat}.md").read_bytes())
         r = subprocess.run(["bash", str(REPO_ROOT / "uninstall.sh")], capture_output=True, text=True, env=env, timeout=60)
         check("uninstall exits 0", r.returncode == 0, r.stderr[-300:])
-        check("uninstall removes the playbooks directory", not (cfg / "groundwork").exists())
+        check("uninstall removes the playbooks and VERSION", not (cfg / "groundwork" / "playbooks").exists() and not (cfg / "groundwork" / "VERSION").exists())
+        check("uninstall keeps telemetry records", (cfg / "groundwork" / "telemetry" / "events.jsonl").is_file())
+        check("uninstall removes the telemetry hook", not (cfg / "hooks" / "groundwork_telemetry.py").exists())
         check("uninstall removes rules/groundwork", not (cfg / "rules" / "groundwork").exists())
     finish()
 

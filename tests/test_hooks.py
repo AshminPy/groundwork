@@ -13,6 +13,7 @@ version only printed FAIL lines and pytest still showed "passed").
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -395,6 +396,7 @@ def test_session_snapshot() -> None:
         out = run_hook(SNAPSHOT_HOOK, {"cwd": str(fresh)})
         text = snapshot_text(out)
         check("empty git repo -> no crash, 'no commits yet'", "no commits yet" in text and "no upstream" in text, text)
+        check("snapshot carries the harness line (version + profile)", re.search(r"^harness: Groundwork .+; profile: .+$", text, re.M) is not None, text[:400])
     finish()
 
 
@@ -414,7 +416,7 @@ def test_settings_merge() -> None:
         r = run_script(MERGE, args=[str(fresh)])
         data = load(fresh)
         cmds = [h["command"] for ev in ("PreToolUse", "Stop", "SessionStart") for g in data["hooks"][ev] for h in g["hooks"]]
-        check("fresh: three hook entries registered", len(cmds) == 3 and any("snapshot" in c for c in cmds), r.stdout)
+        check("fresh: four hook entries registered", len(cmds) == 4 and any("snapshot" in c for c in cmds) and any("telemetry" in c for c in cmds), r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))
         check("fresh: no agent-teams env by default", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in data["env"], json.dumps(data["env"]))
 

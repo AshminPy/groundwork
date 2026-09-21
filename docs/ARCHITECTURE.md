@@ -40,6 +40,10 @@ Every line in these files is paid in every session (Claude Code loads `~/.claude
 
 `rules/task-routing.md` is a fourth always-loaded rule (~45 lines). It classifies each substantive request into one of ten categories, applies the material-ambiguity test, and tells Claude to read exactly one playbook from `~/.claude/groundwork/playbooks/` — a directory deliberately outside `~/.claude/rules/`, so Claude Code never auto-loads playbooks and each task pays for one ~40–60-line file only. The engineering categories still run inside the request lifecycle below (tiers, OpenSpec, review gate, completion block); the router only decides which workflow shape and answer shape apply. `rules/output-contract.md` is the fifth always-loaded rule (~25 lines): the three-layer answer shape every playbook inherits — plain main response, `Technical details`, `Evidence & references` — with the omit-empty, honest-validation and no-debug-lines rules stated once. On any conflict the pre-existing rule wins. Routing and output shape are advisory (rule text); it is validated structurally by `tests/test_playbooks.py` and behaviourally by `scripts/check_routing.py`.
 
+## Harness metadata and telemetry (1.3.0)
+
+`output-contract.md` asks every playbook-driven response to end with a small `Harness metadata` block. `hooks/groundwork_telemetry.py` (Stop) reads that block from `last_assistant_message`, adds deterministic facts from the current turn of the transcript (tool names, MCP servers, Agent calls, count of distinct edited files, whether a test-shaped or deploy-shaped command ran), the outcome from the completion block, a heuristic clarification flag, the installed version (`~/.claude/groundwork/VERSION`, written by the installer) and a 12-character hash of the working directory, and appends one JSON line to `~/.claude/groundwork/telemetry/events.jsonl`. No block → no record. It never blocks, prints or raises; an unwritable path is silently ignored. Groundwork had no audit log before this; the hook is that mechanism, not a second one. Uninstall keeps the records.
+
 ## Request lifecycle
 
 ```

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 — 2026-09-21
+
+Usage metadata and telemetry. Routing, playbooks, evidence, validation and safety unchanged.
+
+- **`Harness metadata` block** (output-contract.md): substantive task responses end with harness,
+  profile, playbook, execution mode, agents, evidence types, validation state — only known
+  values, never invented; omitted for trivial replies.
+- **New Stop hook `hooks/groundwork_telemetry.py`** — one append-only JSONL record per task at
+  `~/.claude/groundwork/telemetry/events.jsonl`: ids, version, profile, playbook, execution mode,
+  agent count/roles, tools, MCP servers, evidence types, clarification flag, environment,
+  outcome, validation, tests run, implementation/deployment flags, files-changed count, cwd hash.
+  No prompts, commands, paths, secrets or reasoning: free text from the block is kept only as short
+  labels, records are owner-only (0600), the transcript is read from its tail. Fail-open;
+  `GROUNDWORK_TELEMETRY=off`.
+- Session snapshot gains one `harness: Groundwork <version>; profile: <GROUNDWORK_PROFILE>` line;
+  installer writes `~/.claude/groundwork/VERSION`; uninstall keeps telemetry records.
+- Tests: `test_telemetry.py` (new), installer/merge checks updated for the fourth hook.
+
 ## 1.2.4 — 2026-09-21
 
 Presentation only: the 1.2.3 symbol vocabulary is replaced by a clean checklist style in

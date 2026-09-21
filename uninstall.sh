@@ -2,7 +2,8 @@
 # Groundwork uninstaller.
 #
 # Removes only what Groundwork added:
-#   - ~/.claude/rules/groundwork/ (the rule files) and ~/.claude/groundwork/ (task playbooks)
+#   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/ and VERSION
+#     (telemetry records under ~/.claude/groundwork/telemetry/ are kept — they are your data)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py
 #   - the three hook entries, the deny rules, and the env defaults this repo's
@@ -25,9 +26,16 @@ for arg in "$@"; do
 done
 
 echo "== Groundwork uninstaller =="
-rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork"
-rm -f "$CLAUDE_DIR/hooks/block_protected_push.py" \
+rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks"
+rm -f "$CLAUDE_DIR/groundwork/VERSION" \
+      "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
-      "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py"
+      "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
+      "$CLAUDE_DIR/hooks/groundwork_telemetry.py"
+if [ -d "$CLAUDE_DIR/groundwork/telemetry" ]; then
+  echo "Kept $CLAUDE_DIR/groundwork/telemetry/ (your usage records) — delete it yourself if you do not want it."
+else
+  rmdir "$CLAUDE_DIR/groundwork" 2>/dev/null || true
+fi
 python3 "$HERE/scripts/unmerge_settings.py" "${UNMERGE_ARGS[@]+"${UNMERGE_ARGS[@]}"}" "$CLAUDE_DIR/settings.json"
 echo "Done. ECC and OpenSpec were left untouched — see README.md if you want to remove those too."
