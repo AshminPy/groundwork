@@ -20,9 +20,5 @@ Make the user understand something well enough to act on it or reason about it t
 - The user can restate the idea and knows the next thing to try or read.
 
 ## Output Format
-```
-Answer: <the model / the mechanism, at the requested depth>
-Why it matters: <one or two lines: the consequence for their situation>
-Example: <concrete, ideally from their context>
-Next: <one thing to try, check, or read next>
-```
+Main response headings: **Answer** · **Why it matters** (when useful) · **Example** (when useful). Depth follows the request.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

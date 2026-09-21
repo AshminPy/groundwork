@@ -23,11 +23,6 @@ Change a running system (cloud, Kubernetes, Docker, local) safely, prove it is h
 - Target confirmed, change applied through the project's mechanism, runtime health observed, rollback known. Anything unobserved is PARTIAL, not DEPLOYED.
 
 ## Output Format
-```
-Status: DEPLOYED / PARTIAL / FAILED / BLOCKED
-Target: <environment / system / version>
-Change: <what was applied, in one or two lines>
-Validation: <health / runtime check — command → observed result>
-Rollback: <exact procedure or command>
-Issues: <only real issues; omit if none>
-```
+Main response headings: **Status** (deployed / partial / failed / blocked) · **What was deployed** (target, version) · **Validation** (the runtime health check in plain words) · **Issues / rollback** (only when relevant).
+Technical details carries the preview/apply output, the health-check command → result, the rollback command, and the completion block for MATERIAL deploys.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

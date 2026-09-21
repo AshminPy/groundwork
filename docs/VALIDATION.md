@@ -4,6 +4,27 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.2.1 (2026-09-21) — global output contract
+
+Scope: `openspec/changes/output-contract/`. Presentation only.
+
+### Deterministic evidence
+- Non-regression: SHA-256 of the nine pre-existing critical files unchanged (9/9); `test_hooks.py` 92 passed.
+- `python3 tests/test_playbooks.py` → 98 passed, 0 failed; `python3 -m pytest tests -q` → 7 passed. New checks pin: the contract exists and is ≤ 40 lines (actual 25), contains Layer 1/2/3, `Technical details`, `Evidence & references`, the omit-empty, honest-validation, never-hide and no-debug-lines rules; the router (33 lines) points at it; every playbook inherits by reference and none restates the layers; the installer copies the contract.
+
+### Model-behaviour observations (six fresh headless sessions after live install)
+Representative self-contained prompts for IMPLEMENT, TROUBLESHOOT, AUDIT, VALIDATE, RESEARCH and EXPLAIN (each ~$0.25):
+- Length 175–389 words per answer; every answer led with the result; no `Routing:`/`Playbook:` lines were printed; no empty "none" sections.
+- `Technical details` appeared in IMPLEMENT, AUDIT and RESEARCH; `Evidence & references` in AUDIT and RESEARCH (the docs page for readiness probes, the IAM binding); EXPLAIN and VALIDATE correctly used neither.
+- No duplication between the main response and the details layer was found in the six outputs.
+- Drift noted, not fixed (advisory rule, not a defect): IMPLEMENT placed the completion block under its own `STATUS` heading rather than under `Technical details`; TROUBLESHOOT kept its two fix commands in the main body instead of the details layer. Both still satisfied the priority order (honest "not yet done", PARTIAL stated).
+The earlier inline 1.2.0 answer to the same "re-render your response" request was 1 screen of dense bullets with raw evidence strings; the same content under this contract reads as result → what changed → validation in plain words, with hashes, counts and PR numbers moved to `Technical details`.
+
+### Independent review
+`ecc:code-reviewer`, fresh context: confirmed the protected rules, hooks and scripts untouched, tests green, the completion-block relocation consistent with `engineering-workflow.md` §3, and no license-to-omit wording (the omit-empty rule is countered by the never-hide rule in the same file). One MUST FIX, fixed: RESEARCH's new Output Format had dropped the `Unknowns` heading that its own completion criteria require — restored and pinned by a test. One NICE TO HAVE, applied: DESIGN's heading is now `Important tradeoffs / risks` so risk stays visible in the main response.
+
+---
+
 ## 1.2.0 (2026-09-21) — task routing and playbooks
 
 Scope: `openspec/changes/task-routing-playbooks/`. Additive only.

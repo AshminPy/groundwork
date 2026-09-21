@@ -21,14 +21,5 @@ Recommend one design that satisfies today's requirement with the smallest sound 
 - One recommendation, its material tradeoffs, its foreseeable variation points handled by configuration or an interface, and a named validation method.
 
 ## Output Format
-```
-Recommendation: <one design, one sentence>
-Why:
-- <key reasons only, each tied to evidence>
-Design: <the shape: components, boundaries, what is configuration, how the next instance is added>
-Tradeoffs:
-- <material tradeoffs only>
-Risks:
-- <meaningful risks only, with how each is observed or mitigated>
-Next: <the one action that moves this forward>
-```
+Main response headings: **Recommendation** · **Design** · **Why** · **Important tradeoffs / risks** · **Next action** (only when needed). The DECISION record for MATERIAL choices belongs in the OpenSpec design or Technical details.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

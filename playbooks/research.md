@@ -22,11 +22,5 @@ Answer a question about current state, technology, or fact with evidence the use
 - The answer is stated directly, each material claim has a source, and unknowns are named rather than glossed.
 
 ## Output Format
-```
-Answer: <direct answer first>
-Evidence:
-- <only the important sources, with URL/path and version/date where it matters>
-Unknowns:
-- <only material uncertainty; omit the section if none>
-Recommendation: <only when appropriate or requested>
-```
+Main response headings: **Answer** · **Key findings** · **Unknowns** (material uncertainty only; omit if none) · **Evidence summary** · **Recommendation** (only when appropriate or requested).
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

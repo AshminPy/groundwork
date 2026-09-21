@@ -25,13 +25,6 @@ Find the real cause of a failure with evidence, apply or recommend the smallest 
 - Failure reproduced → cause demonstrated → minimal fix applied or recommended → original path re-run and passing → regressions checked; or an honest NOT VERIFIED / BLOCKED with the missing piece named.
 
 ## Output Format
-```
-Status: FIXED / ROOT CAUSE FOUND / NOT VERIFIED / BLOCKED
-Root cause: <one or two lines; "hypothesis" if not proven>
-Evidence:
-- <the strongest supporting evidence — exact lines, not the whole log>
-Fix: <what changed, or what is recommended>
-Validation: <command + result proving the original path now works>
-Remaining risk: <regressions, siblings, unverified parts>
-Next: <one action>
-```
+Main response headings: **Status** (fixed / root cause found / not verified / blocked) · **Root cause** (plain language; "hypothesis" if not proven) · **Fix** · **Validation** · **Remaining risk / next action** (only when needed).
+Technical details carries the exact error, the proving log lines or path, the fix command, and the validation command with its result.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.
