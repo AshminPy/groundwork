@@ -11,7 +11,7 @@ Make the smallest safe change that delivers the requested behaviour, prove it wi
 5. Run the narrowest relevant check first, then the project's real test/lint/build commands (`evidence-policy.md` §5 — from README, Makefile, manifests or CI, never invented).
 6. Investigate a failure before changing more code; never weaken tests, linters or hooks to get green.
 7. Confirm the requested behaviour on the real path when runtime matters.
-8. Report with the completion block.
+8. Report the completion facts in prose (engineering-workflow.md §3).
 
 ## Evidence
 - Exact command + result line for every validation claim; a diff summary for the change; runtime evidence for runtime behaviour. Mocks never prove runtime.
@@ -23,6 +23,6 @@ Make the smallest safe change that delivers the requested behaviour, prove it wi
 - Requested behaviour confirmed, project validation green (or the failure named), review done for MATERIAL work, completion block filled with evidence. A pre-existing failing test still makes `Tests: ❌` and `Overall: PARTIAL`.
 
 ## Output Format
-Main response headings: **Status** (one sentence = the completion block's Overall: complete / partial / blocked / failed) · **What changed** · **Validation** (the completion-block outcomes in plain words) · **Remaining work** (only if incomplete).
-Technical details carries the formal completion block — Code / Tests / Reviewed / Merged / Deployed / Live validated, ✅/❌/N/A with evidence (`engineering-workflow.md` §3) — plus files, tests, PR and commit.
+Main response headings: **Status** (one sentence: complete / partial / blocked / failed) · **What changed** · **Validation** (the completion facts in plain prose) · **Remaining work** (only if incomplete).
+Technical details carries the evidence for the completion facts — Code / Tests / Reviewed / Merged / Deployed / Live validated as command → result, PR and commit (`engineering-workflow.md` §3), never as a ✅/❌ list; the aligned STATUS layout only when the user asks for a release checklist.
 Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.
