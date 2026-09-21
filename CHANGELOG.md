@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.2 — 2026-09-21
+
+Wording only, in `rules/output-contract.md` Layer 1: the main response is written in user
+language and answers only what happened / did it work / what matters / what is still risky
+or unverified / what next. File names, paths, rule and test names, commits, PR numbers,
+checksums, harness internals, implementation history, reviewer and tool names, backup paths
+and low-level validation mechanics move to Technical details or Evidence & references — kept
+exact there, never dropped. One new test check pins the rule.
+
 ## 1.2.1 — 2026-09-21
 
 Presentation only. No routing, rule, hook, settings or safety change.
