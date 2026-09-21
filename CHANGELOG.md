@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — 2026-09-21
+
+Local health dashboard from telemetry — no server, no LLM, no network.
+
+- `scripts/groundwork_report.py` → `~/.claude/groundwork/bin/`: `generate` (dashboard.html, `--snapshot` for dated HTML + Markdown), `schedule disabled|daily|weekly|monthly|yearly` (macOS launchd, one job, replaced in place), `status`.
+- Dashboard: summary cards with numerator/denominator, trends vs the previous equivalent period (only with ≥5 known outcomes in both), weekly health trend, playbook usage, gap by playbook, execution mode, validation state, tool/MCP usage, harness versions, deterministic gaps list; client-side filters (period, profile, playbook, version, environment) over aggregated buckets; inline SVG, self-contained, owner-only files.
+- Honest metrics: unknown outcomes excluded from denominators; rework rate and verified accuracy shown as N/A (no ground truth collected).
+- Config `report.json`: schedule (default weekly) and health window (default 30 days) are separate.
+- Installer applies the configured schedule; uninstall removes the job and script, keeps telemetry and reports.
+- Tests: `tests/test_report.py` (64 checks incl. Python↔JS parity under node).
+
 ## 1.3.3 — 2026-09-21
 
 Two consistency fixes; schema 2, observed/declared split, profile, outcome parsing, privacy and fail-open unchanged.

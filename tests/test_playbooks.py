@@ -5,6 +5,7 @@ Run: python3 tests/test_playbooks.py   (or: python3 -m pytest tests -q)
 Proves the artefacts and the install layout. It does NOT prove that Claude routes correctly —
 that is model behaviour; see scripts/check_routing.py for the live scenario check.
 """
+import json
 import os
 import re
 import shutil
@@ -108,7 +109,9 @@ def test_install_copies_playbooks() -> None:
         (bin_dir / "openspec").write_text('#!/usr/bin/env bash\ncase "$1" in --version) echo "1.12.0";; *) exit 0;; esac\n')
         for f in ("claude", "openspec"):
             os.chmod(bin_dir / f, 0o755)
-        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(cfg), NODE_USE_SYSTEM_CA="0")
+        agents_dir = cfg.parent / "launch-agents"
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(cfg), NODE_USE_SYSTEM_CA="0",
+                   GROUNDWORK_LAUNCH_AGENTS_DIR=str(agents_dir), GROUNDWORK_NO_LAUNCHCTL="1")
         for i in (1, 2):
             r = subprocess.run(["bash", str(REPO_ROOT / "install.sh")], capture_output=True, text=True, env=env, timeout=120)
             check(f"install run {i} exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-400:])
@@ -119,6 +122,10 @@ def test_install_copies_playbooks() -> None:
         version_text = (cfg / "groundwork" / "VERSION").read_text().strip() if (cfg / "groundwork" / "VERSION").exists() else ""
         check("VERSION written from CHANGELOG", re.fullmatch(r"\d+\.\d+\.\d+", version_text) is not None, version_text or "missing")
         check("telemetry hook installed", (cfg / "hooks" / "groundwork_telemetry.py").is_file())
+        check("report generator installed", (cfg / "groundwork" / "bin" / "groundwork_report.py").is_file())
+        check("report schedule applied on install (default weekly, one plist)", len(list(agents_dir.glob("*.plist"))) == 1 and json.loads((cfg / "groundwork" / "report.json").read_text())["schedule"] == "weekly")
+        (cfg / "groundwork" / "reports").mkdir(exist_ok=True)
+        (cfg / "groundwork" / "reports" / "dashboard.html").write_text("<html></html>")
         (cfg / "groundwork" / "telemetry").mkdir(exist_ok=True)
         (cfg / "groundwork" / "telemetry" / "events.jsonl").write_text("{}\n")
         check("no playbook installed under rules/", not list((cfg / "rules").rglob("research.md")))
@@ -129,6 +136,7 @@ def test_install_copies_playbooks() -> None:
         check("uninstall exits 0", r.returncode == 0, r.stderr[-300:])
         check("uninstall removes the playbooks and VERSION", not (cfg / "groundwork" / "playbooks").exists() and not (cfg / "groundwork" / "VERSION").exists())
         check("uninstall keeps telemetry records", (cfg / "groundwork" / "telemetry" / "events.jsonl").is_file())
+        check("uninstall keeps historical reports, removes generator and launchd job", (cfg / "groundwork" / "reports" / "dashboard.html").is_file() and not (cfg / "groundwork" / "bin").exists() and not list(agents_dir.glob("*.plist")))
         check("uninstall removes the telemetry hook", not (cfg / "hooks" / "groundwork_telemetry.py").exists())
         check("uninstall removes rules/groundwork", not (cfg / "rules" / "groundwork").exists())
     finish()

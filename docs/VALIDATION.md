@@ -4,6 +4,22 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.4.0 (2026-09-21) — local health dashboard
+
+Scope: `scripts/groundwork_report.py` (new), `tests/test_report.py` (new), install/uninstall wiring. Rules, hooks and playbooks untouched (`git diff -- rules hooks playbooks` empty on the branch).
+
+### Deterministic evidence
+- `python3 tests/test_report.py` → 64 passed: missing and empty telemetry (dashboard still written, N/A never 0%); malformed lines and a schema-2 line with no observed/declared fields skipped or normalised; schema-1 record accepted; hand-counted 30-day metrics on a synthetic 400-day history (25 tasks, completion 16/20, gap 4/20, validation 17/22, evidence 22/23, compliance 23/25, 5 unknown outcomes excluded from denominators); gap sentences; trends +30/−30 vs the previous 30 days; 7-day, 90-day, 365-day and all-data windows; profile, playbook, version and environment filters; single-record insufficient data (no trends); self-contained HTML (no URLs, no session ids/hashes/timestamps in the payload; owner-only files); Python↔JS parity under node for six window/filter combinations (summary, trends, gaps, modes, versions, tools, weekly series, by-playbook); Markdown snapshot numbers; daily/weekly/monthly/yearly plists (one file, correct calendar, `generate --snapshot`), `--hour`, disabled removes; config window (90) independent of the weekly schedule; 5,000 synthetic records across 3,000 days collapse to weekly buckets under the cap.
+- `test_playbooks.py` 132 (install copies the generator and applies the default weekly schedule with launchctl stubbed; uninstall keeps `events.jsonl` and `reports/dashboard.html`, removes `bin/` and the plist). `test_hooks.py` 93, `test_telemetry.py` 81, `pytest tests -q` 10 passed.
+- One parity bug found by the test and fixed before merge: a half-percent (96.5) rounded to 96 in Python and 97 in JS; both now use round-half-up (`pct0`).
+
+### Live (this machine)
+- `./install.sh` → `report schedule: weekly`; `launchctl print gui/<uid>/com.groundwork.report` shows the calendar-interval job; exactly one `com.groundwork.report.plist` in `~/Library/LaunchAgents`.
+- `groundwork_report.py generate --snapshot` on the real telemetry (22 records → 9 buckets) wrote `dashboard.html`, `2026-09-21.html`, `2026-09-21.md` (0600). The page contains no `http` string. Rendered in the Browser pane and headless Chrome: cards, charts, gaps and filters present; the 30-day trend panel honestly reports "not enough weeks" because all records fall in one week.
+- Independent review (fresh-context code reviewer): approved; one MEDIUM — Python rounded rates half-to-even and JS half-up (1/16 → 6.2 vs 6.3; invisible after whole-percent rounding but a parity risk) — fixed by using round-half-up in both, pinned by a test; playbook now passes the same label filter as other fields; a direct test for the 64 MB tail read added; the telemetry large-session timing bound raised from 3 s to 10 s after the reviewer saw 14 s under full-suite load (0.19 s standalone).
+
+---
+
 ## 1.3.3 (2026-09-21) — no checklist in normal responses; metadata block consistency
 
 Scope: engineering-workflow §3 wording, output-contract Validation and metadata rules, two implement/deploy playbook lines, private behaviour rules, hook reconciliation of agent facts. Schema 2, observed/declared, profile, outcome parsing, privacy, fail-open unchanged.
