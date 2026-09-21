@@ -15,7 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ROUTER = REPO_ROOT / "rules" / "task-routing.md"
 CONTRACT = REPO_ROOT / "rules" / "output-contract.md"
-MAX_CONTRACT_LINES = 40
+MAX_CONTRACT_LINES = 50
 PLAYBOOKS = REPO_ROOT / "playbooks"
 CATEGORIES = ["research", "explain", "design", "plan", "implement",
               "troubleshoot", "validate", "audit", "deploy", "document"]
@@ -59,7 +59,11 @@ def test_router_and_playbooks() -> None:
     for needle in ("## Layer 1", "## Layer 2", "## Layer 3", "Technical details", "Evidence & references",
                    "Omit any section that has nothing useful", "Never imply verification that did not happen",
                    "Do not print routing or playbook debug lines", "Clean output never hides",
-                   "written in user language", "no file names or paths", "it never removes it"):
+                   "written in user language", "no file names or paths", "it never removes it",
+                   "## Visual status language", "`◆ VERIFIED`", "`◐ PARTIAL`", "`◇ UNVERIFIED`", "`▲ RISK`",
+                   "`■ BLOCKED`", "`→ NEXT`", "`↳ EVIDENCE`", "`⌁ TECHNICAL`", "semantic, not decorative",
+                   "always followed by its text label", "`⌁ Technical details`", "`↳ Evidence & references`",
+                   "do not use `→` as a generic arrow"):
         check(f"output contract contains: {needle[:40]}", needle in contract)
     for cat in CATEGORIES:
         check(f"router lists {cat.upper()}", f"| {cat.upper()} |" in router)

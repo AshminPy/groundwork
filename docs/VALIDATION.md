@@ -4,6 +4,24 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.2.3 (2026-09-21) — visual status language
+
+Scope: `rules/output-contract.md` "Visual status language" section (presentation only; 1.2.2 user-language rule included in the same file).
+
+### Deterministic evidence
+- Non-regression: the nine pre-existing critical files unchanged (9/9); `test_hooks.py` 92 passed.
+- `python3 tests/test_playbooks.py` → 117 passed; `pytest` → 7 passed. New checks pin every marker with its label (`◆ VERIFIED` … `⌁ TECHNICAL`), "semantic, not decorative", "always followed by its text label", the two layer headings, and the reserved-symbol rule (no `→` as a generic arrow). Contract is 33 lines (cap 50).
+
+### Model-behaviour observations (six fresh sessions after live install)
+- Every symbol that appeared carried its text label (0 bare symbols across 6 outputs).
+- VALIDATE was exemplary: `◐ PARTIAL` result, `◆ VERIFIED` staging vs `◇ UNVERIFIED / RUNTIME VALIDATION REQUIRED` production, one `→ Next`, `⌁ Technical details` with the reproduce command.
+- IMPLEMENT and AUDIT used the markers correctly for state and the technical heading; IMPLEMENT wrote "Status: ◆ VERIFIED" instead of "◆ Status" and printed "Next action: none" (empty-section rule not followed).
+- TROUBLESHOOT and EXPLAIN used no symbols; EXPLAIN correctly (nothing to mark), TROUBLESHOOT should have marked its status and its unverified fix — advisory drift.
+- Two outputs used `→` as a prose arrow ("→ still green"); the contract now reserves the symbols for their markers.
+Symbols tracked evidence state accurately wherever they were used; the misses are omissions, not false VERIFIED claims.
+
+---
+
 ## 1.2.1 (2026-09-21) — global output contract
 
 Scope: `openspec/changes/output-contract/`. Presentation only.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.3 — 2026-09-21
+
+Presentation only: Groundwork's visual status language, defined once in
+`rules/output-contract.md` and inherited by every playbook — `◆ VERIFIED`, `◐ PARTIAL`,
+`◇ UNVERIFIED`, `▲ RISK`, `■ BLOCKED`, `→ NEXT`, `↳ EVIDENCE`, `⌁ TECHNICAL`; symbol always
+with its text label; semantic, never decorative; used for the overall result, validation
+states, risks, blockers, uncertainty and next action only; `⌁ Technical details` and
+`↳ Evidence & references` become the layer headings. Tests pin the vocabulary and rules.
+
 ## 1.2.2 — 2026-09-21
 
 Wording only, in `rules/output-contract.md` Layer 1: the main response is written in user
