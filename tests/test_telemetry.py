@@ -172,6 +172,14 @@ def test_telemetry_hook() -> None:
         check(f"large session ({huge.stat().st_size // 1_000_000} MB, 200k old lines): only the current turn parsed, {dt:.2f}s", r.returncode == 0 and rec5["tools"] == ["Grep"] and rec5["deployment_performed"] is False and dt < 3.0, json.dumps(rec5) + f" dt={dt:.2f}")
         check("records appended for each of the above", len(events.read_text().splitlines()) == n_before + 2)
 
+        # canonical layout: fenced code block, aligned Key: value lines, no bullets
+        fenced = ("Status\n\nComplete. Done.\n\n```\nSTATUS\nCode: ok\nOverall: PARTIAL\n```\n\n```\nHARNESS METADATA\n"
+                  "Harness:        Groundwork\nProfile:        work\nPlaybook:       DEPLOY\nExecution:      agent team\n"
+                  "Agents:         3 — lead, implementer, validator\nEvidence:       repo + runtime\nValidation:     partial\nEnvironment:    staging\n```\n")
+        run({**payload, "last_assistant_message": fenced}, env)
+        recf = json.loads(events.read_text().splitlines()[-1])
+        check("code-block layout parsed", recf["playbook"] == "DEPLOY" and recf["execution_mode"] == "agent_team" and recf["agent_count"] == 3 and recf["agent_roles"] == ["lead", "implementer", "validator"] and recf["evidence_sources"] == ["repo", "runtime"] and recf["validation"] == "partial" and recf["environment"] == "staging" and recf["profile"] == "work" and recf["outcome"] == "partial", json.dumps(recf))
+
         # no metadata block -> no record (trivial/conversational reply)
         n_before = len(events.read_text().splitlines())
         run({**payload, "last_assistant_message": "Sure — Terraform state maps config to real resources."}, env)
