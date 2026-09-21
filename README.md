@@ -113,7 +113,7 @@ python3 ~/.claude/groundwork/bin/groundwork_report.py status
 open ~/.claude/groundwork/reports/dashboard.html
 ```
 
-The schedule is a macOS launchd agent (`com.groundwork.report`, default weekly, Monday 08:00; `--hour` to change) that runs `generate --snapshot` — Claude does not need to be running and no API call is made. Schedule and analysis window are separate: `~/.claude/groundwork/report.json` holds `schedule` and `window_days` (default 30). Report generation is a separate process that no hook calls, so a reporting failure cannot affect task execution or telemetry collection. Uninstall removes the job and the script but keeps `telemetry/` and `reports/`.
+The schedule is a macOS launchd agent (`com.groundwork.report`, default weekly, Monday 08:00; `--hour` to change) that runs `generate --snapshot` — Claude does not need to be running and no API call is made. On Linux the schedule is only recorded: run `generate --snapshot` manually or from cron. Schedule and analysis window are separate: `~/.claude/groundwork/report.json` holds `schedule` and `window_days` (default 30). Report generation is a separate process that no hook calls, so a reporting failure cannot affect task execution or telemetry collection. Uninstall removes the job and the script but keeps `telemetry/` and `reports/`.
 
 ## The completion facts
 

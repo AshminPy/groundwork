@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1 — 2026-09-21
+
+- `schedule` on a non-macOS host records the config and says to run `generate --snapshot` manually or from cron instead of pretending a launchd job exists; installer message matches.
+
 ## 1.4.0 — 2026-09-21
 
 Local health dashboard from telemetry — no server, no LLM, no network.

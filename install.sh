@@ -89,7 +89,11 @@ mkdir -p "$CLAUDE_DIR/groundwork/bin" "$CLAUDE_DIR/groundwork/reports"
 cp "$HERE/scripts/groundwork_report.py" "$CLAUDE_DIR/groundwork/bin/groundwork_report.py"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_report.py"
 SCHED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('schedule','weekly'))" "$CLAUDE_DIR/groundwork/report.json" 2>/dev/null || echo weekly)
-python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule "$SCHED" >/dev/null && echo "  report schedule: $SCHED (python3 ~/.claude/groundwork/bin/groundwork_report.py schedule <disabled|daily|weekly|monthly|yearly>)"
+if [ "$(uname -s)" = "Darwin" ]; then
+  python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule "$SCHED" >/dev/null && echo "  report schedule: $SCHED via launchd (change: python3 ~/.claude/groundwork/bin/groundwork_report.py schedule <disabled|daily|weekly|monthly|yearly>)"
+else
+  python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule "$SCHED" >/dev/null && echo "  report schedule: $SCHED recorded, but automatic runs need macOS launchd — on this OS run 'python3 ~/.claude/groundwork/bin/groundwork_report.py generate --snapshot' manually or from cron"
+fi
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 
