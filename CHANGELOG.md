@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.4 — 2026-09-21
+
+Presentation only: the 1.2.3 symbol vocabulary is replaced by a clean checklist style in
+`rules/output-contract.md` — plain Markdown headings; `[x]` verified/completed, `[ ]` pending
+or not yet verified (never failure), `[!]` important risk or issue, `[-]` not applicable;
+used lightly, never on every sentence; no emojis or decorative symbols; layer headings back to
+`Technical details` / `Evidence & references`. Tests pin the checklist rules and assert no
+legacy symbols remain. Routing, playbooks, evidence and safety rules unchanged.
+
 ## 1.2.3 — 2026-09-21
 
 Presentation only: Groundwork's visual status language, defined once in
