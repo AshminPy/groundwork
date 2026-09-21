@@ -81,7 +81,10 @@ cp "$HERE"/hooks/*.py "$CLAUDE_DIR/hooks/"
 cp "$HERE"/playbooks/*.md "$CLAUDE_DIR/groundwork/playbooks/"
 chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/require_material_review.py \
-         "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py
+         "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py \
+         "$CLAUDE_DIR"/hooks/groundwork_telemetry.py
+# Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
+grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 
 python3 "$HERE/scripts/merge_settings.py" "${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"}" "$CLAUDE_DIR/settings.json"
 

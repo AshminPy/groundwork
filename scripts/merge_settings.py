@@ -4,7 +4,7 @@ settings file, without touching anything else the user has configured.
 
 Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwrites
 the file wholesale — only adds/updates the specific keys Groundwork owns:
-  - hooks.PreToolUse / hooks.Stop / hooks.SessionStart: appends Groundwork's three
+  - hooks.PreToolUse / hooks.Stop / hooks.SessionStart: appends Groundwork's four
     hook entries if not already present (matched by command string, so re-running
     never duplicates).
   - permissions.deny: adds Groundwork's destructive-command deny patterns, skipping
@@ -27,6 +27,7 @@ from pathlib import Path
 PUSH_CMD = "python3 ~/.claude/hooks/block_protected_push.py"
 REVIEW_CMD = "python3 ~/.claude/hooks/require_material_review.py"
 SNAPSHOT_CMD = "python3 ~/.claude/hooks/groundwork_session_snapshot.py"
+TELEMETRY_CMD = "python3 ~/.claude/hooks/groundwork_telemetry.py"
 
 GROUNDWORK_DENY = [
     "Bash(sudo *)",
@@ -108,6 +109,9 @@ def merge(data: dict, agent_teams: bool = False) -> list[str]:
     if not has_command(stop, REVIEW_CMD):
         stop.append(hook_entry(REVIEW_CMD, "Checking material-change review gate..."))
         changed.append("hooks.Stop: require_material_review.py")
+    if not has_command(stop, TELEMETRY_CMD):
+        stop.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork task telemetry...", timeout=10))
+        changed.append("hooks.Stop: groundwork_telemetry.py")
 
     start = hooks.setdefault("SessionStart", [])
     if not has_command(start, SNAPSHOT_CMD):

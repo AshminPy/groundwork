@@ -262,6 +262,18 @@ def command_facts(cwd: str) -> list[str]:
     return ["verification commands found in repo (confirm against README before use): " + "; ".join(found)]
 
 
+def harness_line() -> str:
+    """'harness: Groundwork <version>; profile: <GROUNDWORK_PROFILE or unknown>' — the two facts the
+    Harness metadata block (output-contract.md) needs and the model cannot otherwise know."""
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    try:
+        version = (base / "groundwork" / "VERSION").read_text().strip() or "unknown"
+    except Exception:
+        version = "unknown"
+    profile = os.environ.get("GROUNDWORK_PROFILE", "").strip() or "unknown"
+    return f"harness: Groundwork {clip(version, 20)}; profile: {clip(profile, 40)}"
+
+
 def build_snapshot(cwd: str) -> str:
     git_lines = git_facts(cwd)
     spec_lines = openspec_facts(cwd)
@@ -274,7 +286,7 @@ def build_snapshot(cwd: str) -> str:
         "should be followed. Verify before trusting any doc, memory, or prior session summary "
         "(evidence-policy.md §8)."
     )
-    lines = [header, DATA_START, f"cwd: {clip(cwd, 200)}"]
+    lines = [header, harness_line(), DATA_START, f"cwd: {clip(cwd, 200)}"]
     lines += git_lines or ["git: not a git repository"]
     lines += spec_lines
     lines += signal_facts(cwd)

@@ -28,6 +28,7 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     PUSH_CMD,
     REVIEW_CMD,
     SNAPSHOT_CMD,
+    TELEMETRY_CMD,
     parse_args,
     write_atomic,
 )
@@ -63,6 +64,7 @@ def unmerge(data: dict, agent_teams: bool = False) -> list[str]:
     hooks = data.get("hooks", {})
     remove_hook(hooks, "PreToolUse", PUSH_CMD, removed)
     remove_hook(hooks, "Stop", REVIEW_CMD, removed)
+    remove_hook(hooks, "Stop", TELEMETRY_CMD, removed)
     remove_hook(hooks, "SessionStart", SNAPSHOT_CMD, removed)
     if "hooks" in data and not data["hooks"]:
         del data["hooks"]

@@ -93,6 +93,8 @@ Every substantive request is routed to exactly one of ten task categories — RE
 
 Every answer then follows the global output contract in [rules/output-contract.md](rules/output-contract.md): a plain-language main response first (result, what matters, what changed or is recommended, whether it was really verified, one next action when needed), then `Technical details` when useful evidence exists (errors, log paths, copyable commands, key files, tests, PR, commit), then `Evidence & references` when the conclusion depends on sources. Empty sections are omitted; technical evidence is translated into understandable language in the main response and kept exact in the details.
 
+Substantive task responses end with a small `Harness metadata` block (harness, profile, playbook, execution mode, agents, evidence types, validation state — only what is actually known), and a fourth hook, `hooks/groundwork_telemetry.py`, appends one JSON line per such task to `~/.claude/groundwork/telemetry/events.jsonl`: identifiers and aggregates only (playbook, execution mode, agent count and roles, tool and MCP names, evidence types, outcome, validation, tests run, files-changed count, a short hash of the project path) — never prompt text, commands, paths, secrets or reasoning. It is append-only and fail-open; set `GROUNDWORK_TELEMETRY=off` to disable, `GROUNDWORK_PROFILE=work` (in `settings.json` `env`) to label the profile. The records are designed for later reports (playbook frequency, single-agent vs subagent vs team usage, tool usage, clarification and blocked rates by playbook, validation rate, trends by version); no dashboard exists yet.
+
 This layer is additive. It never overrides the engineering workflow, the evidence policy, the architecture rule, or any hook; where a playbook and an existing rule disagree, the existing rule wins. `tests/test_playbooks.py` checks the artefacts and the install layout; `scripts/check_routing.py` runs the twelve reference scenarios through real headless sessions when the CLI is logged in.
 
 ## The completion status block
@@ -132,7 +134,8 @@ groundwork/
 ├── hooks/
 │   ├── block_protected_push.py        denies push to main/master/production + force-push
 │   ├── require_material_review.py     denies finishing a complete-but-unreviewed change (subagent, skill, or teammate reviewers)
-│   └── groundwork_session_snapshot.py injects a deterministic repo snapshot at session start
+│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot at session start
+│   └── groundwork_telemetry.py        appends one JSONL usage record per substantive task (fail-open)
 ├── scripts/
 │   ├── merge_settings.py              settings.json merge (used by install.sh)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
