@@ -1,5 +1,21 @@
 # Troubleshooting
 
+**`./setup.sh` says prerequisites are missing.**
+It lists each one with the exact official command for your OS and installs them after you answer `y` (Homebrew on macOS; apt, dnf or apk on Linux with `sudo`). Two things it will not do: install Claude Code (install it from https://code.claude.com/docs/en/setup and sign in once with `claude`), and install Homebrew (run the printed one-liner yourself, it needs your password). A Node.js that exists but is older than 18 is left to your version manager — upgrade with nvm/asdf/volta or from nodejs.org. In `--non-interactive` mode nothing is installed unless you pass `--install-prereqs`, and Linux needs passwordless `sudo` for that. After installing, open a new terminal if the tools are still not found.
+
+**`./setup.sh --verify` shows FAIL or NOT CONFIGURED.**
+Each row names the missing piece and its path. `NOT CONFIGURED` for the dashboard or schedule just means nothing has been generated or scheduled yet (`python3 ~/.claude/groundwork/bin/groundwork_report.py generate`, `… schedule weekly`). A FAIL on rules, playbooks, hooks or the generator means files were removed or the install is partial: run `./setup.sh` (or `./install.sh`) again — both are idempotent. `--verify` never changes anything.
+
+**`./setup.sh --rollback` refuses to run.**
+It refuses on purpose when: there is no backup under `~/.claude-backups/`, the newest one has no `BACKUP-INFO.txt` (not made by setup.sh), two backups share the same timestamp (pass the one you mean: `./setup.sh --rollback <dir>`), or the backup was taken from a different config directory. Nothing is moved until those checks pass; when they do, the current `~/.claude` is moved aside, never deleted.
+
+**The dashboard is empty, says "insufficient data", or the schedule does not run.**
+The dashboard only counts tool-using tasks; a fresh install has none. `N/A` and "insufficient data" are deliberate — no metric is ever shown as 0% without data, and trends need at least five known outcomes in both the current and the previous period. Regenerate any time with `python3 ~/.claude/groundwork/bin/groundwork_report.py generate --snapshot`; check the schedule with `… status` and `launchctl print gui/$(id -u)/com.groundwork.report`. The launchd job exists only on macOS; on Linux run the generate command from cron. The generator never runs inside a hook, so a reporting failure cannot affect Claude Code.
+
+**Telemetry records show `profile: unknown`.**
+`GROUNDWORK_PROFILE` is not set in your `settings.json` `env`. `./setup.sh` sets it from the profile question; by hand: `python3 scripts/merge_settings.py --profile work ~/.claude/settings.json`. Profile is observed from that variable, never taken from the model's text.
+
+
 **A Node-based CLI (`openspec`, `npx ...`) prints its output and then never returns control — Claude Code eventually reports it "moved to the background."**
 Node 22.x on macOS can block at process exit while loading CA certificates from the system keychain (`SecTrustSettingsCopyTrustSettings`). `install.sh` sets `NODE_USE_SYSTEM_CA=0` in `settings.json`'s `env` block to work around this — it's harmless on Linux/Windows and only affects processes Claude Code itself launches. If you still see this outside Claude Code (e.g. running `openspec` directly in your own shell), add `export NODE_USE_SYSTEM_CA=0` to your shell profile, or set `NODE_EXTRA_CA_CERTS=<path>` if you need a corporate CA specifically.
 
