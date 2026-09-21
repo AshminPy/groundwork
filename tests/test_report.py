@@ -257,6 +257,12 @@ def test_report() -> None:
         check("schedule --hour replaces in place (still one plist)", pl["StartCalendarInterval"]["Hour"] == 6 and len(list(agents.glob("*.plist"))) == 1)
         r = run_cli(["schedule", "disabled"], env)
         check("schedule disabled: plist removed, config disabled", r.returncode == 0 and not list(agents.glob("*.plist")) and json.loads((cfg / "groundwork" / "report.json").read_text())["schedule"] == "disabled")
+        m.is_macos = lambda: False
+        try:
+            res = m.schedule("weekly")
+        finally:
+            m.is_macos = lambda: True
+        check("non-macOS: schedule saves config, writes no plist, says how to run manually", res["plist"] is None and "manually" in res["note"] and not list(agents.glob("*.plist")), json.dumps(res))
         r = run_cli(["status"], env)
         check("status prints config and paths", r.returncode == 0 and '"schedule": "disabled"' in r.stdout and "dashboard_present" in r.stdout)
         (cfg / "groundwork" / "report.json").write_text(json.dumps({"schedule": "weekly", "window_days": 90, "hour": 8}))

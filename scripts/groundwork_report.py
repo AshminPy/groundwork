@@ -538,6 +538,10 @@ def calendar(freq: str, hour: int) -> dict:
             "monthly": {"Day": 1, "Hour": hour, "Minute": 0}, "yearly": {"Month": 1, "Day": 1, "Hour": hour, "Minute": 0}}[freq]
 
 
+def is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
 def launchctl(*argv) -> int:
     if os.environ.get("GROUNDWORK_NO_LAUNCHCTL"):
         return 0
@@ -553,6 +557,8 @@ def schedule(freq: str, hour=None) -> dict:
         cfg["hour"] = min(23, max(0, int(hour)))
     cfg["schedule"] = freq
     save_config(cfg)
+    if not is_macos():  # scheduling uses launchd; elsewhere the config is kept and generation stays manual
+        return {"schedule": freq, "plist": None, "note": "launchd is macOS-only: run 'generate --snapshot' manually or from cron"}
     domain = f"gui/{os.getuid()}"
     launchctl("bootout", f"{domain}/{LABEL}")  # remove any previous job first: never two jobs
     p = plist_path()
@@ -581,7 +587,7 @@ def schedule(freq: str, hour=None) -> dict:
 def status() -> dict:
     cfg = load_config()
     p = plist_path()
-    return {"config": cfg, "plist_present": p.exists(), "plist": str(p), "events": str(events_path()),
+    return {"config": cfg, "launchd": is_macos(), "plist_present": p.exists(), "plist": str(p), "events": str(events_path()),
             "reports_dir": str(reports_dir()), "dashboard_present": (reports_dir() / "dashboard.html").exists()}
 
 
