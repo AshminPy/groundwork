@@ -6,9 +6,10 @@ Stop-hook pattern as require_material_review.py, append-only JSONL, fail-open. I
 blocks, never prints, never raises past main(); the user's task is primary, reporting is
 secondary.
 
-Trigger: the response Claude just finished contains a "Harness metadata" block (the block
-output-contract.md asks for on substantive Groundwork tasks). No block → no record, which is
-exactly the "omit for trivial conversational responses" rule.
+Trigger: the turn was substantive — the response carries a "Harness metadata" block (the block
+output-contract.md asks for) OR the current turn used at least one tool. A conversational reply
+with no tool use produces no record. When the block is missing, observed facts are still
+recorded and `declared.block_present` is false (declared fields stay "unknown").
 
 What is recorded (identifiers and aggregates only — never prompt text, command text, file
 paths, secrets, or reasoning):
@@ -22,6 +23,10 @@ paths, secrets, or reasoning):
     clarification flag (the response ends by asking the user a question);
   - context: session_id, prompt_id, harness version (from ~/.claude/groundwork/VERSION), a
     short hash of cwd (so runs can be grouped by project without storing the path).
+
+Record layout (schema 2): `observed` holds what the hook determined itself (transcript facts,
+environment, version); `declared` holds what the model stated (block fields, status sentence).
+Reports must not present declared fields as verified.
 
 Disable with GROUNDWORK_TELEMETRY=off. Path override: GROUNDWORK_TELEMETRY_PATH.
 """
@@ -44,9 +49,24 @@ TOKEN_SHAPED = re.compile(r"[a-z0-9_-]*\d[a-z0-9_-]*")  # a "word" containing a 
 PLAYBOOKS = {"RESEARCH", "EXPLAIN", "DESIGN", "PLAN", "IMPLEMENT", "TROUBLESHOOT", "VALIDATE", "AUDIT", "DEPLOY", "DOCUMENT"}
 TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step
 TAIL_CAP = 32 * 1024 * 1024      # never read more than this from the end of the transcript
+HEADLINE = re.compile(r"^\s*Groundwork\s+\S+\s*[·\-–—|]\s*([A-Za-z]+)\s*$", re.IGNORECASE)  # "Groundwork 1.3.2 · IMPLEMENT"
+# Outcome — model-declared, read from the response's own status language (output-contract.md Layer 1
+# and the playbooks' Status / Result vocabularies). Precedence inside a sentence: failed > blocked >
+# partial > complete; "not done"-style negations count as partial; nothing recognisable -> unknown.
 OVERALL = re.compile(r"Overall:\s*\**\s*(COMPLETE|PARTIAL|BLOCKED|PLANNED|FAILED)", re.IGNORECASE)
-STATUS_LINE = re.compile(r"(?:^|\n)\s*(?:#+\s*|\*\*)?Status\**:?\s*\n?\s*\**\s*([A-Za-z][A-Za-z -]{0,40})", re.IGNORECASE)
-TEST_CMD = re.compile(r"\b(pytest|npm test|npm run test|yarn test|go test|cargo test|make test|tox|nox|terraform validate|terraform plan|kubectl .* --dry-run)\b")
+STATUS_HEAD = re.compile(r"(?:^|\n)[ \t]*(?:#+[ \t]*)?\**[ \t]*(?:Status|Result)[ \t]*\**[ \t]*:?[ \t]*\**[ \t]*(.*)", re.IGNORECASE)
+NOTHING_LEFT = re.compile(r"\b(?:next(?: action| step)?|your move|remaining|open items?)\s*\**\s*:\s*\**\s*(?:none|nothing)\b", re.IGNORECASE)
+LEAD_HEAD = re.compile(r"(?:^|\n)[ \t]*(?:#+[ \t]*)?\**[ \t]*(?:Answer|Recommendation|Deliverable|Plan|Goal)[ \t]*\**[ \t]*:?", re.IGNORECASE)
+BOLD_LEAD = re.compile(r"^\s*\*\*(?:(?:my )?(?:call|finding|verdict|answer|result|status)\s*:\s*)?(.+?)\*\*", re.IGNORECASE)
+# A plain opening line that starts with a state word is explicit status language too ("Complete. subtract() added…").
+STATE_LEAD = re.compile(r"^\s*(?:complete[d]?|partial(?:ly)?|blocked|failed|fixed|done|deployed|resolved|root cause found|not verified|pass|fail|verified)\b[.:—-]", re.IGNORECASE)
+NO_FAIL = re.compile(r"\b(?:no|zero|without|not a single)\s+(?:test\s+)?(?:failures?|failed tests?|failing tests?)\b|\bno longer\s+(?:fails?|failing|failed|blocked)\b|\b(?:0|zero) (?:failed|failures|failing|errors?)\b", re.IGNORECASE)
+FAILED_RE = re.compile(r"\b(?:failed|failure|failures|fails)\b|\bfail\b(?!-)", re.IGNORECASE)
+BLOCKED_RE = re.compile(r"\bblocked\b|\bcannot proceed\b|\bcan't proceed\b|\bwaiting (?:on|for)\b|\bneeds? (?:your|an?|the) (?:decision|approval|input|answer|credentials|authori[sz]ation)\b", re.IGNORECASE)
+NOT_DONE_RE = re.compile(r"\b(?:not|isn't|is not|wasn't|was not|never|cannot be|can't be)\s+(?:yet\s+|fully\s+)?(?:completed?|done|fixed|verified|tested|deployed|merged|finished|resolved|validated|working|live|ready|attempted|run|executed)\b|\bincomplete\b|\bunverified\b", re.IGNORECASE)
+PARTIAL_RE = re.compile(r"\bpartial(?:ly)?\b|\broot cause found\b|\bnot yet\b|\bin progress\b|\bstill (?:open|pending|missing)\b", re.IGNORECASE)
+COMPLETE_RE = re.compile(r"\b(?:completed?|done|fixed|resolved|implemented|deployed|merged|verified|validated|tested|ready|pass|passed|passes|succeeded|successful|live)\b", re.IGNORECASE)
+TEST_CMD = re.compile(r"\b(pytest|npm test|npm run test|yarn test|go test|cargo test|make test|tox|nox|unittest|terraform validate|terraform plan|kubectl .* --dry-run)\b|python3?\s+\S*(?:tests?/|test_)\S*\.py\b")
 DEPLOY_CMD = re.compile(r"\b(terraform apply|tofu apply|kubectl apply|kubectl rollout|helm (install|upgrade)|gcloud run deploy|gcloud .* deploy|aws deploy|flux reconcile|argocd app sync|docker compose up|docker push)\b")
 EXEC_MODES = {"single agent": "single_agent", "single_agent": "single_agent", "subagents": "subagents",
               "subagent": "subagents", "agent team": "agent_team", "agent_team": "agent_team", "team": "agent_team"}
@@ -81,6 +101,10 @@ def parse_metadata(text: str) -> dict:
             if fields:
                 break
             continue
+        hl = HEADLINE.match(line)  # concise form: "Groundwork <version> · <PLAYBOOK>"
+        if hl:
+            fields["playbook"] = hl.group(1)
+            continue
         f = META_FIELD.match(line)
         if not f:
             if fields:
@@ -104,7 +128,7 @@ def labels(value: str, limit: int) -> list:
     """Split a 'a + b, c / d (note)' list into labels; parentheticals and non-labels are dropped."""
     value = re.sub(r"\([^)]*\)", " ", value or "")
     out = []
-    for part in re.split(r"[+,;]", value):  # '/' is not a separator: a slash means a path, dropped
+    for part in re.split(r"[+,;]|\s/\s", value):  # "a / b" separates; a bare slash means a path, dropped
         v = label(part, "")
         if v and v not in out:
             out.append(v)
@@ -217,19 +241,74 @@ def turn_facts(entries: list) -> dict:
             "implementation_performed": bool(files)}
 
 
-def outcome_from_text(text: str):
+def classify_state(sentence: str):
+    """State word of one status sentence, or None when nothing recognisable is present."""
+    t = NO_FAIL.sub(" ", sentence or "")
+    if FAILED_RE.search(t):
+        return "failed"
+    if BLOCKED_RE.search(t):
+        return "blocked"
+    if NOT_DONE_RE.search(t) or PARTIAL_RE.search(t):
+        return "partial"
+    if COMPLETE_RE.search(t):
+        return "complete"
+    return None
+
+
+def status_paragraph(text: str):
+    """The paragraph under a Status / Result heading (or the rest of a 'Status: …' line)."""
+    m = STATUS_HEAD.search(text)
+    if not m:
+        return None
+    rest = m.group(1).strip().strip("*").strip()
+    if rest:
+        return rest
+    lines = []
+    for ln in text[m.end():].splitlines():
+        if not ln.strip():
+            if lines:
+                break
+            continue
+        lines.append(ln.strip())
+        if len(lines) >= 3:
+            break
+    return " ".join(lines) if lines else None
+
+
+def outcome_from_text(text: str) -> str:
+    """Model-declared outcome, from the response's own status language (never 'complete' merely
+    because a response exists)."""
     m = OVERALL.search(text)
     if m:
         return m.group(1).lower()
-    m = STATUS_LINE.search(text)
-    if m:
-        head = m.group(1).lower()
-        for key, value in (("validation failed", "failed"), ("blocked", "blocked"), ("failed", "failed"),
-                           ("partial", "partial"), ("root cause found", "partial"), ("not verified", "partial"),
-                           ("complete", "complete"), ("fixed", "complete"), ("passed", "complete"),
-                           ("pass", "complete"), ("fail", "failed")):
-            if key in head:
-                return value
+    para = status_paragraph(text)
+    if para:
+        # whole paragraph first: a failure or block stated after a leading "Complete." must win
+        state = classify_state(para)
+        if state:
+            return state
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    b = BOLD_LEAD.match(first_line)
+    if b:
+        state = classify_state(b.group(1))
+        if state:
+            return state
+    if STATE_LEAD.match(first_line):
+        state = classify_state(first_line)
+        if state:
+            return state
+    if NOTHING_LEFT.search(text) and not asks_question(text):  # explicit "Next action: none" = the model declares nothing remains
+        head = NO_FAIL.sub(" ", text[:800])
+        if FAILED_RE.search(head) or BLOCKED_RE.search(head):
+            return classify_state(head) or "unknown"
+        return "complete"
+    if LEAD_HEAD.search(text):  # Answer / Recommendation / Deliverable / Plan: the playbook's result heading is present
+        if asks_question(text):
+            return "blocked"
+        head = text[:600]
+        if FAILED_RE.search(NO_FAIL.sub(" ", head)) or BLOCKED_RE.search(head):
+            return classify_state(head) or "unknown"
+        return "complete"
     return "unknown"
 
 
@@ -238,49 +317,63 @@ def asks_question(text: str) -> bool:
     return any(ln.endswith("?") for ln in tail)
 
 
+def parse_execution(value: str):
+    """'single agent' -> (single_agent, 0); '3 subagents' -> (subagents, 3); 'agent team' -> (agent_team, None)."""
+    v = (value or "").lower()
+    mode = next((m for k, m in EXEC_MODES.items() if k in v), "unknown")
+    if mode == "single_agent":
+        return mode, 0
+    n = re.search(r"(\d+)", v)
+    return mode, (int(n.group(1)) if n else None)
+
+
 def build_record(data: dict, text: str) -> dict:
+    """One record: `observed` = facts the hook determined itself (transcript, environment, files);
+    `declared` = what the model stated in its block and status sentence — recorded, not verified."""
     meta = parse_metadata(text)
-    if not meta:
-        return {}
     facts = turn_facts(current_turn(data.get("transcript_path", "")))
-    exec_raw = meta.get("execution", "").lower()
-    execution = next((v for k, v in EXEC_MODES.items() if k in exec_raw), "unknown")
-    if execution == "unknown":
-        execution = "single_agent" if not facts["agents"] else "subagents"
+    if not meta and not facts["tools"]:
+        return {}  # conversational reply, no tool use: nothing to record
+    execution, exec_count = parse_execution(meta.get("execution", ""))
     count, roles = parse_agents(meta.get("agents", ""))
     if count is None:
-        count = len(facts["agents"])
-    if not roles:
-        roles = labels(", ".join(a["name"] or a["type"] for a in facts["agents"]), 12)
+        count = exec_count
     validation_raw = meta.get("validation", "").lower()
     validation = next((v for k, v in VALIDATION_STATES.items() if k in validation_raw), "unknown")
-    evidence = labels(meta.get("evidence", ""), 8)
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
     playbook = playbook_raw[0] if playbook_raw and playbook_raw[0] in PLAYBOOKS else "unknown"
     cwd = data.get("cwd") or os.getcwd()
     return {
+        "schema": 2,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_id": data.get("session_id") or "unknown",
         "prompt_id": data.get("prompt_id") or "unknown",
         "harness": "Groundwork",
         "harness_version": harness_version(),
-        "profile": label(meta.get("profile") or os.environ.get("GROUNDWORK_PROFILE") or ""),
-        "playbook": playbook,
-        "execution_mode": execution,
-        "agent_count": count,
-        "agent_roles": roles[:12],
-        "tools": facts["tools"],
-        "mcp_servers": facts["mcp_servers"],
-        "evidence_sources": evidence,
-        "clarification_required": asks_question(text),
-        "environment": label(meta.get("environment") or ""),
-        "outcome": outcome_from_text(text),
-        "validation": validation,
-        "tests_run": facts["tests_run"],
-        "implementation_performed": facts["implementation_performed"],
-        "deployment_performed": facts["deployment_performed"],
-        "files_changed": facts["files_changed"],
         "cwd_hash": hashlib.sha256(cwd.encode()).hexdigest()[:12],
+        "observed": {
+            "profile": label(os.environ.get("GROUNDWORK_PROFILE") or ""),
+            "tools": facts["tools"],
+            "mcp_servers": facts["mcp_servers"],
+            "agent_calls": len(facts["agents"]),
+            "agent_types": labels(", ".join(a["name"] or a["type"] for a in facts["agents"]), 12),
+            "files_changed": facts["files_changed"],
+            "tests_run": facts["tests_run"],
+            "implementation_performed": facts["implementation_performed"],
+            "deployment_performed": facts["deployment_performed"],
+        },
+        "declared": {
+            "block_present": bool(meta),
+            "playbook": playbook,
+            "execution_mode": execution,
+            "agent_count": count,
+            "agent_roles": roles[:12],
+            "evidence_sources": labels(meta.get("evidence", ""), 8),
+            "validation": validation,
+            "environment": label(meta.get("environment") or ""),
+            "outcome": outcome_from_text(text),
+            "clarification_required": asks_question(text),
+        },
     }
 
 

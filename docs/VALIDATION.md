@@ -4,6 +4,26 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.3.2 (2026-09-21) — telemetry refinement (profile, outcome, one status per response)
+
+Scope: `hooks/groundwork_telemetry.py` (schema 2, classifier, trigger), `rules/output-contract.md`, `rules/engineering-workflow.md` §3, private behaviour rules, one line in `~/.claude/CLAUDE.md`. Playbooks, routing, evidence rules, guard hooks untouched (baseline 15/16, the one diff being engineering-workflow.md as intended).
+
+### Deterministic evidence
+- `python3 tests/test_telemetry.py` → 74 passed: 33 classifier cases (contract examples, every playbook status vocabulary, `Overall:` precedence, bold and plain openers, result headings of non-status playbooks, explicit "Next action: none", the reviewer's counter-examples "Complete. Two tests still fail." → failed and "no longer fails" → complete, "0 failed" counts, and five missing/ambiguous texts → unknown) plus the hook end to end (schema 2 split, profile from env only, concise and long block layouts, privacy filter, tail read on a 43 MB session in 0.15 s, fail-open paths, deterministic capture without a block).
+- `test_hooks.py` 93, `test_playbooks.py` 129, `pytest tests -q` 9 — all passed.
+- Independent review (fresh-context code reviewer): one MUST FIX — a failure stated after a leading "Complete." was missed because only the first sentence was classified; fixed by classifying the whole status paragraph. Three word-list gaps ("no longer fails", "not attempted", late failures under a result heading) — the first two fixed, the third documented.
+
+### Fresh `claude -p` sessions (same IMPLEMENT task in a scratch repo; same read-only VALIDATE task in this repo)
+Attempts are listed, not collapsed:
+1. First pair: blocked by permissions (non-interactive sessions need `--allowedTools`); no record.
+2. Second and third pairs: tasks completed with one status and no STATUS block (behaviour-rule "Final task format" style) but no metadata block → no record. Rule-text clarification alone did not change that.
+3. After aligning `behavior.md` to the Groundwork contract: IMPLEMENT reply carried the completion facts under **Validation** (Code / Tests / Reviewed / Merged N/A), no STATUS block — still no metadata block.
+4. After making capture deterministic (tool use → record, `declared.block_present`) and adding one CLAUDE.md line: VALIDATE emitted the block (`profile: work`, `playbook: VALIDATE`); IMPLEMENT did not, but its observed facts were recorded (`files_changed: 2`, `tests_run: true`, `profile: work`). Two live parse gaps found and fixed: "93 passed, 0 failed" read as failed; a plain "Complete." opener not recognised.
+5. Final pair: both emitted the block; both recorded `profile: work`; IMPLEMENT recorded `files_changed: 2`, `tests_run: true`, `playbook: IMPLEMENT`. Outcome: VALIDATE's final message had no status sentence → `unknown` (honest); IMPLEMENT opened with "**Result:** Added …" and ended "Next action: none" → after the last classifier addition the replay yields `complete`; live re-run (seventh IMPLEMENT session) recorded `observed.profile: work`, `files_changed: 2`, `tests_run: true`, `declared.playbook: IMPLEMENT`, `block_present: true`, `outcome: complete` — the reply opened "**Done.**", listed the completion facts as six compact lines with `Overall: COMPLETE`, and ended with the four-line block; no separate STATUS block.
+- Observed vs declared held throughout: profile, tools, files, tests came from the hook; playbook, validation, outcome came from the model's text and were recorded as such.
+
+---
+
 ## 1.3.1 (2026-09-21) — metadata block as a code block
 
 Presentation only (user request): the `Harness metadata` block is a fenced code block with aligned `Key: value` lines, like STATUS. Deterministic: baseline 16/16 unchanged; `test_telemetry.py` 35 passed (new case: fenced layout parsed — playbook, agent team, 3 roles, evidence, validation, environment, outcome); `test_playbooks.py` 129 passed (contract pins `HARNESS METADATA` and "never as bullets"); `test_hooks.py` 93; pytest 8. Contract 49 lines (cap 50). Live install byte-identical, VERSION 1.3.1.

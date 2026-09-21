@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.2 — 2026-09-21
+
+Telemetry refinement (no change to routing, playbooks, evidence rules, hooks other than telemetry, privacy or fail-open behaviour).
+
+- **Profile is observed, not declared**: taken from `GROUNDWORK_PROFILE` (user's `settings.json` `env`), never from the model's block.
+- **Outcome from status language**: the Status / Result sentence (contract + playbook vocabularies), `Overall:` when present, bold verdict openers, and the result heading of non-status playbooks; precedence failed > blocked > partial > complete; negations ("not verified") count as partial; nothing recognisable stays `unknown`.
+- **Record schema 2**: `observed` (hook-determined facts) vs `declared` (model-stated fields) — the distinction future reports must keep.
+- **Deterministic capture**: a turn that ran any tool is recorded even when the model omitted the block (`declared.block_present: false`, declared fields `unknown`); conversational replies still produce nothing.
+- **One status per response**: engineering-workflow §3 becomes "Completion facts" reported inside Validation / Technical details; the aligned STATUS block only on request. Metadata block reduced to four lines (`Groundwork <version> · <PLAYBOOK>`, execution, evidence, validation).
+
 ## 1.3.1 — 2026-09-21
 
 Presentation only: the `Harness metadata` block is rendered as a fenced code block with aligned
