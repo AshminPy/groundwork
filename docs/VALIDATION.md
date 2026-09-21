@@ -4,6 +4,12 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.3.1 (2026-09-21) — metadata block as a code block
+
+Presentation only (user request): the `Harness metadata` block is a fenced code block with aligned `Key: value` lines, like STATUS. Deterministic: baseline 16/16 unchanged; `test_telemetry.py` 35 passed (new case: fenced layout parsed — playbook, agent team, 3 roles, evidence, validation, environment, outcome); `test_playbooks.py` 129 passed (contract pins `HARNESS METADATA` and "never as bullets"); `test_hooks.py` 93; pytest 8. Contract 49 lines (cap 50). Live install byte-identical, VERSION 1.3.1.
+
+---
+
 ## 1.3.0 (2026-09-21) — harness metadata and telemetry
 
 Scope: `rules/output-contract.md` "Harness metadata" section; new Stop hook `hooks/groundwork_telemetry.py`; one `harness:` line in the session snapshot; installer writes `VERSION`; uninstall keeps `telemetry/`.

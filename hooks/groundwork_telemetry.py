@@ -34,7 +34,8 @@ import time
 from pathlib import Path
 
 META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
-META_FIELD = re.compile(r"^\s*[-*]\s*\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
+# Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
+META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
 # Free text copied from the model's block is stored only if it looks like a short label:
 # letters/digits/space/_/- and at most 32 chars. Anything else (a path, an @, a token-shaped
 # string, a sentence) is dropped — identifiers and labels only, never raw content.

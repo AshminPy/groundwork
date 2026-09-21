@@ -63,7 +63,7 @@ def test_router_and_playbooks() -> None:
                    "Omit any section that has nothing useful", "Never imply verification that did not happen",
                    "Do not print routing or playbook debug lines", "Clean output never hides",
                    "written in user language", "no file names or paths", "it never removes it",
-                   "## Harness metadata", "never invented", "This block is what the telemetry hook records",
+                   "## Harness metadata", "HARNESS METADATA", "never as bullets", "never invented", "This block is what the telemetry hook records",
                    "## Checklist style", "`[x]` completed or verified", "`[ ]` pending", "`[!]` an important risk",
                    "`[-]` not applicable", "no emojis or decorative symbols", "never on every sentence",
                    "never to imply failure", "Heading `Technical details`", "Heading `Evidence & references`"):

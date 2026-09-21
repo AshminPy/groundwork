@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 — 2026-09-21
+
+Presentation only: the `Harness metadata` block is rendered as a fenced code block with aligned
+`Key: value` lines (same shape as the STATUS block), not bullets. The telemetry parser accepts the
+code-block layout (bullets/bold still tolerated).
+
 ## 1.3.0 — 2026-09-21
 
 Usage metadata and telemetry. Routing, playbooks, evidence, validation and safety unchanged.
