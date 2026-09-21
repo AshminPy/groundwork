@@ -185,30 +185,41 @@ Everything there is labelled **CURRENT** (implemented, with the version it lande
 
 ```
 groundwork/
-├── install.sh / uninstall.sh          installer, idempotent, reversible (--agent-teams opt-in)
-├── rules/
-│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, continuation, completion block
+├── setup.sh                           one-click onboarding: prerequisites (installs missing git/Node/npm/Python per OS),
+│                                      full ~/.claude backup, profile / Agent Teams / schedule questions, then install.sh;
+│                                      --verify, --rollback, --uninstall, --non-interactive
+├── install.sh / uninstall.sh          the actual installer/remover, idempotent, reversible (--agent-teams opt-in)
+├── rules/                             always-loaded governance (installed to ~/.claude/rules/groundwork/)
+│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, continuation, completion facts
 │   ├── architecture-quality.md        governing principle, dimensions as criteria, pre-MATERIAL questions, variation points
-│   └── evidence-policy.md             evidence priority, labels, DECISION record, validation ladder, completion evidence
+│   ├── evidence-policy.md             evidence priority, labels, DECISION record, validation ladder, completion evidence
+│   ├── task-routing.md                one category per task → one playbook
+│   └── output-contract.md             three-layer response shape, checklist style, Harness metadata block
+├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
 ├── hooks/
 │   ├── block_protected_push.py        denies push to main/master/production + force-push
 │   ├── require_material_review.py     denies finishing a complete-but-unreviewed change (subagent, skill, or teammate reviewers)
-│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot at session start
-│   └── groundwork_telemetry.py        appends one JSONL usage record per substantive task (fail-open)
-├── scripts/groundwork_report.py       health dashboard generator (installed to ~/.claude/groundwork/bin/, launchd schedule)
+│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ harness version and profile) at session start
+│   └── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
 ├── scripts/
-│   ├── merge_settings.py              settings.json merge (used by install.sh)
+│   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
+│   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
 │   └── migrate_legacy_rules.py        moves a pre-Groundwork rules/harness copy to a backup
-├── tests/
-│   └── test_hooks.py                  the actual test suite the hooks and scripts were built against
-├── openspec/                          Groundwork's own spec-driven changes (dogfooding)
+├── tests/                             deterministic, no model calls: run any file directly or `python3 -m pytest tests -q`
+│   ├── test_hooks.py                  hooks, settings merge/unmerge, legacy migration
+│   ├── test_playbooks.py              routing rule, playbooks, output contract, install.sh / uninstall.sh
+│   ├── test_telemetry.py              telemetry hook (classifier, privacy, tail read, fail-open)
+│   ├── test_report.py                 dashboard generator (metrics, filters, Python↔JS parity, schedules)
+│   └── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall)
+├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
-    ├── VALIDATION.md                  real test transcripts and results
+    ├── VALIDATION.md                  real test results and live runs, including the failures on the way
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
-    └── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
+    ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
+    └── images/                        overview diagram and dashboard screenshot
 ```
 
 ## License and attribution
