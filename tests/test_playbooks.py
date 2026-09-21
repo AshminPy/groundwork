@@ -58,7 +58,8 @@ def test_router_and_playbooks() -> None:
     check("output contract exists and stays small", CONTRACT.is_file() and len(contract.splitlines()) <= MAX_CONTRACT_LINES, f"{len(contract.splitlines())} lines")
     for needle in ("## Layer 1", "## Layer 2", "## Layer 3", "Technical details", "Evidence & references",
                    "Omit any section that has nothing useful", "Never imply verification that did not happen",
-                   "Do not print routing or playbook debug lines", "Clean output never hides"):
+                   "Do not print routing or playbook debug lines", "Clean output never hides",
+                   "written in user language", "no file names or paths", "it never removes it"):
         check(f"output contract contains: {needle[:40]}", needle in contract)
     for cat in CATEGORIES:
         check(f"router lists {cat.upper()}", f"| {cat.upper()} |" in router)
