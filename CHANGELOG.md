@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1 — 2026-09-21
+
+- `setup.sh` detects the OS and offers to install the missing prerequisites other than Claude Code — git, Node 18+ with npm, Python 3.10+ — with the official packages: Homebrew on macOS, apt / dnf / apk on Linux. Opt-in (`y` at the prompt or `--install-prereqs`; `--no-install-prereqs` never installs; `--non-interactive` never installs without the flag). Claude Code must already be installed (official link printed otherwise); Homebrew itself is never installed (official command printed); an existing Node older than 18 is left to the user's version manager. Ten new tests with stub package managers.
+
 ## 1.5.0 — 2026-09-21
 
 One-click onboarding. `install.sh`, `uninstall.sh`, hooks, rules, playbooks, telemetry and reporting unchanged.

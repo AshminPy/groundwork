@@ -157,7 +157,8 @@ def test_setup() -> None:
         os.chmod(clean / "python3", 0o755)
         for stub in ("npm", "openspec"):
             shutil.copy(tmp / "f" / "bin" / stub, clean / stub)
-        no_claude = dict(f.env, PATH=f"{clean}:/usr/bin:/bin")
+        no_claude = dict(f.env, PATH=f"{clean}:/usr/bin:/bin", HOME=str(tmp / "f" / "home"))
+        (tmp / "f" / "home").mkdir()
         r = subprocess.run(["bash", str(SETUP), "--non-interactive"], capture_output=True, text=True, env=no_claude, timeout=60)
         check("missing prerequisite: fails clearly, nothing changed, no backup made", r.returncode == 1 and "Missing prerequisites" in r.stdout and not f.backups.exists() and not (f.cfg / "groundwork" / "VERSION").exists(), r.stdout + r.stderr)
 
@@ -227,6 +228,73 @@ def test_setup() -> None:
         r = m.run("--rollback")
         moved = list(m.root.glob("claude-groundwork-disabled-*"))
         check("backup without claude/ copy: reassuring message names the moved-aside dir, nothing lost", r.returncode == 1 and "your current setup is intact at" in r.stderr and len(moved) == 1 and (moved[0] / "my-notes.md").is_file(), r.stderr)
+
+        # ---- prerequisites: OS-aware, opt-in installation with stub package managers
+        def prereq_box(name, os_kind, stubs):
+            """A box whose PATH holds only: python3 wrapper, real git (via /usr/bin), coreutils, and the given stubs."""
+            root = tmp / name
+            b = Box(root)
+            clean = root / "cleanbin"; clean.mkdir(); tools = root / "installed"; tools.mkdir()
+            (clean / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n'); os.chmod(clean / "python3", 0o755)
+            (clean / "openspec").write_text('#!/usr/bin/env bash\ncase "$1" in --version) echo "1.12.0";; *) exit 0;; esac\n'); os.chmod(clean / "openspec", 0o755)
+            (clean / "npm").write_text('#!/usr/bin/env bash\nexit 0\n'); os.chmod(clean / "npm", 0o755)
+            mk = lambda n, body: ((clean / n).write_text(body), os.chmod(clean / n, 0o755))
+            node_stub = 'case "$1" in --version) echo v22.1.0;; -p) echo 22;; esac\n'
+            claude_stub = 'case "$1" in --version) echo "2.1.258 (Claude Code)";; plugin) echo "ecc@ecc";; *) exit 0;; esac\n'
+            # package-manager stubs "install" by dropping tool stubs into the installed/ dir (on PATH) and logging the call
+            installer = (f'#!/usr/bin/env bash\necho "$0 $*" >> "{root}/pm.log"\n'
+                         f'case "$*" in *node*|*nodejs*) printf \'#!/usr/bin/env bash\\n{node_stub}\' > "{tools}/node"; chmod +x "{tools}/node";; esac\n'
+                         f'case "$*" in *claude*) printf \'#!/usr/bin/env bash\\n{claude_stub}\' > "{tools}/claude"; chmod +x "{tools}/claude";; esac\nexit 0\n')
+            for st in stubs:
+                if st in ("brew", "apt-get", "dnf", "apk"):
+                    mk(st, installer)
+                elif st == "sudo":
+                    mk("sudo", '#!/usr/bin/env bash\n[ "$1" = -n ] && exit 0\nexec "$@"\n')
+                elif st == "curl":   # the official native installer is `curl … | bash`; the stub prints a script that installs the claude stub
+                    mk("curl", f'#!/usr/bin/env bash\nprintf \'printf "#!/usr/bin/env bash\\\\n{claude_stub}" > "{tools}/claude"; chmod +x "{tools}/claude"\\n\'\n')
+                elif st == "node":
+                    mk("node", "#!/usr/bin/env bash\n" + node_stub)
+                elif st == "oldnode":
+                    mk("node", '#!/usr/bin/env bash\ncase "$1" in --version) echo v16.20.0;; -p) echo 16;; esac\n')
+                elif st == "claude":
+                    mk("claude", "#!/usr/bin/env bash\n" + claude_stub)
+            b.env["PATH"] = f"{clean}:{tools}:/usr/bin:/bin"
+            b.env["HOME"] = str(root / "home"); (root / "home").mkdir()
+            b.env["GROUNDWORK_OS"] = os_kind
+            return b, root
+
+        pb, root = prereq_box("p1", "darwin", ["brew", "claude"])
+        r = pb.run("--non-interactive", "--install-prereqs", "--profile", "work")
+        log = (root / "pm.log").read_text() if (root / "pm.log").exists() else ""
+        check("macOS: missing node installed via Homebrew, setup completes", r.returncode == 0 and "install node" in log and "claude" not in log and "Prereqs added: yes (brew)" in r.stdout and (pb.cfg / "groundwork" / "VERSION").is_file(), r.stdout[-700:] + r.stderr[-400:] + log)
+        pb, root = prereq_box("p0", "darwin", ["brew", "node"])
+        r = pb.run("--non-interactive", "--install-prereqs")
+        check("Claude Code missing: never installed by the script — stops with the official link, nothing changed", r.returncode == 1 and "code.claude.com/docs/en/setup" in r.stderr and not (root / "pm.log").exists() and not pb.backups.exists(), r.stdout + r.stderr)
+        pb, root = prereq_box("p2", "darwin", ["claude"])
+        r = pb.run("--non-interactive", "--install-prereqs")
+        check("macOS without Homebrew: stops, prints the official Homebrew command, nothing changed", r.returncode == 1 and "raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" in r.stdout and "Homebrew not found" in r.stderr and not pb.backups.exists(), r.stdout + r.stderr)
+        pb, root = prereq_box("p3", "linux", ["apt-get", "sudo", "claude"])
+        r = pb.run("--non-interactive", "--install-prereqs", "--profile", "work")
+        log = (root / "pm.log").read_text() if (root / "pm.log").exists() else ""
+        check("Linux (apt): node + npm via apt with sudo, setup completes", r.returncode == 0 and "install -y nodejs npm" in log and "Prereqs added: yes (apt)" in r.stdout, r.stdout[-700:] + r.stderr[-400:] + log)
+        pb, root = prereq_box("p4", "linux", ["dnf", "sudo", "claude"])
+        r = pb.run("--non-interactive", "--install-prereqs")
+        check("Linux (dnf) path", r.returncode == 0 and "dnf install -y nodejs npm" in (root / "pm.log").read_text(), r.stdout[-400:] + r.stderr[-300:])
+        pb, root = prereq_box("p5", "linux", ["sudo", "claude"])
+        r = pb.run("--non-interactive", "--install-prereqs")
+        check("Linux without apt/dnf/apk: stops with instructions, nothing changed", r.returncode == 1 and "no supported package manager" in r.stderr and not pb.backups.exists(), r.stderr)
+        pb, root = prereq_box("p6", "darwin", ["brew", "claude"])
+        r = pb.run("--non-interactive")
+        check("non-interactive without --install-prereqs: lists the exact commands and stops before any backup", r.returncode == 1 and "brew install node" in r.stdout and "--install-prereqs" in r.stderr and not pb.backups.exists(), r.stdout + r.stderr)
+        r = pb.run("--non-interactive", "--no-install-prereqs")
+        check("--no-install-prereqs: never installs", r.returncode == 1 and "--no-install-prereqs given" in r.stderr and not (root / "pm.log").exists())
+        r = pb.run(stdin="n\n")
+        check("interactive 'n' to the install question: stops, nothing installed", r.returncode == 1 and "not installing" in r.stderr and not (root / "pm.log").exists(), r.stdout + r.stderr)
+        r = pb.run(stdin="y\n1\n1\n1\n")
+        check("interactive 'y': installs, then continues with the three questions", r.returncode == 0 and (root / "pm.log").is_file() and "installed successfully" in r.stdout, r.stdout[-600:] + r.stderr[-300:])
+        pb, root = prereq_box("p7", "darwin", ["brew", "oldnode", "claude"])
+        r = pb.run("--non-interactive", "--install-prereqs")
+        check("Node too old: left to the user's version manager, clear message, nothing installed", r.returncode == 1 and "older than 18" in r.stderr and not (root / "pm.log").exists(), r.stderr)
 
         # ---- uninstall delegation: playbooks/rules/hooks/bin gone, telemetry and reports kept, profile env removed
         k = Box(tmp / "k")

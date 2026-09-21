@@ -4,6 +4,17 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.5.1 (2026-09-21) — setup.sh installs missing prerequisites (except Claude Code)
+
+Scope: `setup.sh` prerequisite section only; `install.sh`, `uninstall.sh`, hooks, rules, playbooks unchanged (`git diff main` empty).
+
+### Deterministic evidence
+- `python3 tests/test_setup.py` → 60 passed. New cases run with a PATH holding only a Python wrapper, coreutils and stub package managers that "install" by dropping tool stubs and logging the call: macOS with Homebrew installs a missing Node (`brew install node`) and completes; macOS without Homebrew stops and prints the official Homebrew one-liner, no backup made; Linux apt (`sudo apt-get install -y nodejs npm`) and dnf paths complete with `Prereqs added: yes (apt|dnf)`; Linux without apt/dnf/apk stops with instructions; `--non-interactive` without `--install-prereqs` lists the exact commands and stops before any backup; `--no-install-prereqs` never installs; interactive `n` stops, `y` installs then continues to the three questions; a Node older than 18 is left alone with a clear message; a missing Claude Code stops with the official docs link and nothing is installed.
+- Commands and package names verified against the official sources on 2026-09-21: Claude Code setup page (`brew install --cask claude-code`, native installer, apt/dnf/apk repositories — none of which the script runs, by the owner's decision), Homebrew's install one-liner (printed, never run), Homebrew formulas `git`, `node`, `python@3.12` present on this machine.
+- `test_playbooks.py` 132, `test_hooks.py` 93, `pytest tests -q` 11 — all passed.
+
+---
+
 ## 1.5.0 (2026-09-21) — one-click onboarding (setup.sh)
 
 Scope: `setup.sh` (new wrapper), `tests/test_setup.py`, `merge_settings.py --profile`, README Quick start. `install.sh`, `uninstall.sh`, hooks, rules, playbooks: `git diff main` empty.
