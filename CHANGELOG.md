@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.1 — 2026-09-21
+
+Presentation only. No routing, rule, hook, settings or safety change.
+
+- **New rule `rules/output-contract.md`** (25 lines) — the global three-layer answer shape every
+  playbook inherits: plain-language main response (result first, what matters, change/fix/
+  recommendation, honest validation, one next action when needed) → `Technical details`
+  (errors, log paths, copyable commands, key files, tests, PR/commit/version, technical risk)
+  → `Evidence & references` (strongest sources in evidence-priority order). Omit-empty-sections,
+  translate-evidence-to-meaning, never-imply-verification, and no routing debug lines unless asked.
+- `rules/task-routing.md` §4 now points at the contract; each playbook's Output Format lists only
+  its category's main headings plus an inheritance line — the global rules are not duplicated.
+- Tests: `test_playbooks.py` 76 → 98 checks (contract presence/size/key rules, router pointer,
+  playbooks inherit rather than restate, contract installed).
+
 ## 1.2.0 — 2026-09-21
 
 Additive task-routing layer. No existing rule, hook, settings key or safety control changed

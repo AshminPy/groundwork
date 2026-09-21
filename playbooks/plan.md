@@ -21,14 +21,5 @@ Produce an executable, ordered plan whose steps another engineer could carry out
 - Every step has an owner action and a verification; dependencies and risks are the real ones; "done when" is observable.
 
 ## Output Format
-```
-Goal: <one line>
-Plan:
-1. <phase/step — action → verification (→ rollback when it matters)>
-2. …
-Dependencies:
-- <only real dependencies>
-Risks:
-- <material risks with the mitigation>
-Done when: <observable condition>
-```
+Main response headings: **Goal** · **Plan** (numbered phases/steps, each with its verification) · **Dependencies / risks** (only when material) · **Done when**.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

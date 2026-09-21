@@ -21,9 +21,5 @@ Produce a document that its intended audience can use, grounded in the actual co
 - The document exists at the agreed location, matches the audience and format, contains no unverified claim presented as fact, and its links/commands work.
 
 ## Output Format
-```
-Deliverable: <path or artifact, and what it is>
-Source: <what evidence/content it was based on, when relevant>
-Important gaps: <what could not be verified or was left out; omit if none>
-```
-The document itself follows the requested audience and format. Do not force operational status fields into a document that does not need them.
+Main response headings: **Deliverable** (path or artifact) · **Important gaps or assumptions** (only when relevant). The document itself follows the requested audience and format — do not force status fields into it.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

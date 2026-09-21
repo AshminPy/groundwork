@@ -23,12 +23,6 @@ Make the smallest safe change that delivers the requested behaviour, prove it wi
 - Requested behaviour confirmed, project validation green (or the failure named), review done for MATERIAL work, completion block filled with evidence. A pre-existing failing test still makes `Tests: ❌` and `Overall: PARTIAL`.
 
 ## Output Format
-```
-Status: COMPLETE / PARTIAL / BLOCKED / FAILED   (= Overall of the completion block)
-Changed:
-- <meaningful changes only — no per-edit narration>
-Validation:
-  Code / Tests / Reviewed / Merged / Deployed / Live validated — ✅/❌/N/A each with its evidence (engineering-workflow.md §3)
-Remaining:
-- <only when not COMPLETE: what is left, what blocks it>
-```
+Main response headings: **Status** (one sentence = the completion block's Overall: complete / partial / blocked / failed) · **What changed** · **Validation** (the completion-block outcomes in plain words) · **Remaining work** (only if incomplete).
+Technical details carries the formal completion block — Code / Tests / Reviewed / Merged / Deployed / Live validated, ✅/❌/N/A with evidence (`engineering-workflow.md` §3) — plus files, tests, PR and commit.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

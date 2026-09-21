@@ -21,12 +21,6 @@ Judge whether an implementation, configuration, policy or design safely meets a 
 - A verdict with every MUST FIX finding evidenced and located; NICE TO HAVE items listed without blocking; sections with nothing material are omitted, not padded.
 
 ## Output Format
-```
-Result: PASS / PASS WITH ISSUES / FAIL / NOT VERIFIED
-MUST FIX:
-- <finding — location — why it matters — fix>   (omit if none)
-NICE TO HAVE:
-- <improvement — location>   (omit if none)
-Evidence:
-- <what was inspected and reproduced>
-```
+Main response headings: **Result** (pass / pass with issues / fail / not verified) · **MUST FIX** (omit if none) · **NICE TO HAVE** (only when valuable) · **Evidence summary**.
+Technical details carries locations (file:line / resource) and reproduction output per finding.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

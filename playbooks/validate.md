@@ -21,13 +21,6 @@ Prove whether something behaves as required, using the strongest evidence availa
 - Every requirement has a classification backed by an observation, and the overall result follows the rule in step 6.
 
 ## Output Format
-```
-Result: PASS / FAIL / PARTIAL / NOT VERIFIED
-Verified:
-- <requirement — command → observed result>
-Failed:
-- <actual failures only, with the observed output; omit if none>
-Evidence:
-- <proof supporting the result that is not already shown above>
-Next: <one action: fix, re-run, or obtain the missing access>
-```
+Main response headings: **Result** (pass / fail / partial / not verified) · **What was verified** · **Failures** (only if any) · **Next action** (only if required).
+Technical details carries the command → observed result per requirement.
+Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.
