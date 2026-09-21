@@ -4,6 +4,10 @@
 #   ./setup.sh                      first-time setup: prerequisites → backup → your choices →
 #                                   install.sh → reporting schedule → verification → first dashboard
 #   ./setup.sh --non-interactive [--profile NAME] [--agent-teams | --no-agent-teams] [--schedule FREQ]
+#                                   [--install-prereqs | --no-install-prereqs]
+#   Claude Code must already be installed. The other prerequisites (git, Node 18+, npm, Python 3.10+)
+#   are detected per OS and, after you say yes, installed with the official packages:
+#   Homebrew on macOS, apt / dnf / apk on Linux.
 #   ./setup.sh --verify             read-only check of the current installation (changes nothing)
 #   ./setup.sh --rollback [DIR]     restore the latest backup made by setup.sh (or the given backup DIR)
 #   ./setup.sh --uninstall          delegates to uninstall.sh (telemetry and reports are kept)
@@ -29,6 +33,8 @@ ts()   { date +%Y%m%d-%H%M%S; }
 
 MODE=setup
 NONINT=0
+INSTALL_PREREQS=""   # yes | no | "" (ask)
+INSTALLED_PREREQS="no"
 PROFILE=""
 TEAMS=""          # yes | no | ""
 SCHEDULE=""       # weekly | daily | monthly | yearly | disabled | ""
@@ -41,6 +47,8 @@ while [ $# -gt 0 ]; do
     --rollback) [ "$MODE" = setup ] || die "cannot combine --$MODE with --rollback"; MODE=rollback; if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then ROLLBACK_DIR="$2"; shift; fi ;;
     --uninstall) [ "$MODE" = setup ] || die "cannot combine --$MODE with --uninstall"; MODE=uninstall ;;
     --non-interactive) NONINT=1 ;;
+    --install-prereqs) INSTALL_PREREQS=yes ;;
+    --no-install-prereqs) INSTALL_PREREQS=no ;;
     --profile) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--profile requires a value (e.g. --profile work)"; PROFILE="$2"; shift ;;
     --agent-teams) TEAMS=yes ;;
     --no-agent-teams) TEAMS=no ;;
@@ -52,24 +60,148 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------------------------------------------------------------- prerequisites
+# OS-aware: macOS installs via Homebrew, Linux via apt / dnf / apk, always with the official
+# package or installer, only after you say yes (or --install-prereqs). Nothing is changed before
+# the question, and the check is repeated after installing.
+OS_KIND="${GROUNDWORK_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"   # darwin | linux (override is for tests)
+PKG=""
+MISSING=()
+NODE_MIN=18
+PY_MIN_MAJOR=3; PY_MIN_MINOR=10
+
+detect_pm() {
+  case "$OS_KIND" in
+    darwin) command -v brew >/dev/null 2>&1 && PKG=brew || PKG=none ;;
+    linux)
+      if command -v apt-get >/dev/null 2>&1; then PKG=apt
+      elif command -v dnf >/dev/null 2>&1; then PKG=dnf
+      elif command -v apk >/dev/null 2>&1; then PKG=apk
+      else PKG=none; fi ;;
+    *) PKG=none ;;
+  esac
+}
+
+refresh_path() {  # make freshly installed tools visible in this run
+  if [ "$OS_KIND" = darwin ] && [ -z "${GROUNDWORK_OS:-}" ] && ! command -v brew >/dev/null 2>&1; then
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)" 2>/dev/null && break; done
+  fi
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
+  hash -r 2>/dev/null || true
+}
+
+node_ok() { command -v node >/dev/null 2>&1 && [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge "$NODE_MIN" ]; }
+py_ok()   { command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.exit(0 if sys.version_info >= ($PY_MIN_MAJOR, $PY_MIN_MINOR) else 1)" 2>/dev/null; }
+
+find_missing() {
+  MISSING=()
+  command -v git >/dev/null 2>&1 || MISSING+=(git)
+  node_ok || MISSING+=(node)
+  command -v npm >/dev/null 2>&1 || { node_ok || true; case " ${MISSING[*]:-} " in *" node "*) ;; *) MISSING+=(npm) ;; esac; }
+  py_ok || MISSING+=(python3)
+  command -v claude >/dev/null 2>&1 || MISSING+=(claude)
+}
+
+describe_missing() {
+  local t
+  for t in "${MISSING[@]}"; do
+    case "$t" in
+      git) say "  - git" ;;
+      node) if command -v node >/dev/null 2>&1; then say "  - Node.js >= $NODE_MIN (found $(node --version 2>/dev/null))"; else say "  - Node.js >= $NODE_MIN (with npm)"; fi ;;
+      npm) say "  - npm" ;;
+      python3) if command -v python3 >/dev/null 2>&1; then say "  - Python $PY_MIN_MAJOR.$PY_MIN_MINOR+ (found $(python3 --version 2>&1))"; else say "  - Python $PY_MIN_MAJOR.$PY_MIN_MINOR+"; fi ;;
+      claude) say "  - Claude Code (https://code.claude.com/docs/en/setup)" ;;
+    esac
+  done
+}
+
+install_cmd() {  # prints the official command(s) for one tool on this OS / package manager
+  local t="$1"
+  case "$PKG:$t" in
+    brew:git)      echo "brew install git" ;;
+    brew:node|brew:npm) echo "brew install node" ;;
+    brew:python3)  echo "brew install python@3.12" ;;
+    apt:git)       echo "sudo apt-get install -y git" ;;
+    apt:node|apt:npm) echo "sudo apt-get install -y nodejs npm" ;;
+    apt:python3)   echo "sudo apt-get install -y python3" ;;
+    dnf:git)       echo "sudo dnf install -y git" ;;
+    dnf:node|dnf:npm) echo "sudo dnf install -y nodejs npm" ;;
+    dnf:python3)   echo "sudo dnf install -y python3" ;;
+    apk:git)       echo "sudo apk add git" ;;
+    apk:node|apk:npm) echo "sudo apk add nodejs npm" ;;
+    apk:python3)   echo "sudo apk add python3" ;;
+    *) return 1 ;;
+  esac
+}
+
+run_install() {  # run one install command; sudo is dropped when already root; apt refreshes its index first
+  local cmd="$1"
+  if [ "$(id -u)" = 0 ]; then cmd="${cmd#sudo }"; fi
+  case "$cmd" in *apt-get\ install*) ( set +e; ${cmd%%install*}update -qq >/dev/null 2>&1 ); ;; esac
+  say "  \$ $cmd"
+  bash -c "$cmd"
+}
+
 check_prereqs() {
-  local missing=()
-  command -v claude  >/dev/null 2>&1 || missing+=("Claude Code ('claude' not on PATH) — https://claude.com/claude-code")
-  command -v node    >/dev/null 2>&1 || missing+=("Node.js ('node' not on PATH, >= 18 needed)")
-  command -v npm     >/dev/null 2>&1 || missing+=("npm")
-  command -v git     >/dev/null 2>&1 || missing+=("git")
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null \
-      || missing+=("Python 3.10+ (found $(python3 --version 2>&1))")
-  else
-    missing+=("Python 3.10+ ('python3' not on PATH)")
+  detect_pm
+  refresh_path
+  find_missing
+  if [ ${#MISSING[@]} -eq 0 ]; then
+    say "Prerequisites: git, node $(node --version 2>/dev/null), npm, python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])'), claude — OK"
+    return
   fi
-  if [ ${#missing[@]} -gt 0 ]; then
-    say "Missing prerequisites:"
-    for m in "${missing[@]}"; do say "  - $m"; done
-    die "install the missing prerequisites and run ./setup.sh again (nothing was changed)"
+  say "Missing prerequisites on this machine ($OS_KIND):"
+  describe_missing
+  # Claude Code is required but never installed by this script: it is the product being configured,
+  # and its login is interactive. Everything else (git, Node, npm, Python) can be installed below.
+  case " ${MISSING[*]} " in *" claude "*)
+    die "Claude Code is not installed (or not on PATH). Install it first — https://code.claude.com/docs/en/setup — sign in once with 'claude', then run ./setup.sh again (nothing was changed)" ;;
+  esac
+  # a Node.js that exists but is too old is left alone: it is usually managed by nvm/asdf/volta
+  if command -v node >/dev/null 2>&1 && ! node_ok; then
+    die "Node.js $(node --version) is older than $NODE_MIN. Upgrade it with your Node version manager (nvm/asdf/volta) or from https://nodejs.org/en/download, then run ./setup.sh again (nothing was changed)"
   fi
-  say "Prerequisites: claude, node, npm, git, python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])') — OK"
+  if [ "$PKG" = none ]; then
+    if [ "$OS_KIND" = darwin ]; then
+      say ""
+      say "Homebrew is needed to install these on macOS. Install it with the official command, then run ./setup.sh again:"
+      say '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+      die "Homebrew not found (nothing was changed)"
+    fi
+    die "no supported package manager found (apt-get, dnf or apk) — install the items above yourself, then run ./setup.sh again (nothing was changed)"
+  fi
+  say ""
+  say "They can be installed now with $PKG using the official packages:"
+  local t
+  for t in "${MISSING[@]}"; do say "  $(install_cmd "$t")"; done
+  if [ "$INSTALL_PREREQS" = no ]; then
+    die "install them yourself, then run ./setup.sh again (--no-install-prereqs given; nothing was changed)"
+  fi
+  if [ "$INSTALL_PREREQS" != yes ]; then
+    if [ "$NONINT" = 1 ]; then
+      die "prerequisites missing and --install-prereqs not given — run the commands above, or re-run with --install-prereqs (nothing was changed)"
+    fi
+    local a=""; ask a "Install them now? (y/n)" "y"
+    case "$a" in y|Y|yes|YES) ;; *) die "not installing — run the commands above, then ./setup.sh again (nothing was changed)" ;; esac
+  fi
+  if [ "$OS_KIND" = linux ] && [ "$(id -u)" != 0 ] && [ "$NONINT" = 1 ] && ! sudo -n true 2>/dev/null; then
+    die "sudo needs a password, which --non-interactive cannot provide — run the commands above, then ./setup.sh again"
+  fi
+  say ""
+  say "-- Installing prerequisites with $PKG --"
+  local done_node=0
+  for t in "${MISSING[@]}"; do
+    case "$t" in node|npm) [ "$done_node" = 1 ] && continue; done_node=1 ;; esac
+    run_install "$(install_cmd "$t")" || die "installing $t failed — fix the error above, then run ./setup.sh again (nothing else was changed)"
+  done
+  refresh_path
+  find_missing
+  if [ ${#MISSING[@]} -gt 0 ]; then
+    say "Still missing after installation:"; describe_missing
+    die "open a new terminal (so PATH picks up the new tools) and run ./setup.sh again"
+  fi
+  INSTALLED_PREREQS="yes ($PKG)"
+  say "Prerequisites installed. Note: open a new terminal later so your shell sees them too."
+  say "Prerequisites: git, node $(node --version 2>/dev/null), npm, python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])'), claude — OK"
 }
 
 # ---------------------------------------------------------------- backup
@@ -263,6 +395,7 @@ run_setup() {
   say "Groundwork $(cat "$CLAUDE_DIR/groundwork/VERSION") installed successfully."
   say "Profile:       ${PROFILE:-not set (telemetry records 'unknown'; set later: python3 scripts/merge_settings.py --profile NAME $CLAUDE_DIR/settings.json)}"
   say "Agent Teams:   $([ "$TEAMS" = yes ] && echo enabled || echo disabled)"
+  say "Prereqs added: $INSTALLED_PREREQS"
   say "Reports:       $SCHEDULE"
   say "Validation:    $validation"
   say "Backup:"

@@ -73,7 +73,18 @@ cd groundwork
 ./setup.sh
 ```
 
-`setup.sh` is a thin wrapper around the tested installer. It checks the prerequisites, **backs up your complete `~/.claude` directory** to `~/.claude-backups/groundwork-YYYYMMDD-HHMMSS/` (owner-only; previous backups are never overwritten; a missing `~/.claude` is fine), asks three questions, runs `install.sh`, applies the reporting schedule, verifies the installation, generates the first dashboard and prints a summary. Backups stay local and are never transmitted; they can contain settings, MCP configuration, rules and hooks, so treat them as sensitive.
+`setup.sh` is a thin wrapper around the tested installer. It checks the prerequisites and offers to install any that are missing (see below), **backs up your complete `~/.claude` directory** to `~/.claude-backups/groundwork-YYYYMMDD-HHMMSS/` (owner-only; previous backups are never overwritten; a missing `~/.claude` is fine), asks three questions, runs `install.sh`, applies the reporting schedule, verifies the installation, generates the first dashboard and prints a summary. Backups stay local and are never transmitted; they can contain settings, MCP configuration, rules and hooks, so treat them as sensitive.
+
+Claude Code itself must already be installed and signed in (it is the product being configured; the script stops with the official install link otherwise). The other prerequisites are detected per operating system — git, Node 18+ with npm, Python 3.10+ — and anything missing is listed with the exact official command and installed only after you answer **y** (or pass `--install-prereqs`; `--no-install-prereqs` never installs):
+
+| OS | Package manager | Commands used |
+|---|---|---|
+| macOS | Homebrew (`brew`) | `brew install git` · `brew install node` · `brew install python@3.12` |
+| Debian / Ubuntu | apt | `sudo apt-get install -y git` · `sudo apt-get install -y nodejs npm` · `sudo apt-get install -y python3` |
+| Fedora / RHEL | dnf | `sudo dnf install -y git` · `sudo dnf install -y nodejs npm` · `sudo dnf install -y python3` |
+| Alpine | apk | `sudo apk add git` · `sudo apk add nodejs npm` · `sudo apk add python3` |
+
+Deliberate limits: Homebrew itself is not installed for you (its official one-liner is printed instead, because it needs your password); a Node.js that exists but is older than 18 is left to your version manager (nvm, asdf, volta) with a clear message; `--non-interactive` never installs anything unless `--install-prereqs` is given. After installing, the check runs again.
 
 The three questions:
 
