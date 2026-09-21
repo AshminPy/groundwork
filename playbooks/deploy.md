@@ -24,5 +24,5 @@ Change a running system (cloud, Kubernetes, Docker, local) safely, prove it is h
 
 ## Output Format
 Main response headings: **Status** (deployed / partial / failed / blocked) · **What was deployed** (target, version) · **Validation** (the runtime health check in plain words) · **Issues / rollback** (only when relevant).
-Technical details carries the preview/apply output, the health-check command → result, the rollback command, and the completion block for MATERIAL deploys.
+Technical details carries the preview/apply output, the health-check command → result, the rollback command, and, for MATERIAL deploys, the completion facts in prose (the aligned STATUS layout only when the user asks for a release checklist).
 Then, per `output-contract.md`: `Technical details` and `Evidence & references` when they add something.

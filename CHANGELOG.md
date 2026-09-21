@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3 — 2026-09-21
+
+Two consistency fixes; schema 2, observed/declared split, profile, outcome parsing, privacy and fail-open unchanged.
+
+- **No completion checklist in normal responses**: engineering-workflow §3, output-contract, implement/deploy playbook lines and the private behaviour rules now say the six completion facts are reported in prose under Validation / Technical details; the aligned STATUS layout only on an explicit request for a release/deployment checklist.
+- **Harness metadata consistency**: Execution, agent count and roles must agree and come from the Agent calls actually made; the hook reconciles the declared values against observed Agent calls (authoritative), keeping declared roles only when their number matches. Regression tests added.
+
 ## 1.3.2 — 2026-09-21
 
 Telemetry refinement (no change to routing, playbooks, evidence rules, hooks other than telemetry, privacy or fail-open behaviour).

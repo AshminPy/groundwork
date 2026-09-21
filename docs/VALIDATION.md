@@ -4,6 +4,16 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.3.3 (2026-09-21) — no checklist in normal responses; metadata block consistency
+
+Scope: engineering-workflow §3 wording, output-contract Validation and metadata rules, two implement/deploy playbook lines, private behaviour rules, hook reconciliation of agent facts. Schema 2, observed/declared, profile, outcome parsing, privacy, fail-open unchanged.
+
+### Deterministic evidence
+- `test_telemetry.py` → 81 passed (new: declared "2 subagents" + one role vs one observed Agent call → count 1, mode subagents, one role; declared two roles vs one observed call → observed role wins; declared "single agent" vs two observed calls → subagents, 2, observed roles; no observed calls + declared single agent → 0, no roles; unreadable transcript → declared values kept; no Agents line → roles from observed types). `test_hooks.py` 93, `test_playbooks.py` 129, `pytest` 9.
+- Three fresh IMPLEMENT sessions after the change: none contained a Code / Tests / Reviewed / Merged / Deployed / Overall list (grep count 0 in all three); completion facts appeared as prose under Validation with the command → result, files and commit under Technical details. Two of three emitted the block (`single agent`, no Agents line, matching `agent_calls: 0`) and recorded `outcome: complete`, `files_changed: 2`, `tests_run: true`, `profile: work`; the third omitted the block (recorded with `block_present: false`, outcome `partial` because its Status paragraph itself said "not merged, not deployed").
+
+---
+
 ## 1.3.2 (2026-09-21) — telemetry refinement (profile, outcome, one status per response)
 
 Scope: `hooks/groundwork_telemetry.py` (schema 2, classifier, trigger), `rules/output-contract.md`, `rules/engineering-workflow.md` §3, private behaviour rules, one line in `~/.claude/CLAUDE.md`. Playbooks, routing, evidence rules, guard hooks untouched (baseline 15/16, the one diff being engineering-workflow.md as intended).

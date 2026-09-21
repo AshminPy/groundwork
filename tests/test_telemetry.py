@@ -175,6 +175,7 @@ def test_telemetry_hook() -> None:
         check("identifiers and version", rec["session_id"] == "sess-1" and rec["prompt_id"] == "p-9" and rec["harness_version"] == "1.3.2" and rec["harness"] == "Groundwork")
         check("observed profile from GROUNDWORK_PROFILE", ob["profile"] == "work")
         check("concise block parsed: headline playbook, N subagents, evidence, validation", de["playbook"] == "IMPLEMENT" and de["execution_mode"] == "subagents" and de["agent_count"] == 2 and de["evidence_sources"] == ["repo", "tests", "runtime"] and de["validation"] == "verified", json.dumps(de))
+        check("no Agents line: roles filled from observed agent types", de["agent_roles"] == ["explore", "security-reviewer"], json.dumps(de))
         check("outcome complete from the Status sentence", de["outcome"] == "complete")
         check("observed agent calls and types from the transcript", ob["agent_calls"] == 2 and ob["agent_types"] == ["explore", "security-reviewer"], json.dumps(ob))
         check("current turn only: deploy from the previous turn not counted", ob["deployment_performed"] is False and ob["tests_run"] is True)
@@ -186,6 +187,29 @@ def test_telemetry_hook() -> None:
         check("cwd stored only as a short hash", len(rec["cwd_hash"]) == 12 and str(tmp) not in raw)
         check("owner-only permissions (file 0600, dir 0700)", (events.stat().st_mode & 0o777) == 0o600 and (events.parent.stat().st_mode & 0o777) == 0o700, oct(events.stat().st_mode & 0o777))
 
+        # consistency: observed Agent calls are authoritative for count, mode and roles
+        one_agent = transcript(tmp, [[{"name": "Agent", "input": {"subagent_type": "ecc:code-reviewer", "prompt": "review"}},
+                                      {"name": "Bash", "input": {"command": "pytest -q"}}]], "one.jsonl")
+        inconsistent = RESPONSE.replace("Execution:   2 subagents", "Execution:   2 subagents\nAgents:      1 — code reviewer")
+        run({**payload, "transcript_path": str(one_agent), "last_assistant_message": inconsistent}, env)
+        rec = last(events); ob, de = rec["observed"], rec["declared"]
+        check("declared '2 subagents' + 1 role vs 1 observed call -> count 1, mode subagents, one role", ob["agent_calls"] == 1 and ob["agent_types"] == ["ecc:code-reviewer"] and de["agent_count"] == 1 and de["execution_mode"] == "subagents" and de["agent_roles"] == ["code reviewer"], json.dumps(rec))
+        run({**payload, "transcript_path": str(one_agent), "last_assistant_message": RESPONSE.replace("Execution:   2 subagents", "Execution:   2 subagents\nAgents:      2 — explorer, reviewer")}, env)
+        de = last(events)["declared"]
+        check("declared 2 roles vs 1 observed call -> count 1, observed role replaces declared roles", de["agent_count"] == 1 and de["agent_roles"] == ["ecc:code-reviewer"], json.dumps(de))
+        run({**payload, "last_assistant_message": RESPONSE.replace("Execution:   2 subagents", "Execution:   2 subagents\nAgents:      2 — explorer, reviewer")}, env)
+        de = last(events)["declared"]
+        check("declared count matches 2 observed calls -> declared roles kept", de["agent_count"] == 2 and de["agent_roles"] == ["explorer", "reviewer"], json.dumps(de))
+        run({**payload, "last_assistant_message": RESPONSE.replace("Execution:   2 subagents", "Execution:   single agent")}, env)
+        de = last(events)["declared"]
+        check("declared 'single agent' but 2 observed calls -> subagents, 2, observed roles", de["execution_mode"] == "subagents" and de["agent_count"] == 2 and de["agent_roles"] == ["explore", "security-reviewer"], json.dumps(de))
+        run({**payload, "transcript_path": str(transcript(tmp, [[{"name": "Bash", "input": {"command": "ls"}}]], "none.jsonl")), "last_assistant_message": RESPONSE.replace("Execution:   2 subagents", "Execution:   single agent\nAgents:      1 — reviewer")}, env)
+        de = last(events)["declared"]
+        check("no observed calls and declared single agent -> count 0, no roles", de["execution_mode"] == "single_agent" and de["agent_count"] == 0 and de["agent_roles"] == [], json.dumps(de))
+        run({**payload, "transcript_path": "/nonexistent/x.jsonl", "last_assistment_message": None, "last_assistant_message": RESPONSE.replace("Execution:   2 subagents", "Execution:   2 subagents\nAgents:      2 — a, b")}, env)
+        de = last(events)["declared"]
+        check("transcript unreadable (nothing observed) -> declared values kept as stated", de["agent_count"] == 2 and de["execution_mode"] == "subagents" and de["agent_roles"] == ["a", "b"], json.dumps(de))
+
         # profile unset -> unknown (never taken from the model's block)
         run({**payload, "last_assistant_message": RESPONSE.replace("Execution:", "Profile:     work\nExecution:")}, env)
         check("profile without GROUNDWORK_PROFILE -> unknown even if the block states one", last(events)["observed"]["profile"] == "unknown")
@@ -195,7 +219,7 @@ def test_telemetry_hook() -> None:
                       "* Evidence: repo / runtime / docs\n* Validation: partial\n* Environment: staging\n")
         run({**payload, "last_assistant_message": "Status\n\nDeployed. Health check green.\n\n" + long_block}, env)
         de = last(events)["declared"]
-        check("long layout: bold key, agent team + roles, slash-separated evidence, environment", de["playbook"] == "DEPLOY" and de["execution_mode"] == "agent_team" and de["agent_count"] == 3 and de["agent_roles"] == ["lead", "implementer", "validator"] and de["evidence_sources"] == ["repo", "runtime", "docs"] and de["environment"] == "staging" and de["outcome"] == "complete", json.dumps(de))
+        check("long layout: bold key, agent team, slash-separated evidence, environment; declared 3 roles reconciled to the 2 observed calls", de["playbook"] == "DEPLOY" and de["execution_mode"] == "agent_team" and de["agent_count"] == 2 and de["agent_roles"] == ["explore", "security-reviewer"] and de["evidence_sources"] == ["repo", "runtime", "docs"] and de["environment"] == "staging" and de["outcome"] == "complete", json.dumps(de))
 
         # privacy: free text in the block must not leak paths / tokens / sentences
         leaky = ("Status\n\nComplete.\n\n```\nHARNESS METADATA\nGroundwork 1.3.2 · IMPLEMENT\nExecution:   1 subagent\n"
@@ -205,7 +229,7 @@ def test_telemetry_hook() -> None:
         run({**payload, "last_assistant_message": leaky}, env)
         raw = events.read_text(); de = last(events)["declared"]
         check("path / token tokens dropped from evidence", de["evidence_sources"] == ["repo", "tests"], json.dumps(de["evidence_sources"]))
-        check("agent roles: only labels kept", de["agent_roles"] == ["explorer"], json.dumps(de["agent_roles"]))
+        check("agent roles: leaky declared roles replaced by the observed agent types", de["agent_roles"] == ["explore", "security-reviewer"], json.dumps(de["agent_roles"]))
         check("secret-shaped environment -> unknown", de["environment"] == "unknown")
         check("nothing leaky stored", all(x not in raw for x in ("secret-client", "AKIA", "akia", "sk-live", "ghp_", "supersecret", "/tmp/x")), raw)
         run({**payload, "last_assistant_message": RESPONSE.replace("· IMPLEMENT", "· SOMETHING")}, env)

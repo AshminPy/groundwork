@@ -44,7 +44,7 @@ META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*
 # Free text copied from the model's block is stored only if it looks like a short label:
 # letters/digits/space/_/- and at most 32 chars. Anything else (a path, an @, a token-shaped
 # string, a sentence) is dropped — identifiers and labels only, never raw content.
-LABEL = re.compile(r"^[a-z][a-z0-9 _-]{0,31}$")
+LABEL = re.compile(r"^[a-z][a-z0-9 _:-]{0,31}$")  # ":" allowed for agent ids like ecc:code-reviewer
 TOKEN_SHAPED = re.compile(r"[a-z0-9_-]*\d[a-z0-9_-]*")  # a "word" containing a digit; long ones look like keys
 PLAYBOOKS = {"RESEARCH", "EXPLAIN", "DESIGN", "PLAN", "IMPLEMENT", "TROUBLESHOOT", "VALIDATE", "AUDIT", "DEPLOY", "DOCUMENT"}
 TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step
@@ -329,7 +329,8 @@ def parse_execution(value: str):
 
 def build_record(data: dict, text: str) -> dict:
     """One record: `observed` = facts the hook determined itself (transcript, environment, files);
-    `declared` = what the model stated in its block and status sentence — recorded, not verified."""
+    `declared` = what the model stated in its block and status sentence — recorded, not verified,
+    except that agent count / mode / roles are reconciled against observed Agent calls (authoritative)."""
     meta = parse_metadata(text)
     facts = turn_facts(current_turn(data.get("transcript_path", "")))
     if not meta and not facts["tools"]:
@@ -338,6 +339,18 @@ def build_record(data: dict, text: str) -> dict:
     count, roles = parse_agents(meta.get("agents", ""))
     if count is None:
         count = exec_count
+    # Reconcile with what the hook observed: Agent calls in the transcript are authoritative for the
+    # count and the mode; declared roles are kept only when they match that count.
+    observed_calls = len(facts["agents"])
+    observed_types = labels(", ".join(a["name"] or a["type"] for a in facts["agents"]), 12)
+    if observed_calls:
+        if count != observed_calls or not roles:
+            count = observed_calls
+            roles = observed_types
+        if execution in ("single_agent", "unknown"):
+            execution = "subagents"
+    elif execution == "single_agent":
+        count, roles = 0, []
     validation_raw = meta.get("validation", "").lower()
     validation = next((v for k, v in VALIDATION_STATES.items() if k in validation_raw), "unknown")
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
@@ -356,7 +369,7 @@ def build_record(data: dict, text: str) -> dict:
             "tools": facts["tools"],
             "mcp_servers": facts["mcp_servers"],
             "agent_calls": len(facts["agents"]),
-            "agent_types": labels(", ".join(a["name"] or a["type"] for a in facts["agents"]), 12),
+            "agent_types": observed_types,
             "files_changed": facts["files_changed"],
             "tests_run": facts["tests_run"],
             "implementation_performed": facts["implementation_performed"],
