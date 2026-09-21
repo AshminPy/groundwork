@@ -93,24 +93,13 @@ Every substantive request is routed to exactly one of ten task categories — RE
 
 Every answer then follows the global output contract in [rules/output-contract.md](rules/output-contract.md): a plain-language main response first (result, what matters, what changed or is recommended, whether it was really verified, one next action when needed), then `Technical details` when useful evidence exists (errors, log paths, copyable commands, key files, tests, PR, commit), then `Evidence & references` when the conclusion depends on sources. Empty sections are omitted; technical evidence is translated into understandable language in the main response and kept exact in the details.
 
-Substantive task responses end with a small `Harness metadata` block (harness, profile, playbook, execution mode, agents, evidence types, validation state — only what is actually known), and a fourth hook, `hooks/groundwork_telemetry.py`, appends one JSON line per such task to `~/.claude/groundwork/telemetry/events.jsonl`: identifiers and aggregates only (playbook, execution mode, agent count and roles, tool and MCP names, evidence types, outcome, validation, tests run, files-changed count, a short hash of the project path) — never prompt text, commands, paths, secrets or reasoning. It is append-only and fail-open; set `GROUNDWORK_TELEMETRY=off` to disable, `GROUNDWORK_PROFILE=work` (in `settings.json` `env`) to label the profile. The records are designed for later reports (playbook frequency, single-agent vs subagent vs team usage, tool usage, clarification and blocked rates by playbook, validation rate, trends by version); no dashboard exists yet.
+Substantive task responses end with a small `Harness metadata` block (four lines: `Groundwork <version> · <PLAYBOOK>`, execution, evidence types, validation — profile/environment/roles/tools only when relevant), and a fourth hook, `hooks/groundwork_telemetry.py`, appends one JSON line per substantive turn — the block is present, or at least one tool ran — to `~/.claude/groundwork/telemetry/events.jsonl` (owner-only); `declared.block_present` records whether the block was there. Each record separates **observed** facts the hook determined itself (profile from `GROUNDWORK_PROFILE`, tool and MCP names, agent calls, files-changed count, tests run, deploy-shaped commands, version) from **declared** metadata taken from the response (playbook, execution mode, evidence types, validation, outcome from the Status sentence) — declared fields are recorded as stated, not verified. Never prompt text, commands, paths, secrets or reasoning: free text is kept only as short labels. Append-only and fail-open; `GROUNDWORK_TELEMETRY=off` disables; set `GROUNDWORK_PROFILE=work` in your own `settings.json` `env` to label the profile (machine-specific, not shipped by the installer). The records are designed for later reports (playbook frequency, execution modes, tool usage, clarification and blocked rates, validation rate, trends by version); no dashboard exists yet.
 
 This layer is additive. It never overrides the engineering workflow, the evidence policy, the architecture rule, or any hook; where a playbook and an existing rule disagree, the existing rule wins. `tests/test_playbooks.py` checks the artefacts and the install layout; `scripts/check_routing.py` runs the twelve reference scenarios through real headless sessions when the CLI is logged in.
 
-## The completion status block
+## The completion facts
 
-Every STANDARD/MATERIAL task ends with:
-```
-STATUS
-Code:           ✅ / ❌ / N/A
-Tests:          ✅ / ❌ / N/A
-Reviewed:       ✅ / ❌ / N/A
-Merged:         ✅ / ❌ / N/A
-Deployed:       ✅ / ❌ / N/A
-Live validated: ✅ / ❌ / N/A
-Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED
-```
-Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime. `N/A` is only legitimate when the step genuinely doesn't apply, stated why; it is never used to reach COMPLETE by omission.
+Every STANDARD/MATERIAL task establishes six facts with evidence — Code · Tests · Reviewed · Merged · Deployed · Live validated (✅ / ❌ / N/A) — plus `Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED`, and reports them once, inside the output contract's Validation / Technical details. The aligned `STATUS` block layout is produced only when the user asks for a release/deployment checklist. Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime.
 
 ## Future direction
 
