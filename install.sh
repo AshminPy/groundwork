@@ -83,6 +83,13 @@ chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/require_material_review.py \
          "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py \
          "$CLAUDE_DIR"/hooks/groundwork_telemetry.py
+# Health dashboard generator (no server, no LLM): installed beside the playbooks; the configured
+# launchd schedule (default weekly) is applied idempotently — one job, replaced on every install.
+mkdir -p "$CLAUDE_DIR/groundwork/bin" "$CLAUDE_DIR/groundwork/reports"
+cp "$HERE/scripts/groundwork_report.py" "$CLAUDE_DIR/groundwork/bin/groundwork_report.py"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_report.py"
+SCHED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('schedule','weekly'))" "$CLAUDE_DIR/groundwork/report.json" 2>/dev/null || echo weekly)
+python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule "$SCHED" >/dev/null && echo "  report schedule: $SCHED (python3 ~/.claude/groundwork/bin/groundwork_report.py schedule <disabled|daily|weekly|monthly|yearly>)"
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 

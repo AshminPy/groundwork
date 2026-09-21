@@ -97,6 +97,24 @@ Substantive task responses end with a small `Harness metadata` block (four lines
 
 This layer is additive. It never overrides the engineering workflow, the evidence policy, the architecture rule, or any hook; where a playbook and an existing rule disagree, the existing rule wins. `tests/test_playbooks.py` checks the artefacts and the install layout; `scripts/check_routing.py` runs the twelve reference scenarios through real headless sessions when the CLI is logged in.
 
+## Health dashboard (local, no server, no LLM)
+
+![Groundwork health dashboard — summary cards, weekly trend, playbook usage, gap rate by playbook, execution mode, validation state, tool usage, harness versions, gaps list](docs/images/dashboard.png)
+
+*Sample: this machine's real telemetry after the 1.4.0 install (22 records, 30-day window). Rework rate and verified accuracy show N/A because no ground truth is collected; the trend panel says so when fewer than two weeks of data exist.*
+
+`~/.claude/groundwork/bin/groundwork_report.py` turns the telemetry file into `~/.claude/groundwork/reports/dashboard.html` — a self-contained page (inline SVG charts, no CDN, no network requests) with summary cards (total tasks, completion, verified outcome, gap rate, validation pass, evidence coverage, metadata compliance; rework rate and verified accuracy show N/A because the telemetry carries no ground truth), a weekly health trend, playbook usage, gap rate by playbook, execution mode, validation state, tool/MCP usage, harness versions, and a deterministic Gaps / attention list. Every rate shows its numerator and denominator; unknown outcomes are excluded from denominators; trends against the previous equivalent period appear only when both have at least five known outcomes. Filters (period 7/30/90/365 days or all, profile, playbook, version, environment) run in the page's own JavaScript over aggregated day buckets — the browser never reads the raw telemetry file, and nothing leaves the machine.
+
+```bash
+python3 ~/.claude/groundwork/bin/groundwork_report.py generate            # rebuild dashboard.html now
+python3 ~/.claude/groundwork/bin/groundwork_report.py generate --snapshot # also YYYY-MM-DD.html and .md
+python3 ~/.claude/groundwork/bin/groundwork_report.py schedule weekly     # disabled | daily | weekly | monthly | yearly
+python3 ~/.claude/groundwork/bin/groundwork_report.py status
+open ~/.claude/groundwork/reports/dashboard.html
+```
+
+The schedule is a macOS launchd agent (`com.groundwork.report`, default weekly, Monday 08:00; `--hour` to change) that runs `generate --snapshot` — Claude does not need to be running and no API call is made. Schedule and analysis window are separate: `~/.claude/groundwork/report.json` holds `schedule` and `window_days` (default 30). Report generation is a separate process that no hook calls, so a reporting failure cannot affect task execution or telemetry collection. Uninstall removes the job and the script but keeps `telemetry/` and `reports/`.
+
 ## The completion facts
 
 Every STANDARD/MATERIAL task establishes six facts with evidence — Code · Tests · Reviewed · Merged · Deployed · Live validated (✅ / ❌ / N/A) — plus `Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED`, and reports them once, inside the output contract's Validation / Technical details. The aligned `STATUS` block layout is produced only when the user asks for a release/deployment checklist. Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime.
@@ -125,6 +143,7 @@ groundwork/
 │   ├── require_material_review.py     denies finishing a complete-but-unreviewed change (subagent, skill, or teammate reviewers)
 │   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot at session start
 │   └── groundwork_telemetry.py        appends one JSONL usage record per substantive task (fail-open)
+├── scripts/groundwork_report.py       health dashboard generator (installed to ~/.claude/groundwork/bin/, launchd schedule)
 ├── scripts/
 │   ├── merge_settings.py              settings.json merge (used by install.sh)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
