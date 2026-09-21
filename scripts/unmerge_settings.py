@@ -23,6 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     AGENT_TEAMS_ENV,
+    PROFILE_ENV,
     GROUNDWORK_DENY,
     GROUNDWORK_ENV_DEFAULTS,
     PUSH_CMD,
@@ -85,6 +86,9 @@ def unmerge(data: dict, agent_teams: bool = False) -> list[str]:
         if env.get(key) == value:
             del env[key]
             removed.append(f"env.{key}")
+    if PROFILE_ENV in env:  # Groundwork's own key, always removed with Groundwork
+        del env[PROFILE_ENV]
+        removed.append(f"env.{PROFILE_ENV}")
     if agent_teams and env.get(AGENT_TEAMS_ENV) == "1":
         del env[AGENT_TEAMS_ENV]
         removed.append(f"env.{AGENT_TEAMS_ENV}")

@@ -50,6 +50,7 @@ GROUNDWORK_ENV_DEFAULTS = {
 }
 
 AGENT_TEAMS_ENV = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+PROFILE_ENV = "GROUNDWORK_PROFILE"  # machine-specific label recorded by telemetry; set via --profile, never shipped
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -77,12 +78,18 @@ def has_command(entries: list, command: str) -> bool:
     return False
 
 
+PROFILE_OPT: dict = {"value": None}
+
+
 def parse_args(argv: list[str]) -> tuple[bool, Path]:
     agent_teams = False
     path = None
-    for arg in argv:
+    it = iter(argv)
+    for arg in it:
         if arg == "--agent-teams":
             agent_teams = True
+        elif arg == "--profile":
+            PROFILE_OPT["value"] = next(it, None) or ""
         elif arg.startswith("-"):
             raise SystemExit(f"unknown option: {arg}")
         elif path is not None:
@@ -94,9 +101,14 @@ def parse_args(argv: list[str]) -> tuple[bool, Path]:
     return agent_teams, path
 
 
-def merge(data: dict, agent_teams: bool = False) -> list[str]:
+def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> list[str]:
     """Apply Groundwork's additive merge to a settings dict in place; return the change list."""
     changed = []
+    if profile:
+        env0 = data.setdefault("env", {})
+        if env0.get(PROFILE_ENV) != profile:
+            env0[PROFILE_ENV] = profile
+            changed.append(f"env.{PROFILE_ENV}={profile}")
 
     hooks = data.setdefault("hooks", {})
 
@@ -153,7 +165,7 @@ def main() -> None:
         if text:
             data = json.loads(text)
 
-    changed = merge(data, agent_teams=agent_teams)
+    changed = merge(data, agent_teams=agent_teams, profile=PROFILE_OPT["value"])
     write_atomic(path, json.dumps(data, indent=2) + "\n")
 
     if changed:
