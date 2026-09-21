@@ -4,7 +4,13 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
-## 1.2.3 (2026-09-21) — visual status language
+## 1.2.4 (2026-09-21) — checklist style (reverts the 1.2.3 symbols)
+
+Presentation only. `rules/output-contract.md` "Visual status language" section replaced by "Checklist style"; layer headings restored. Deterministic: nine pre-existing critical files unchanged (9/9); `test_playbooks.py` pins the checklist rules and asserts none of the eight legacy symbols remain in the contract or any playbook; `test_hooks.py` 92 passed. Live install byte-identical. No live output sampling repeated for this revert; the 1.2.3 sample below already showed the mechanism (marker usage follows evidence state) — only the vocabulary changed.
+
+---
+
+## 1.2.3 (2026-09-21) — visual status language (superseded by 1.2.4)
 
 Scope: `rules/output-contract.md` "Visual status language" section (presentation only; 1.2.2 user-language rule included in the same file).
 
