@@ -6,7 +6,7 @@
 #      single supported install path (do NOT also run ECC's own manual installer;
 #      see ECC's README "Pick one path only").
 #   2. OpenSpec CLI (github.com/Fission-AI/OpenSpec) globally via npm.
-#   3. Groundwork's own rules and hooks into ~/.claude/, and merges the required
+#   3. Groundwork's own rules, hooks and task playbooks into ~/.claude/, and merges the required
 #      settings.json entries (never overwrites your existing settings — see
 #      scripts/merge_settings.py for exactly what it touches). A pre-Groundwork
 #      copy of the rules under ~/.claude/rules/harness/ is moved to a backup so
@@ -73,9 +73,12 @@ openspec config set telemetry.enabled false >/dev/null 2>&1 || true
 echo ""
 echo "-- Installing Groundwork rules and hooks --"
 python3 "$HERE/scripts/migrate_legacy_rules.py" "$CLAUDE_DIR"
-mkdir -p "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/hooks"
+mkdir -p "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/groundwork/playbooks"
 cp "$HERE"/rules/*.md "$CLAUDE_DIR/rules/groundwork/"
 cp "$HERE"/hooks/*.py "$CLAUDE_DIR/hooks/"
+# Task playbooks are read on demand by rules/task-routing.md; they live outside rules/ so
+# Claude Code never auto-loads them (see docs/ARCHITECTURE.md "Task routing").
+cp "$HERE"/playbooks/*.md "$CLAUDE_DIR/groundwork/playbooks/"
 chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/require_material_review.py \
          "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py

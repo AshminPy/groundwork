@@ -4,6 +4,37 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.2.0 (2026-09-21) — task routing and playbooks
+
+Scope: `openspec/changes/task-routing-playbooks/`. Additive only.
+
+### Deterministic evidence
+
+**Non-regression — every pre-existing critical file byte-identical.** SHA-256 of `rules/engineering-workflow.md`, `rules/evidence-policy.md`, `rules/architecture-quality.md`, the three hooks and the three settings scripts was recorded before the change and re-checked after:
+```
+shasum -a 256 -c baseline.sha   → 9/9 OK
+python3 tests/test_hooks.py     → 92 passed, 0 failed   (unchanged)
+```
+**New artefact and install tests.**
+```
+python3 tests/test_playbooks.py → 76 passed, 0 failed
+python3 -m pytest tests -q      → 7 passed
+```
+What they prove: the router is ≤ 60 lines, names the on-demand playbook path, contains the "existing rule wins" clause, the material-ambiguity rule and the output contract, and lists all ten categories; each playbook exists, has the six sections, is ≤ 4,000 bytes, and does not restate the category table; IMPLEMENT embeds the completion block; `install.sh` run twice into a temp `CLAUDE_CONFIG_DIR` (stubbed `claude`/`openspec`) installs the router under `rules/groundwork/` and all ten playbooks under `groundwork/playbooks/`, byte-identical to the repo, with nothing under `rules/`; `uninstall.sh` removes both.
+What they do not prove: that Claude routes correctly — that is model behaviour, below.
+
+**Live install on this machine.** `./install.sh` → settings untouched ("already has all Groundwork entries"); `~/.claude/rules/groundwork/task-routing.md` and `~/.claude/groundwork/playbooks/*.md` (10) present.
+
+### Model-behaviour observations (fresh headless sessions, `scripts/check_routing.py`, 2026-09-21)
+
+Twelve scenarios, each a fresh `claude -p` session with the installed rules, asked only for `CATEGORY` and `ASK_FIRST`. **Category: 12/12 correct on the first run.** Ask-first: 10/12 on the first run; the two misses were "Create a migration plan for these AWS accounts" and "Write a runbook for this process", where the model chose to ask — defensible, because the bare checker prompt carries no repository context and "these accounts" / "this process" point at nothing. The scenarios were given the context a real session would have (accounts listed in `accounts.yaml`; the process described in `RELEASE.md`) and re-run: both then routed PLAN / DOCUMENT with no question. "Delete the environment" with three environments correctly asks first; "Explain Terraform state" correctly does not. Cost: ~$0.20 per scenario on Sonnet with ECC's context loaded (`--model haiku` and `--only` exist for cheaper passes). This is evidence of what Claude chose on this machine on this day, not a guarantee.
+
+### Independent review
+
+`ecc:code-reviewer`, fresh context, ran the suites itself (76 / 7 / 92 passed) and independently re-hashed the three protected rules around a `git stash` to confirm non-regression. Verdict: **APPROVE — no MUST FIX**. Two NICE TO HAVE notes, both applied: the README's "CURRENT (1.1.0)" wording now reads "CURRENT (implemented, with the version it landed in)", and the router's ambiguity rule now cross-references `engineering-workflow.md` §4 instead of appearing to restate it.
+
+---
+
 ## 1.1.0 (2026-09-20) — intelligent engineering harness
 
 Scope: `openspec/changes/intelligent-engineering-harness/` (proposal, 5 delta specs, design with 8 DECISION records, tasks). Verified against Claude Code 2.1.258 and the official docs fetched on 2026-09-20 (docs/en/agent-teams, hooks, sub-agents, memory, tools-reference, sessions).

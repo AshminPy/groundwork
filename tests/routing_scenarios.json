@@ -1,0 +1,62 @@
+[
+  {
+    "prompt": "Explain Kubernetes readiness probes",
+    "expected": "EXPLAIN",
+    "expect_question": false
+  },
+  {
+    "prompt": "Research current Kubernetes readiness probe best practices",
+    "expected": "RESEARCH",
+    "expect_question": false
+  },
+  {
+    "prompt": "Design readiness probes for our API",
+    "expected": "DESIGN",
+    "expect_question": false
+  },
+  {
+    "prompt": "Pods started restarting after adding probes",
+    "expected": "TROUBLESHOOT",
+    "expect_question": false
+  },
+  {
+    "prompt": "Add readiness probes to this Helm chart",
+    "expected": "IMPLEMENT",
+    "expect_question": false
+  },
+  {
+    "prompt": "Verify our readiness probes are correct",
+    "expected": "VALIDATE",
+    "expect_question": false
+  },
+  {
+    "prompt": "Review this IAM policy for security issues",
+    "expected": "AUDIT",
+    "expect_question": false
+  },
+  {
+    "prompt": "Deploy this application to our dev GKE cluster",
+    "expected": "DEPLOY",
+    "expect_question": false
+  },
+  {
+    "prompt": "Create a migration plan for these AWS accounts. (Context: the accounts, their owners and the target organization are listed in accounts.yaml in this repo.)",
+    "expected": "PLAN",
+    "expect_question": false
+  },
+  {
+    "prompt": "Write a runbook for this process. (Context: the process is the release procedure already described step by step in RELEASE.md in this repo.)",
+    "expected": "DOCUMENT",
+    "expect_question": false
+  },
+  {
+    "prompt": "Delete the environment. (Context: this repo defines three environments: dev, staging and prod.)",
+    "expected": "DEPLOY",
+    "expect_question": true
+  },
+  {
+    "prompt": "Explain Terraform state",
+    "expected": "EXPLAIN",
+    "expect_question": false
+  }
+]

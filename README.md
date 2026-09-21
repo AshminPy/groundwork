@@ -87,6 +87,12 @@ Full text: [rules/engineering-workflow.md](rules/engineering-workflow.md).
 
 Simplest model that produces the result. Main session for sequential work that shares context. A subagent for a focused, isolated investigation or review whose result comes back. An Agent Team (Claude Code's native, experimental feature — enabled only by `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, interactive sessions only) when two or more genuinely independent workstreams benefit from parallelism or independent reasoning: architecture + implementation + validation, infrastructure + application, competing incident hypotheses, implementation plus independent security validation. Teams are sized to the work (2–4), each teammate owns its files, specialists are derived from the task, and the lead synthesizes. When teams are off or the session is `-p`, the same decomposition runs on subagents. Groundwork adds no orchestration code of its own.
 
+## Task routing and playbooks
+
+Every substantive request is routed to exactly one of ten task categories — RESEARCH, EXPLAIN, DESIGN, PLAN, IMPLEMENT, TROUBLESHOOT, VALIDATE, AUDIT, DEPLOY, DOCUMENT — by a small always-loaded rule, [rules/task-routing.md](rules/task-routing.md). Only that category's playbook is then read from `~/.claude/groundwork/playbooks/` (installed by `install.sh`, never auto-loaded). Each playbook has the same six sections — Goal, Workflow, Evidence, Ask Before Acting When, Completion Criteria, Output Format — and a concise category-specific answer shape. The router also carries two universal rules: ask a clarifying question only when the missing information could materially change correctness, safety, architecture, permissions, the target environment, a destructive action or the outcome; and report only what is material (result, finding, evidence, change, validation, risk, blocker, next action) with no narration of every command and file.
+
+This layer is additive. It never overrides the engineering workflow, the evidence policy, the architecture rule, or any hook; where a playbook and an existing rule disagree, the existing rule wins. `tests/test_playbooks.py` checks the artefacts and the install layout; `scripts/check_routing.py` runs the twelve reference scenarios through real headless sessions when the CLI is logged in.
+
 ## The completion status block
 
 Every STANDARD/MATERIAL task ends with:
@@ -106,7 +112,7 @@ Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validate
 
 Groundwork stays the engineering-quality and governance layer, and it stays small. The agreed direction for the wider harness — a tiny always-loaded universal core (evidence, uncertainty, safe autonomy, untrusted-content discipline, truthful status), domain capabilities that load only when relevant (engineering via Groundwork/ECC/OpenSpec; cloud, research, documentation, presentations and others as scoped skills or rules), an automatically chosen execution model, fresh-session continuation from repository evidence rather than growing conversations, optional least-privilege MCP tooling, deterministic safety boundaries beyond Git, and a reproducible version-controlled setup — is written down in [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).
 
-Everything there is labelled **CURRENT (1.1.0)** or **FUTURE**. Nothing marked FUTURE exists yet, and nothing is added until a real task exposes a gap that native Claude Code, Groundwork, ECC or OpenSpec cannot already cover. The SRE Agent pilot is the first such test.
+Everything there is labelled **CURRENT** (implemented, with the version it landed in) or **FUTURE**. Nothing marked FUTURE exists yet, and nothing is added until a real task exposes a gap that native Claude Code, Groundwork, ECC or OpenSpec cannot already cover. The SRE Agent pilot is the first such test.
 
 ## Does it actually work?
 

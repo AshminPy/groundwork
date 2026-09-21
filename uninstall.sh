@@ -2,7 +2,7 @@
 # Groundwork uninstaller.
 #
 # Removes only what Groundwork added:
-#   - ~/.claude/rules/groundwork/ (the rule files)
+#   - ~/.claude/rules/groundwork/ (the rule files) and ~/.claude/groundwork/ (task playbooks)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py
 #   - the three hook entries, the deny rules, and the env defaults this repo's
@@ -25,7 +25,7 @@ for arg in "$@"; do
 done
 
 echo "== Groundwork uninstaller =="
-rm -rf "$CLAUDE_DIR/rules/groundwork"
+rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork"
 rm -f "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py"
