@@ -19,6 +19,17 @@ Groundwork closes exactly those gaps, and nothing else:
 5. **Independent review is enforced, not requested.** `hooks/require_material_review.py` is a Stop hook that will not let a session end if a spec-driven change is fully implemented and nothing that looks like a reviewer — an ECC reviewer, a subagent, or an Agent Team reviewer teammate — ever ran against it. See [docs/VALIDATION.md](docs/VALIDATION.md).
 6. **Continuation comes from the repository.** `hooks/groundwork_session_snapshot.py` injects a deterministic snapshot at every session start — branch, dirty files, OpenSpec task progress, the verification commands the repo declares — and the workflow rule tells Claude how to rebuild a DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED picture from git, OpenSpec, docs, tests and code before touching anything.
 
+## Architecture at a glance
+
+![Groundwork overview: you ask → understand & route → one of ten playbooks → execution with tools, MCP servers, subagents and repository context → validation & safety → a structured response; local-only telemetry feeds a health dashboard](docs/images/overview.png)
+
+How to read it against the implementation:
+
+- **Understand & route, Playbooks, Result** are rules the model follows (`rules/task-routing.md`, `playbooks/`, `rules/output-contract.md`) — guidance, not enforcement.
+- **Validation & safety** mixes the two: the protected-branch push guard, the material-change review gate and `permissions.deny` are hooks and settings that run deterministically; "evidence provided", "tests run" and "followed playbook" are rule-driven expectations. "Outcome verified" means the outcome the model declared is recorded and, where possible, corroborated by an observed test or deploy run — the harness does not independently prove task correctness.
+- **Telemetry & reporting** is deterministic: the Stop hook records observed facts (tools, files, tests, agent calls, version, profile) and declared metadata (playbook, outcome, validation, evidence), and the report generator turns them into the local dashboard. The "continuous improvement" arrow is you reading the gaps list — nothing feeds back into routing automatically.
+- The dashboard numbers in the picture are illustrative; the real one is generated from your own telemetry (see "Health dashboard" below).
+
 ## Architecture
 
 ```
