@@ -70,11 +70,28 @@ Requirements: Claude Code ≥ 2.1, Node ≥ 18, npm, Python 3.10+, git.
 ```bash
 git clone https://github.com/AshminPy/groundwork.git
 cd groundwork
-./install.sh                 # ECC + OpenSpec + Groundwork rules/hooks, merged into ~/.claude
-./install.sh --agent-teams   # optional: also opt in to Claude Code's experimental Agent Teams
+./setup.sh
 ```
 
-This installs ECC (official plugin path), the OpenSpec CLI (official npm package), and Groundwork's three rule files and three hooks into `~/.claude/`, merging into your existing `settings.json` without touching anything else you've configured (see [scripts/merge_settings.py](scripts/merge_settings.py) for exactly what it changes). A pre-Groundwork copy of the rules under `~/.claude/rules/harness/` is moved to a backup so nothing loads twice.
+`setup.sh` is a thin wrapper around the tested installer. It checks the prerequisites, **backs up your complete `~/.claude` directory** to `~/.claude-backups/groundwork-YYYYMMDD-HHMMSS/` (owner-only; previous backups are never overwritten; a missing `~/.claude` is fine), asks three questions, runs `install.sh`, applies the reporting schedule, verifies the installation, generates the first dashboard and prints a summary. Backups stay local and are never transmitted; they can contain settings, MCP configuration, rules and hooks, so treat them as sensitive.
+
+The three questions:
+
+- **Profile** — Work / Personal / Other. Sets `GROUNDWORK_PROFILE` in your `settings.json` `env` (machine-specific; recorded by telemetry, shown on the dashboard). Nothing in the repo hard-codes it.
+- **Agent Teams** — No (recommended) / Yes. Yes runs `./install.sh --agent-teams`.
+- **Dashboard schedule** — Weekly (recommended) / Daily / Monthly / Yearly / Disabled, applied through the existing report scheduler.
+
+Other modes:
+
+```bash
+./setup.sh --verify       # read-only: version, rules, playbooks, hooks, ECC, OpenSpec, telemetry, dashboard, schedule → PASS / FAIL / NOT CONFIGURED
+./setup.sh --rollback     # restore the latest setup.sh backup; the current ~/.claude is moved to ~/.claude-groundwork-disabled-<timestamp>/ first, never deleted
+./setup.sh --rollback ~/.claude-backups/groundwork-20260921-144500   # a specific backup (required when timestamps are ambiguous)
+./setup.sh --uninstall    # delegates to uninstall.sh: removes Groundwork, keeps telemetry and reports
+./setup.sh --non-interactive --profile work --no-agent-teams --schedule weekly   # scripted setup
+```
+
+If setup fails after the backup was taken, it prints the failure, the backup path and the rollback command; your previous configuration is never deleted.
 
 Per project, once, if you want spec-driven work there:
 ```bash
@@ -83,6 +100,19 @@ openspec init --tools claude
 ```
 
 That's it. Start a normal Claude Code session and give it an engineering task — or open an existing project and say **"Continue this project."**
+
+### Manual / advanced installation
+
+`install.sh` remains the source of truth and can be run directly (no backup, no questions):
+
+```bash
+./install.sh                 # ECC + OpenSpec + Groundwork rules/hooks/playbooks/telemetry/dashboard, merged into ~/.claude
+./install.sh --agent-teams   # optional: also opt in to Claude Code's experimental Agent Teams
+python3 scripts/merge_settings.py --profile work ~/.claude/settings.json   # set the profile without setup.sh
+./uninstall.sh               # remove Groundwork (keeps telemetry and reports)
+```
+
+It installs ECC (official plugin path), the OpenSpec CLI (official npm package), Groundwork's five rule files, four hooks, ten playbooks and the report generator into `~/.claude/`, merging into your existing `settings.json` without overwriting anything. Safe to re-run.
 
 ## What each tier actually requires
 

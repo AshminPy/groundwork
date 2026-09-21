@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0 — 2026-09-21
+
+One-click onboarding. `install.sh`, `uninstall.sh`, hooks, rules, playbooks, telemetry and reporting unchanged.
+
+- **`setup.sh`** (new, thin wrapper): prerequisites (claude, node, npm, git, python3 ≥ 3.10) → complete backup of the Claude config dir to `~/.claude-backups/groundwork-YYYYMMDD-HHMMSS/` (owner-only, never overwritten, `BACKUP-INFO.txt` marker) → profile / Agent Teams / dashboard-schedule questions (or `--non-interactive --profile … --agent-teams|--no-agent-teams --schedule …`) → `install.sh` → `merge_settings.py --profile` → `groundwork_report.py schedule` → first dashboard → read-only verification (+ `tests/test_hooks.py` and `tests/test_telemetry.py` unless `GROUNDWORK_SETUP_SKIP_TESTS=1`) → summary. Modes: `--verify` (read-only PASS / FAIL / NOT CONFIGURED), `--rollback [DIR]` (moves the current config dir to `<dir>-groundwork-disabled-<ts>` first, restores only an unambiguous latest setup.sh backup from the same source dir, removes the launchd job, verifies readability), `--uninstall` (delegates). Failure after the backup prints the backup path and the rollback command.
+- `scripts/merge_settings.py --profile NAME` sets `env.GROUNDWORK_PROFILE` additively; `unmerge_settings.py` removes it.
+- README Quick start is now `git clone … && ./setup.sh`; `install.sh` documented under manual/advanced.
+- Tests: `tests/test_setup.py` (45 checks).
+
 ## 1.4.1 — 2026-09-21
 
 - `schedule` on a non-macOS host records the config and says to run `generate --snapshot` manually or from cron instead of pretending a launchd job exists; installer message matches.

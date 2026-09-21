@@ -4,6 +4,24 @@ This is the actual evidence Groundwork's hooks and rules were built and fixed ag
 
 ---
 
+## 1.5.0 (2026-09-21) — one-click onboarding (setup.sh)
+
+Scope: `setup.sh` (new wrapper), `tests/test_setup.py`, `merge_settings.py --profile`, README Quick start. `install.sh`, `uninstall.sh`, hooks, rules, playbooks: `git diff main` empty.
+
+### Deterministic evidence
+- `python3 tests/test_setup.py` → 45 passed, in isolated temp config dirs with stubbed `claude`/`openspec`/`npm` and launchctl disabled: fresh machine (backup marker `existed=no`, install, work profile in settings env, teams off, weekly schedule + one plist, first dashboard, summary lines, backup 0700); `--verify` PASS then FAIL/NOT CONFIGURED after removing VERSION and playbooks (exit 1, nothing changed); existing config backed up in full (user files + telemetry) with user settings preserved; interactive answers (personal / no teams / daily; "Other" → `lab-box` / teams yes / monthly); repeated setup (second backup, first intact, four hook entries once); Agent Teams on/off; yearly and disabled schedules; invalid profile/schedule rejected; installer failure (exit 7 propagated, "Setup FAILED", backup path and rollback command printed, original config untouched); missing prerequisite (stops before any backup); rollback (current dir moved to `…-groundwork-disabled-<ts>` with its telemetry and reports, pre-Groundwork config restored exactly, backup untouched, plist removed; fresh-machine rollback leaves the dir absent); multiple backups (newest wins; same-timestamp ambiguity refused; explicit dir accepted; no backups, missing marker and foreign source refused); uninstall delegation (Groundwork removed, telemetry/reports/user files kept, profile env and hooks unmerged); paths with spaces (setup and rollback).
+- `test_playbooks.py` 132 (install.sh itself), `test_hooks.py` 93, `test_telemetry.py` 81, `test_report.py` 67, `pytest tests -q` 11 — all passed.
+- Fixes found by the tests before merge: `count_files` aborted the read-only verify under `set -e` when a directory was missing; the telemetry row printed a shell error when no events file existed yet; verification ran before the first dashboard (reported NOT CONFIGURED); a symlinked framework `python3` in the test's clean PATH hung (fixture now execs through a wrapper).
+
+### Live (this machine)
+- `./setup.sh --non-interactive --profile work --schedule weekly` on the real `~/.claude` (1.1 GB): backup `~/.claude-backups/groundwork-20260921-150714` created by clonefile in seconds, idempotent reinstall ("nothing to do" for settings), deterministic tests passed, all nine verify rows PASS, dashboard regenerated (26 records), summary printed; 35 s total.
+- `./setup.sh --verify` → all PASS, exit 0, no changes.
+- First-time interactive flow and `--rollback` exercised in a sandbox config dir (see the session record): restored `settings.json` byte-identical, Groundwork setup moved to `…-groundwork-disabled-<ts>/`.
+- Independent review (fresh-context code reviewer): three MUST FIX, all fixed and pinned by new tests (49 total): `--profile`/`--schedule` without a value died silently on the extra `shift` under `set -e` (now a clear error); the rollback's "your current setup is intact at …" message was unreachable when a backup had no `claude/` copy (now checked explicitly before and after the copy); the prerequisite test could hang on a pyenv-shimmed `python3` (fixture execs the real interpreter). Also added: two mode flags together are refused.
+- Incident during review, recorded honestly: the reviewer ran `--rollback` twice against the real `~/.claude` without sandbox variables. Nothing was deleted (rollback moves aside by design). Recovery, with the user's approval: fresh backup of the live dir; the true pre-incident copy restored as the base; append-only files (two session transcripts, telemetry, cost/command logs, `.claude.json` auto-backups, three subagent transcripts by line-union) merged from the live copy with common-ancestor prefix checks; a catch-up pass appended what was written during the merge; weekly schedule re-applied. Verified: settings, VERSION, rules, hooks and playbooks identical to the pre-incident copy; every pre-incident and every incident-period transcript line present; telemetry 29 records (the 2 restored plus 1 newer, no duplicates); launchd job active; `./setup.sh --verify` all PASS. Every copy kept (`~/.claude-backups/*`, three `~/.claude-groundwork-disabled-*`, one `-conflicts` dir); cleanup deliberately left for a separate step.
+
+---
+
 ## 1.4.0 (2026-09-21) — local health dashboard
 
 Scope: `scripts/groundwork_report.py` (new), `tests/test_report.py` (new), install/uninstall wiring. Rules, hooks and playbooks untouched (`git diff -- rules hooks playbooks` empty on the branch).
