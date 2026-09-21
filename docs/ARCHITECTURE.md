@@ -36,6 +36,10 @@ Groundwork does not replace any upstream project's job. It exists because, teste
 
 Every line in these files is paid in every session (Claude Code loads `~/.claude/rules/**/*.md` at launch), so they are written as short imperative lines, and anything a hook can enforce is a hook instead.
 
+## Task routing (additive layer, 1.2.0)
+
+`rules/task-routing.md` is a fourth always-loaded rule (~45 lines). It classifies each substantive request into one of ten categories, applies the material-ambiguity test, and tells Claude to read exactly one playbook from `~/.claude/groundwork/playbooks/` — a directory deliberately outside `~/.claude/rules/`, so Claude Code never auto-loads playbooks and each task pays for one ~40–60-line file only. The engineering categories still run inside the request lifecycle below (tiers, OpenSpec, review gate, completion block); the router only decides which workflow shape and answer shape apply. On any conflict the pre-existing rule wins. Routing is advisory (rule text); it is validated structurally by `tests/test_playbooks.py` and behaviourally by `scripts/check_routing.py`.
+
 ## Request lifecycle
 
 ```

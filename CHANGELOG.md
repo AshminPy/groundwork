@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-09-21
+
+Additive task-routing layer. No existing rule, hook, settings key or safety control changed
+(verified by SHA-256 comparison of every pre-existing critical file before and after).
+
+- **New rule `rules/task-routing.md`** — one primary category per request (RESEARCH, EXPLAIN,
+  DESIGN, PLAN, IMPLEMENT, TROUBLESHOOT, VALIDATE, AUDIT, DEPLOY, DOCUMENT), read only that
+  playbook, the material-ambiguity clarification rule, and the universal output contract
+  (report only material information; conciseness never hides risk, uncertainty or evidence).
+  States that an existing Groundwork rule wins over a playbook on conflict.
+- **New `playbooks/`** — ten concise playbooks, each with Goal / Workflow / Evidence / Ask
+  Before Acting When / Completion Criteria / Output Format. Installed to
+  `~/.claude/groundwork/playbooks/`, outside `rules/`, so they load on demand only.
+  IMPLEMENT and DEPLOY outputs embed the existing completion block.
+- **Installer** — `install.sh` copies the playbooks; `uninstall.sh` removes them.
+- **Tests** — `tests/test_playbooks.py` (artefacts, sections, size caps, install/uninstall on a
+  temp `CLAUDE_CONFIG_DIR`); `scripts/check_routing.py` + `tests/routing_scenarios.json` for a
+  live twelve-scenario routing and ambiguity check (skips when the CLI is logged out).
+
 ## 1.1.0 — 2026-09-20
 
 Evolves the 1.0.0 governance layer into an engineering harness that guides architecture
