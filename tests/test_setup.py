@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,42 @@ SETUP = REPO_ROOT / "setup.sh"
 
 _FAILURES: list[str] = []
 PASS = FAIL = 0
+
+# Some CI/sandbox base images ship a real, older Node at /usr/bin or /bin (unrelated to any
+# version manager). A prereq_box() PATH that included those directories wholesale let that
+# real Node leak into "should be absent" test boxes, making setup.sh correctly (per its own
+# documented behavior: an existing-but-old Node is never auto-upgraded, only a genuinely
+# absent one is auto-installed) treat "absent" boxes as "present but too old" instead —
+# masked before Groundwork 2.0's Node-floor fix because 18.x used to satisfy the old,
+# incorrect NODE_MIN=18 check by coincidence. Fix: a filtered coreutils dir, built once,
+# that symlinks every real /usr/bin and /bin executable except node/npm/npx/corepack/nodejs,
+# so genuinely-absent-Node boxes stay genuinely absent while every other real system tool
+# (git, sed, mkdir, chmod, ...) remains available. Test-only; no production code involved.
+_FILTERED_SYSBIN: Path | None = None
+# Node/npm (see above) plus every package manager setup.sh detects — this sandbox's own base
+# image is Debian-based and ships a real apt-get, which the same leak class made detect_pm()
+# find ahead of a test box's intended (or intentionally absent) package-manager stub.
+_EXCLUDED_FROM_SYSBIN = {"node", "npm", "npx", "corepack", "nodejs", "apt-get", "apt", "dnf", "apk", "brew"}
+
+
+def filtered_sysbin() -> Path:
+    global _FILTERED_SYSBIN
+    if _FILTERED_SYSBIN is not None:
+        return _FILTERED_SYSBIN
+    d = Path(tempfile.mkdtemp(prefix="groundwork-test-sysbin-"))
+    for real_dir in ("/usr/bin", "/bin", "/usr/local/bin"):
+        p = Path(real_dir)
+        if not p.is_dir():
+            continue
+        for entry in p.iterdir():
+            if entry.name in _EXCLUDED_FROM_SYSBIN or (d / entry.name).exists():
+                continue
+            try:
+                (d / entry.name).symlink_to(entry)
+            except OSError:
+                pass
+    _FILTERED_SYSBIN = d
+    return d
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -54,7 +91,11 @@ class Box:
             os.chmod(bin_dir / f, 0o755)
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(self.cfg),
                         GROUNDWORK_BACKUP_DIR=str(self.backups), GROUNDWORK_LAUNCH_AGENTS_DIR=str(self.agents),
-                        GROUNDWORK_NO_LAUNCHCTL="1", NODE_USE_SYSTEM_CA="0", GROUNDWORK_SETUP_SKIP_TESTS="1")
+                        GROUNDWORK_NO_LAUNCHCTL="1", NODE_USE_SYSTEM_CA="0", GROUNDWORK_SETUP_SKIP_TESTS="1",
+                        # Forces the launchd scheduling path deterministically regardless of the CI
+                        # host's real platform (production-code override, mirrors prereq_box's use
+                        # of GROUNDWORK_OS for the same reason); real users never set this.
+                        GROUNDWORK_OS="darwin")
         self.env.pop("GROUNDWORK_INSTALLER", None)
 
     def run(self, *args, stdin: str = "", extra=None) -> subprocess.CompletedProcess:
@@ -187,6 +228,12 @@ def test_setup() -> None:
         seed_existing(i.cfg)
         i.run("--non-interactive", "--profile", "work")
         (i.cfg / "marker-after-first.txt").write_text("1")
+        # Backup dirs are named to the second (groundwork-YYYYMMDD-HHMMSS); on a fast host the
+        # two installs above can land in the same second, and setup.sh's own rollback picker
+        # then correctly refuses as "ambiguous" between the bare and -1-suffixed name (a real,
+        # narrow, pre-existing edge case in latest_backup() this test doesn't intend to exercise
+        # here — its own dedicated case for that is below). Force distinct seconds deterministically.
+        time.sleep(1.1)
         i.run("--non-interactive", "--profile", "work")
         bk = i.backup_dirs()
         check("multiple backups: two distinct dirs", len(bk) == 2 and bk[0] != bk[1])
@@ -258,7 +305,7 @@ def test_setup() -> None:
                     mk("node", '#!/usr/bin/env bash\ncase "$1" in --version) echo v16.20.0;; -p) echo 16;; esac\n')
                 elif st == "claude":
                     mk("claude", "#!/usr/bin/env bash\n" + claude_stub)
-            b.env["PATH"] = f"{clean}:{tools}:/usr/bin:/bin"
+            b.env["PATH"] = f"{clean}:{tools}:{filtered_sysbin()}"
             b.env["HOME"] = str(root / "home"); (root / "home").mkdir()
             b.env["GROUNDWORK_OS"] = os_kind
             return b, root
@@ -294,7 +341,7 @@ def test_setup() -> None:
         check("interactive 'y': installs, then continues with the three questions", r.returncode == 0 and (root / "pm.log").is_file() and "installed successfully" in r.stdout, r.stdout[-600:] + r.stderr[-300:])
         pb, root = prereq_box("p7", "darwin", ["brew", "oldnode", "claude"])
         r = pb.run("--non-interactive", "--install-prereqs")
-        check("Node too old: left to the user's version manager, clear message, nothing installed", r.returncode == 1 and "older than 18" in r.stderr and not (root / "pm.log").exists(), r.stderr)
+        check("Node too old: left to the user's version manager, clear message, nothing installed", r.returncode == 1 and "older than 20.19.0" in r.stderr and not (root / "pm.log").exists(), r.stderr)
 
         # ---- uninstall delegation: playbooks/rules/hooks/bin gone, telemetry and reports kept, profile env removed
         k = Box(tmp / "k")
@@ -316,10 +363,56 @@ def test_setup() -> None:
     finish()
 
 
+def test_verify_reports_ecc_version() -> None:
+    print("setup.sh --verify ECC version reporting (Groundwork 2.0 Phase 1, independent-review finding M5)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        a = Box(tmp / "a")
+        r = a.run("--non-interactive", "--profile", "work")
+        check("setup for ECC-version test exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-400:])
+
+        # Realistic multi-line `claude plugin list` output (unlike Box's default one-line stub) —
+        # matches the real Claude Code CLI's actual format, confirmed by direct reproduction against
+        # a live install (design.md §A.6). Same version as LAST_VERIFIED_ECC: no drift note expected.
+        (a.root / "bin" / "claude").write_text(
+            '#!/usr/bin/env bash\n'
+            'case "$1" in\n'
+            '  --version) echo "2.1.258 (Claude Code)";;\n'
+            '  plugin) printf "Installed plugins:\\n\\n  > ecc@ecc\\n    Version: 2.2.2\\n    Scope: user\\n    Status: enabled\\n";;\n'
+            '  *) exit 0;;\n'
+            'esac\n'
+        )
+        os.chmod(a.root / "bin" / "claude", 0o755)
+        r = a.run("--verify")
+        check("verify: exit 0 with a realistic multi-line claude plugin list stub", r.returncode == 0, r.stdout + r.stderr)
+        check("verify: parses the real installed ECC version from 'claude plugin list'",
+              "ECC" in r.stdout and "2.2.2" in r.stdout and "version not parsed" not in r.stdout, r.stdout)
+
+        # Same shape, but an older version than LAST_VERIFIED_ECC — must PASS (ECC has no version
+        # pin; drift is expected, not an error) and name the drift, not fail the row.
+        (a.root / "bin" / "claude").write_text(
+            '#!/usr/bin/env bash\n'
+            'case "$1" in\n'
+            '  --version) echo "2.1.258 (Claude Code)";;\n'
+            '  plugin) printf "Installed plugins:\\n\\n  > ecc@ecc\\n    Version: 2.1.9\\n    Scope: user\\n    Status: enabled\\n";;\n'
+            '  *) exit 0;;\n'
+            'esac\n'
+        )
+        os.chmod(a.root / "bin" / "claude", 0o755)
+        r = a.run("--verify")
+        check("verify: version drift from LAST_VERIFIED_ECC is a PASS with a note, not a FAIL",
+              r.returncode == 0 and "ECC                 PASS" in r.stdout and "2.1.9" in r.stdout, r.stdout)
+    finish()
+
+
 if __name__ == "__main__":
-    try:
-        test_setup()
-    except AssertionError:
-        pass
+    for t in (test_setup, test_verify_reports_ecc_version):
+        try:
+            t()
+        except AssertionError:
+            pass
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

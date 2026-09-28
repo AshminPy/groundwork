@@ -539,6 +539,9 @@ def calendar(freq: str, hour: int) -> dict:
 
 
 def is_macos() -> bool:
+    override = os.environ.get("GROUNDWORK_OS")  # test/CI override, mirrors setup.sh's own OS_KIND pattern
+    if override:
+        return override.strip().lower() == "darwin"
     return sys.platform == "darwin"
 
 

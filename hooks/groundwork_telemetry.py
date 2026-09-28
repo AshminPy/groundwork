@@ -38,6 +38,14 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from groundwork_shared import TEST_CMD  # shared with require_material_review.py (Groundwork 2.0)
+except Exception:
+    # Fail-open: an incomplete/partial install must never crash this hook. A pattern that
+    # matches nothing just means test-shaped commands stop being detected — degraded, not broken.
+    TEST_CMD = re.compile(r"(?!x)x")
+
 META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
 # Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
 META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
@@ -66,7 +74,6 @@ BLOCKED_RE = re.compile(r"\bblocked\b|\bcannot proceed\b|\bcan't proceed\b|\bwai
 NOT_DONE_RE = re.compile(r"\b(?:not|isn't|is not|wasn't|was not|never|cannot be|can't be)\s+(?:yet\s+|fully\s+)?(?:completed?|done|fixed|verified|tested|deployed|merged|finished|resolved|validated|working|live|ready|attempted|run|executed)\b|\bincomplete\b|\bunverified\b", re.IGNORECASE)
 PARTIAL_RE = re.compile(r"\bpartial(?:ly)?\b|\broot cause found\b|\bnot yet\b|\bin progress\b|\bstill (?:open|pending|missing)\b", re.IGNORECASE)
 COMPLETE_RE = re.compile(r"\b(?:completed?|done|fixed|resolved|implemented|deployed|merged|verified|validated|tested|ready|pass|passed|passes|succeeded|successful|live)\b", re.IGNORECASE)
-TEST_CMD = re.compile(r"\b(pytest|npm test|npm run test|yarn test|go test|cargo test|make test|tox|nox|unittest|terraform validate|terraform plan|kubectl .* --dry-run)\b|python3?\s+\S*(?:tests?/|test_)\S*\.py\b")
 DEPLOY_CMD = re.compile(r"\b(terraform apply|tofu apply|kubectl apply|kubectl rollout|helm (install|upgrade)|gcloud run deploy|gcloud .* deploy|aws deploy|flux reconcile|argocd app sync|docker compose up|docker push)\b")
 EXEC_MODES = {"single agent": "single_agent", "single_agent": "single_agent", "subagents": "subagents",
               "subagent": "subagents", "agent team": "agent_team", "agent_team": "agent_team", "team": "agent_team"}

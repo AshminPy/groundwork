@@ -6,8 +6,8 @@
 #     (telemetry records under ~/.claude/groundwork/telemetry/ and dashboards under reports/ are kept — they are your data;
 #      the launchd report job com.groundwork.report is removed)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
-#     groundwork_session_snapshot.py
-#   - the three hook entries, the deny rules, and the env defaults this repo's
+#     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
+#   - the four hook entries, the deny rules, and the env defaults this repo's
 #     install.sh added to settings.json (via scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
 #
@@ -36,7 +36,8 @@ rm -f "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
-      "$CLAUDE_DIR/hooks/groundwork_telemetry.py"
+      "$CLAUDE_DIR/hooks/groundwork_telemetry.py" \
+      "$CLAUDE_DIR/hooks/groundwork_shared.py"
 if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ]; then
   for kept in telemetry reports; do
     [ -d "$CLAUDE_DIR/groundwork/$kept" ] && echo "Kept $CLAUDE_DIR/groundwork/$kept/ (your data) — delete it yourself if you do not want it."

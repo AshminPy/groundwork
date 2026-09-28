@@ -30,6 +30,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from groundwork_shared import dirty_change_names  # shared with require_material_review.py
+except Exception:
+    # Fail-open: an incomplete/partial install must never crash this hook.
+    def dirty_change_names(cwd: str) -> set[str]:
+        return set()
+
 MAX_CHARS = 2500
 GIT_TIMEOUT = 3
 MAX_RECENT_COMMITS = 5
@@ -78,38 +86,6 @@ def git(cwd: str, *args: str):
     except Exception:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
-
-
-def dirty_change_names(cwd: str) -> set[str]:
-    """Names of openspec/changes/<name> directories that git shows as modified or untracked.
-
-    Parses each porcelain line's path into segments instead of substring-matching the raw
-    output: with `thing` (committed) and `add-thing` (dirty) in the same repo, a substring
-    test wrongly flagged `thing` too (found by independent review of 1.1.0).
-    """
-    try:
-        status = subprocess.run(
-            # --untracked-files=all: a brand-new change directory otherwise collapses to one
-            # "?? openspec/changes/" line instead of listing its files (caught by the 1.0.0 tests).
-            ["git", "-C", cwd, "status", "--porcelain", "--untracked-files=all", "--", "openspec/changes"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except Exception:
-        return set()
-    if status.returncode != 0:
-        return set()
-    names = set()
-    for line in status.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        path = line[3:]
-        if " -> " in path:  # rename: "old -> new"
-            path = path.split(" -> ", 1)[1]
-        path = path.strip().strip('"')
-        parts = path.split("/")
-        if len(parts) > 2 and parts[0] == "openspec" and parts[1] == "changes":
-            names.add(parts[2])
-    return names
 
 
 def git_facts(cwd: str) -> list[str]:
