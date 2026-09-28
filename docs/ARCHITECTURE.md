@@ -138,7 +138,7 @@ Continuation itself is the rule in `engineering-workflow.md` §7: reconstruct fr
 
 ## Capability ownership (2.0)
 
-Every Groundwork capability has exactly one owner. No two components define the same contract — this is checked explicitly during design and again at each phase's independent review, not just asserted. Summary (full detail and rationale: `openspec/changes/groundwork-2-enterprise-sre/design.md` §J, the authoritative source — this table is a pointer, not a second copy, and is not repeated in full to avoid drift):
+Every Groundwork capability has exactly one owner. No two components define the same contract — this is checked explicitly during design and again at each phase's independent review, not just asserted. This is the same discipline `architecture-quality.md` §4 already states generally ("no abstraction, layer, plugin point, framework, or option without a concrete reason tied to a requirement or evidence") applied specifically to capability ownership — no new rule mechanism, just this table making the existing anti-fragmentation principle's outcome explicit and checkable. Summary (full detail and rationale: `openspec/changes/groundwork-2-enterprise-sre/design.md` §J, the authoritative source — this table is a pointer, not a second copy, and is not repeated in full to avoid drift):
 
 | Capability | Owner | Notes |
 |---|---|---|

@@ -56,20 +56,20 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 - [x] 2.7 docs/VALIDATION.md entry
 
 ### Phase 3 — Capability ownership documentation (new this pass, cheap)
-- [ ] 3.1 Fold design.md §J's capability-ownership matrix into `docs/ARCHITECTURE.md`
-- [ ] 3.2 Confirm `architecture-quality.md` §4's existing "no abstraction without a concrete reason" rule is cross-referenced as the anti-fragmentation principle (no new rule mechanism)
-- [ ] 3.3 docs/VALIDATION.md entry (documentation-only change; non-regression check suffices as evidence)
+- [x] 3.1 Fold design.md §J's capability-ownership matrix into `docs/ARCHITECTURE.md`
+- [x] 3.2 Confirm `architecture-quality.md` §4's existing "no abstraction without a concrete reason" rule is cross-referenced as the anti-fragmentation principle (no new rule mechanism)
+- [x] 3.3 docs/VALIDATION.md entry (documentation-only change; non-regression check suffices as evidence)
 
 ## STAGE 2 — TRUST
 
 ### Phase 4 — Review evidence strengthening, redesigned (Decision D3)
-- [ ] 4.1 Add the structured `REVIEW RESULT` block format to `rules/output-contract.md`
-- [ ] 4.2 RUNTIME VALIDATION REQUIRED: sample real ECC/subagent/teammate reviewer output to confirm the block can be reliably prompted/emitted
+- [x] 4.1 Add the structured `REVIEW RESULT` block format to `rules/output-contract.md`
+- [x] 4.2 RUNTIME VALIDATION REQUIRED: sample real ECC/subagent/teammate reviewer output to confirm the block can be reliably prompted/emitted — **RESOLVED**: two live `claude -p` sessions, isolated `CLAUDE_CONFIG_DIR` with only `output-contract.md` + `engineering-workflow.md` installed as rules, prompted only with the reviewer's *role* ("independent fresh-context reviewer for a MATERIAL change") and no mention of the block format. Both sessions — one reviewing a clean diff, one reviewing a diff with a real bug — organically emitted the `REVIEW RESULT` block in the exact defined shape (`Verdict: approve`/`Must-fix: 0` and `Verdict: changes-required`/`Must-fix: 1` respectively), plus the `HARNESS METADATA` block, purely from the loaded rule text. See docs/VALIDATION.md for the transcripts.
 - [x] 4.3 Extend `hooks/require_material_review.py` to parse the block; on `Must-fix: N>0`, evaluate the most recent review-shaped call's own verdict — a post-review edit and a post-review test/validation-shaped Bash call (reusing `groundwork_telemetry.py`'s `TEST_CMD` regex) are shown as diagnostics but are NOT sufficient alone; Stop stays blocked until a subsequent fresh review itself reports `Must-fix: 0` (strengthened beyond this task's original wording per the owner's implementation-authorization message — see `specs/review-evidence-strengthening/spec.md`'s correction notice)
-- [ ] 4.4 Update `rules/engineering-workflow.md` §2.6 to state the strengthened expectation
-- [ ] 4.5 New `test_hooks.py` cases per `specs/review-evidence-strengthening/spec.md` (no-follow-up blocks; edit-only-no-validation-rerun blocks; edit-plus-validation-rerun allows; zero-MUST-FIX/absent-block unchanged) — must not regress the existing 14 review-gate cases
-- [ ] 4.6 Independent fresh-context review (MATERIAL — modifies an enforced safety hook)
-- [ ] 4.7 docs/VALIDATION.md entry with real transcript evidence
+- [x] 4.4 Update `rules/engineering-workflow.md` §2.6 to state the strengthened expectation
+- [x] 4.5 New `test_hooks.py` cases per `specs/review-evidence-strengthening/spec.md` (no-follow-up blocks; edit-only-no-validation-rerun blocks; edit-plus-validation-rerun-no-fresh-review still blocks; fresh-review-confirms allows; zero-MUST-FIX/absent-block unchanged) — no regression in the existing 14 review-gate cases
+- [x] 4.6 Independent fresh-context review (MATERIAL — modifies an enforced safety hook) — three rounds; see docs/VALIDATION.md
+- [x] 4.7 docs/VALIDATION.md entry with real transcript evidence
 
 ### Phase 5 — Investigation continuity (Decision D2)
 - [ ] 5.1 Owner picks Option A or Option B (design.md §M/D2)
