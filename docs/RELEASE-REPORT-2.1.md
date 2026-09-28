@@ -1,21 +1,22 @@
-# Groundwork 2.1.0 — release-candidate report
+# Groundwork 2.1.0 — release report (merged to main)
 
-Prepared at the end of the autonomous implementation authorized by the "Groundwork 2.1 — Context, Capabilities, Routines & UX" brief. This is the single consolidated report for owner review before any merge decision. It duplicates nothing from `docs/VALIDATION.md`, `openspec/changes/groundwork-2.1-context-routines-ux/design.md`, or that change's `tasks.md` — it points at them — except where a number needed to be re-verified fresh for this report (each such number is marked with the exact command run). Structure follows the brief's own required sections.
+Originally prepared, as a release-candidate report, at the end of the autonomous implementation authorized by the "Groundwork 2.1 — Context, Capabilities, Routines & UX" brief, for owner review before any merge decision. That review is now complete and the owner has made the merge decision described below; the rest of this report is kept as the historical record of what was reviewed, not rewritten. It duplicates nothing from `docs/VALIDATION.md`, `openspec/changes/groundwork-2.1-context-routines-ux/design.md`, or that change's `tasks.md` — it points at them — except where a number needed to be re-verified fresh for this report (each such number is marked with the exact command run). Structure follows the brief's own required sections.
 
-**Release status: NOT merged, NOT tagged, NOT published.** Open as PR [#22](https://github.com/AshminPy/groundwork/pull/22) against `main`, for owner review. This is an explicit, hard constraint the brief itself sets — nothing in this report should be read as recommending an autonomous merge.
+**Release status: MERGED to `main`** via PR [#22](https://github.com/AshminPy/groundwork/pull/22) (merge commit `e3d4b4f40564c828ad7416458038858c40fbf1f7`), by explicit owner decision after 4 rounds of independent review (§11), Must-fix: 0. **Still NOT tagged and NOT published as a GitHub release** — that narrower constraint remains in force; only the "never merge to main" constraint has been explicitly lifted by the owner.
 
 ---
 
 ## 1. Release identity
 
-- **Branch**: `claude/groundwork-2.1-context-routines-ux`
-- **HEAD**: `14f53adcc02d28e197d3b1f91806b2d8454d10c8`
+- **Branch**: `claude/groundwork-2.1-context-routines-ux` (merged; `main` is now at the merge commit below)
+- **PR head (final, merged)**: `ae1fa1d249789d2f607685aed6afe4ba8e0d1739`
+- **Merge commit on `main`**: `e3d4b4f40564c828ad7416458038858c40fbf1f7`
 - **Base**: `origin/main` at `73d5d13ffaa0c5a5755b77f88f7f2cb0b07e798c` (the already-merged Groundwork 2.0.0)
-- **Commits on top of base**: 5 — `6913008` (the full 2.1 implementation), `b7a80a3` (round-1 independent-review fixes), `cae2553` (release-candidate report + tasks.md close-out), `83295b7` (Phase 13: the Routine Configuration Contract, an owner requirement raised during PR #22 review — see §7a below), `14f53ad` (round-3 independent-review fixes for Phase 13)
-- **Files changed vs `origin/main`**: 28 (`git diff --name-only origin/main..HEAD | wc -l`), 15 newly added
-- **Diff summary**: `git diff --stat origin/main..HEAD` → 28 files changed, 4179 insertions(+), 42 deletions(-)
-- **PR**: [#22](https://github.com/AshminPy/groundwork/pull/22), open, not draft, subscribed for CI/review activity — **not merged, not tagged, not published**, per the owner's explicit hard constraint (unchanged since draft)
-- **OpenSpec change**: `openspec/changes/groundwork-2.1-context-routines-ux/` — `proposal.md`, `design.md` (§A–§L plus §D.2, added for Phase 13), `tasks.md` (78 tasks, 77 checked `[x]`; the 1 remaining is this report's own update, closed by this commit), 4 capability spec deltas (`routines`, `dependency-pinning`, plus `ADDED` requirements folded into the existing `onboarding` and `task-routing` baseline capabilities)
+- **Commits on top of base**: 6 — `6913008` (the full 2.1 implementation), `b7a80a3` (round-1 independent-review fixes), `cae2553` (release-candidate report + tasks.md close-out), `83295b7` (Phase 13: the Routine Configuration Contract, an owner requirement raised during PR #22 review — see §7a below), `14f53ad` (round-3 independent-review fixes for Phase 13), `ae1fa1d` (round-4 nice-to-have fixes + this report's own finalization)
+- **Files changed vs the pre-2.1 base**: 28 (`git diff --name-only 73d5d13..ae1fa1d | wc -l`), 15 newly added
+- **Diff summary**: `git diff --stat 73d5d13..ae1fa1d` → 28 files changed, 4215 insertions(+), 42 deletions(-)
+- **PR**: [#22](https://github.com/AshminPy/groundwork/pull/22), **merged** (closed, merged: true) — **still not tagged, not published as a GitHub release**
+- **OpenSpec change**: `openspec/changes/groundwork-2.1-context-routines-ux/` — `proposal.md`, `design.md` (§A–§L plus §D.2, added for Phase 13), `tasks.md` (78/78 tasks checked `[x]`), 4 capability spec deltas (`routines`, `dependency-pinning`, plus `ADDED` requirements folded into the existing `onboarding` and `task-routing` baseline capabilities)
 - PR #21 (a separate, unrelated documentation-only change, on a different branch) was never touched by any of this work, per the owner's standing instruction.
 
 ## 2. Scope and status

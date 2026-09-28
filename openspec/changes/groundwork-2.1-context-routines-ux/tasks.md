@@ -89,7 +89,7 @@
 - [x] 12.3a First independent review round: dispatched a fresh-context reviewer (background subagent, no access to this session's own reasoning) against the full working-tree diff vs `origin/main`. Returned `changes-required`, 2 MUST FIX: (1) the Phase 7/8 doctor fix was incomplete — `verify_capabilities()`'s own inline Python had no fail-open guard, so a corrupt `config.json` crashed the entire `--doctor` command silently under `set -e`, worse than the bug it was meant to fix; (2) `docs/ARCHITECTURE.md`/`README.md` still asserted ECC "installs unpinned from main" elsewhere in files this change otherwise edits, self-contradicting the new pinning content. Both fixed at the root and re-verified by live reproduction of the exact scenario the reviewer used; 3 NICE TO HAVE findings also fixed (`uninstall.sh` routine-name list now derived from the `ROUTINES` registry instead of hardcoded; `JIRA_LIVE_TOOLS == READ_ONLY_TOOLS` pinned by a direct test; the "config.json never contains credentials" claim reworded from an unconditional guarantee to what's actually true). Full detail: `docs/VALIDATION.md`'s "Independent review" subsection. Re-ran full suite (28 passed) and `openspec validate --changes` (3 valid) after every fix.
 - [x] 12.3b Second, narrowly-scoped independent review confirming both MUST FIX fixes by direct old-vs-new reproduction (extracted the pre-fix `setup.sh` via `git show HEAD^:setup.sh`, ran both old and new against the identical corrupted-`config.json` scenario, confirmed the old script dies silently while the new one degrades to `Capabilities INVALID` and continues; grepped `docs/ARCHITECTURE.md`/`README.md` for every remaining "unpinned" hit and confirmed each is inside the clearly-dated historical clause, not a live claim). All 3 nice-to-haves spot-checked and confirmed present. Full regression re-run independently (28 passed, `openspec validate --strict` valid). **Verdict: approve, Must-fix: 0.**
 - [x] 12.4 Write the final release-candidate report per the brief's required structure — `docs/RELEASE-REPORT-2.1.md` (release identity, architecture, context engineering, skills, MCP/integrations, routines, UX, tests, runtime validation, independent review, known limitations, deferred items, acceptance-standard walkthroughs)
-- [-] 12.5 Never merge to main, never tag, never publish a release — a standing constraint honored throughout, not a one-time task; PR #22 remains draft, open for owner review
+- [-] 12.5 Never merge to main, never tag, never publish a release without explicit owner authorization — a standing constraint honored throughout the entire autonomous implementation and all four independent-review rounds (Phase 12 and Phase 13 below). The owner subsequently reviewed the final, fully-approved PR #22 and explicitly instructed the merge; PR #22 was merged to `main` (merge commit `e3d4b4f`) on that explicit instruction. Tagging and publishing a GitHub release remain un-authorized and undone.
 
 ## Phase 13 — Routine configuration contract (owner requirement, raised during PR #22 review)
 
@@ -208,7 +208,8 @@ erased — this phase's own independent review is separate and additional.
   `_work_digest_prompt()` when no Jira cross-reference is configured fixed by building each
   prompt's body from filtered non-empty parts instead of an always-present template slot. Full
   detail: `docs/VALIDATION.md`'s "Fresh confirmation review of the Bug 3/Bug 4 fixes" entry.
-- [x] 13.13 PR #22 updated (commit + push to the existing branch, commit `14f53ad`) and its
-  description refreshed to reflect this phase (§7a of `docs/RELEASE-REPORT-2.1.md`, updated with
-  the real HEAD/commit-list/file-count/test-count and both new independent-review rounds).
-  Still unmerged/untagged/unpublished, per the owner's hard constraint.
+- [x] 13.13 PR #22 updated (commit + push to the existing branch, commits `14f53ad` then `ae1fa1d`)
+  and its description refreshed to reflect this phase (§7a of `docs/RELEASE-REPORT-2.1.md`, updated
+  with the real HEAD/commit-list/file-count/test-count and both new independent-review rounds).
+  Subsequently merged to `main` on explicit owner instruction (merge commit `e3d4b4f`, PR head
+  `ae1fa1d`) — still untagged, unpublished as a GitHub release.

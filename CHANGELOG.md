@@ -2,7 +2,7 @@
 
 ## 2.1.0 — 2026-09-28
 
-Context engineering, capability resolution, Routines, and a setup-time capability configurator. Tracked in `openspec/changes/groundwork-2.1-context-routines-ux/`; see that change's `tasks.md` for exact phase-by-phase status and `docs/VALIDATION.md` for evidence. This is a release candidate — not merged to main, not tagged, not published.
+Context engineering, capability resolution, Routines, and a setup-time capability configurator. Tracked in `openspec/changes/groundwork-2.1-context-routines-ux/`; see that change's `tasks.md` for exact phase-by-phase status and `docs/VALIDATION.md` for evidence. Merged to `main` via PR [#22](https://github.com/AshminPy/groundwork/pull/22) (merge commit `e3d4b4f`), after 4 rounds of independent review, Must-fix: 0. Not tagged, not published as a GitHub release.
 
 - **Capability resolution** (`rules/engineering-workflow.md` §6a, new): judgment guidance for which tool serves a task — existing repo tooling → Claude Code native → a trusted already-installed skill → a trusted already-configured MCP/CLI → browser/Chrome → the user for a genuine decision — never overriding tier, evidence, or authorization, which stay governed by the existing rules unchanged. Browser-driven mutations now follow the same authorization rule as MCP/CLI, and require reading the result back before reporting VERIFIED.
 - **Five distinct concepts** (`rules/task-routing.md` §4, new): Playbook, Routine, Role, Skill, Tool, kept structurally distinct; the old `## 4. Universal output contract` renumbered to `## 5.`.
