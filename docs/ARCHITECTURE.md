@@ -23,10 +23,11 @@ Claude Code → the runtime. Subagents (Agent tool), experimental Agent Teams
              SendMessage, permissions, hooks, CLAUDE.md/rules loading, auto memory.
 
 Groundwork → the governance layer. Rule files loaded into every session's
-             context (five as of 1.5.1 — engineering-workflow, architecture-quality,
-             evidence-policy, task-routing, output-contract); hooks that enforce
-             or inject what the rules can only ask for (four as of 1.5.1 —
-             push guard, review gate, session snapshot, telemetry).
+             context (five — engineering-workflow, architecture-quality,
+             evidence-policy, task-routing, output-contract; unchanged count
+             since 1.5.1); hooks that enforce or inject what the rules can
+             only ask for (four — push guard, review gate, session snapshot,
+             telemetry; also unchanged in count since 1.5.1).
 ```
 
 Groundwork does not replace any upstream project's job. It exists because, tested plainly, neither ECC nor OpenSpec on its own reliably makes an agent plan, design for change, test against the real runtime, review, and honestly report completion for a request that doesn't spell every step out. See [VALIDATION.md](VALIDATION.md) for the actual tests that established this.

@@ -147,11 +147,11 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 12.3 docs/VALIDATION.md entry consolidating all Stage 1-4 evidence into one coherent release record
 
 ### Phase 13 — Cross-phase regression gate (run once, after the last approved phase ships)
-- [ ] 13.1 Every pre-existing critical file's behavior re-verified against its pre-2.0 baseline where unchanged by an approved phase
-- [ ] 13.2 Full existing test suite plus all new tests from shipped phases green in one run
-- [ ] 13.3 Upgrade path tested: a real 1.5.1 installation upgraded via `git pull && ./setup.sh` (or `install.sh`) to 2.0, verified idempotent and non-destructive
-- [ ] 13.4 Rollback tested: `./setup.sh --rollback` restores a pre-2.0 state cleanly
-- [ ] 13.5 Uninstall tested: `./uninstall.sh` removes exactly what 2.0 added (including any Phase 6 hooks and any Phase 5 state file), keeps telemetry/reports
-- [ ] 13.6 Documentation matches actual shipped behavior for every phase that shipped
-- [ ] 13.7 No completion claim in any shipped phase's VALIDATION.md entry exceeds its actual evidence
-- [ ] 13.8 `openspec validate groundwork-2-enterprise-sre --strict`
+- [x] 13.1 Every pre-existing critical file's behavior re-verified against its pre-2.0 baseline where unchanged by an approved phase — covered by the full green test suite (485 checks) plus the live upgrade test confirming byte-identical user data/settings across the upgrade
+- [x] 13.2 Full existing test suite plus all new tests from shipped phases green in one run — `pytest -q` 16 passed; standalone 485 checks across 5 files, 0 failed
+- [x] 13.3 Upgrade path tested: a real 1.5.1 installation (git worktree at the true pre-2.0 baseline, `main` @ `d40523a`) upgraded via `install.sh` to 2.0.0, verified idempotent (second run: nothing to do, no duplicate hook entries) and non-destructive (telemetry, personal files, settings customizations all byte-identical after). Found and fixed a real gap: `VERSION` stayed `1.5.1` post-upgrade because CHANGELOG.md's newest heading wasn't a real version number — fixed by giving Groundwork 2.0 its actual `## 2.0.0` heading
+- [x] 13.4 Rollback tested: `./setup.sh --rollback` restores a pre-2.0 state cleanly — `VERSION` correctly reverted to 1.5.1, 2.0.0 hooks/rules absent post-rollback, user data preserved, pre-rollback state moved aside intact (never deleted)
+- [x] 13.5 Uninstall tested: `./uninstall.sh` removes exactly what 2.0 added (all 5 hook files, `rules/groundwork/`, `VERSION`, every Groundwork settings.json key), keeps telemetry/reports/investigations, leaves ECC/OpenSpec untouched, keeps user's own settings/files exactly
+- [x] 13.6 Documentation matches actual shipped behavior for every phase that shipped — verified via the per-phase VALIDATION.md entries written alongside each phase's implementation (not after the fact) plus a final stale-reference sweep (no remaining "three hooks"/"three rule files" outside intentional dated history)
+- [x] 13.7 No completion claim in any shipped phase's VALIDATION.md entry exceeds its actual evidence — self-audited via targeted search for overclaiming language; the one real instance found during implementation (Phase 5's "near-verbatim" wording) was already caught and corrected by that phase's own second independent review
+- [x] 13.8 `openspec validate groundwork-2-enterprise-sre --strict` — passes

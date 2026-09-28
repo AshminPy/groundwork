@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Groundwork 2.0 (in progress)
+## 2.0.0 — 2026-09-28
 
 Enterprise SRE/CloudOps upgrade. Tracked in `openspec/changes/groundwork-2-enterprise-sre/`; see that change's `tasks.md` for exact phase-by-phase status and `docs/VALIDATION.md` for evidence. This entry is updated as phases land, not written once at the end.
 
