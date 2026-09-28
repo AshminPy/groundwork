@@ -27,7 +27,7 @@
 - [x] 0.22 Redesign D5 (deterministic safety) into a tiered, builder-aware menu after confirming the first pass's single vague candidate was not concrete enough to approve
 - [x] 0.23 Re-evaluate the migration plan into 5 dependency-ordered stages (Foundation/Trust/Capability/Experience/Validation) rather than appending new work as one undifferentiated phase
 - [x] 0.24 Write the extended design.md, updated proposal.md, this tasks.md, and 4 new capability specs; redesign 2 existing specs (review-evidence-strengthening, deterministic-safety-expansion); light-touch 1 existing spec (investigation-continuity, field-list alignment)
-- [ ] 0.25 Owner review and sign-off on all Decisions (D1-D5) and the full 13-phase order in design.md §K (**STOP POINT — nothing below this line may start until this task is checked by the owner**)
+- [x] 0.25 Owner review and sign-off on all Decisions (D1-D5) and the full 13-phase order in design.md §K — **SIGNED OFF 2026-09-28** via the owner's explicit implementation-authorization message: D1 approved as proposed; D2 approved as Option B (bounded investigation-state artifact, exact field list given); D3 approved **with further strengthening** beyond this document's own redesign (fresh independent re-review required after a MUST-FIX fix, not just edit+test — see the correction notice in `specs/review-evidence-strengthening/spec.md` and `design.md` §M/D3); D4 approved as proposed (curate via upstream mechanisms only after validating them against the actually-installed version, full opt-out retained — see the M4 correction for what "validating" actually found); D5 explicitly deferred (Tier-2 guards not implemented this release, documented as deferred candidates, not blocking). The 13-phase order was authorized to proceed autonomously, phase by phase, without per-phase re-approval.
 
 ---
 
@@ -47,13 +47,13 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 - [ ] 1.9 docs/VALIDATION.md entry
 
 ### Phase 2 — Evidence taxonomy (rule text only)
-- [ ] 2.1 Add `CONFLICTING EVIDENCE` and `UNKNOWN` to `rules/evidence-policy.md` §2
-- [ ] 2.2 Tighten §7 RCA rule to require one of the two new labels when applicable
-- [ ] 2.3 Cross-reference from `playbooks/troubleshoot.md` and `playbooks/research.md`
-- [ ] 2.4 docs/ARCHITECTURE.md updated
-- [ ] 2.5 Model-behavior validation on constructed genuinely-UNKNOWN and genuinely-CONFLICTING prompts
-- [ ] 2.6 Non-regression check
-- [ ] 2.7 docs/VALIDATION.md entry
+- [x] 2.1 Add `CONFLICTING EVIDENCE` and `UNKNOWN` to `rules/evidence-policy.md` §2
+- [x] 2.2 Tighten §7 RCA rule to require one of the two new labels when applicable
+- [x] 2.3 Cross-reference from `playbooks/troubleshoot.md` and `playbooks/research.md`
+- [x] 2.4 docs/ARCHITECTURE.md updated
+- [x] 2.5 Model-behavior validation on constructed genuinely-UNKNOWN and genuinely-CONFLICTING prompts
+- [x] 2.6 Non-regression check
+- [x] 2.7 docs/VALIDATION.md entry
 
 ### Phase 3 — Capability ownership documentation (new this pass, cheap)
 - [ ] 3.1 Fold design.md §J's capability-ownership matrix into `docs/ARCHITECTURE.md`
@@ -65,7 +65,7 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 ### Phase 4 — Review evidence strengthening, redesigned (Decision D3)
 - [ ] 4.1 Add the structured `REVIEW RESULT` block format to `rules/output-contract.md`
 - [ ] 4.2 RUNTIME VALIDATION REQUIRED: sample real ECC/subagent/teammate reviewer output to confirm the block can be reliably prompted/emitted
-- [ ] 4.3 Extend `hooks/require_material_review.py` to parse the block; on `Must-fix: N>0`, require both a post-review edit AND a post-review test/validation-shaped Bash call (reusing `groundwork_telemetry.py`'s `TEST_CMD` regex) before allowing Stop
+- [x] 4.3 Extend `hooks/require_material_review.py` to parse the block; on `Must-fix: N>0`, evaluate the most recent review-shaped call's own verdict — a post-review edit and a post-review test/validation-shaped Bash call (reusing `groundwork_telemetry.py`'s `TEST_CMD` regex) are shown as diagnostics but are NOT sufficient alone; Stop stays blocked until a subsequent fresh review itself reports `Must-fix: 0` (strengthened beyond this task's original wording per the owner's implementation-authorization message — see `specs/review-evidence-strengthening/spec.md`'s correction notice)
 - [ ] 4.4 Update `rules/engineering-workflow.md` §2.6 to state the strengthened expectation
 - [ ] 4.5 New `test_hooks.py` cases per `specs/review-evidence-strengthening/spec.md` (no-follow-up blocks; edit-only-no-validation-rerun blocks; edit-plus-validation-rerun allows; zero-MUST-FIX/absent-block unchanged) — must not regress the existing 14 review-gate cases
 - [ ] 4.6 Independent fresh-context review (MATERIAL — modifies an enforced safety hook)

@@ -376,6 +376,33 @@ def test_review_gate_must_fix_strengthening() -> None:
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
         check("MUST FIX, edit + unrelated bash (not a test) -> still says validation not re-run", '"decision": "block"' in out
               and "validation has not been re-run yet" in out, out)
+
+        # 10. Hook stdin is valid JSON but not an object (a list/string/number/null) -> fail open,
+        #     never a crash. Found by independent review of this phase: `data.get("cwd")` on a
+        #     non-dict raised AttributeError, an uncaught exception and exit 1 (a hard crash, not
+        #     the fail-open behavior this hook's own docstring promises).
+        for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
+            result = subprocess.run(["python3", str(REVIEW_HOOK)], input=bad_stdin,
+                                     capture_output=True, text=True, timeout=15)
+            check(f"non-dict JSON stdin ({bad_stdin}) -> fail open, no crash",
+                  result.returncode == 0 and result.stdout.strip() == "" and result.stderr == "",
+                  f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
+
+        # 11. A MUST FIX finding is correctly parsed, but a later transcript line is valid JSON
+        #     that is not an object (e.g. a stray array) — this must NOT wipe out the already-
+        #     parsed finding and silently fail open to allow. Found by independent review: the
+        #     scan's outer try/except caught the AttributeError from calling .get() on a non-dict
+        #     entry and discarded every review already parsed, defaulting to allow — the unsafe
+        #     direction, and a regression versus the pre-2.0 gate's safer default-block behavior.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-then-anomalous-line.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+        ])
+        with open(t, "a") as f:
+            f.write(json.dumps([1, 2, 3]) + "\n")
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX finding survives a later anomalous (non-dict) transcript line -> still block",
+              '"decision": "block"' in out and "2 unresolved MUST FIX" in out, out)
     finish()
 
 

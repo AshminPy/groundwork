@@ -8,9 +8,12 @@ OpenSpec   → WHAT / WHY. Delta specs with acceptance criteria as scenarios,
              (openspec/ directory + .claude/commands/opsx + .claude/skills/openspec-*).
              No plugin, no hooks — nothing to conflict with ECC by construction.
 
-ECC        → HOW. 68 agents (planner, code-explorer, tdd-guide, code-reviewer,
-             language-specific reviewers, security-reviewer, …), 286 skills,
-             94 command shims. Installed once, user-scoped, as a single Claude
+ECC        → HOW. Dozens of agents (planner, code-explorer, tdd-guide, code-reviewer,
+             language-specific reviewers, security-reviewer, …) and hundreds of
+             skills and command shims — installs unpinned from ECC's own GitHub
+             `main`, so the exact count moves independently of Groundwork releases;
+             `claude plugin details ecc@ecc` shows the current one (see "Upstream
+             versions" below). Installed once, user-scoped, as a single Claude
              Code plugin. Its own hooks: GateGuard (investigate-before-edit,
              destructive-Bash fact gate), block-no-verify, session persistence,
              pre-compact save, continuous learning.

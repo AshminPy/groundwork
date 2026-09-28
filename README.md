@@ -8,7 +8,7 @@ Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) —
 
 ## Why this exists
 
-ECC ships 68 agents and 286 skills that are excellent once invoked — but nothing invokes them on its own. Left alone, a plain request to "add X" gets implemented without a plan, without tests, without review, and the final report says it's done regardless. OpenSpec gives you a real spec-driven change lifecycle, but only when you run `/opsx:*` — and even then, nothing stops an agent from claiming a change is complete with a failing test still in the suite. And neither one tells Claude *what a good design is*, *when to delegate*, or *how to pick a project back up next week*.
+ECC ships dozens of agents and hundreds of skills (run `claude plugin details ecc@ecc` for the exact, currently-installed count — it installs unpinned from ECC's own GitHub `main`, so the number moves independently of Groundwork releases; see [ARCHITECTURE.md](docs/ARCHITECTURE.md)) that are excellent once invoked — but nothing invokes them on its own. Left alone, a plain request to "add X" gets implemented without a plan, without tests, without review, and the final report says it's done regardless. OpenSpec gives you a real spec-driven change lifecycle, but only when you run `/opsx:*` — and even then, nothing stops an agent from claiming a change is complete with a failing test still in the suite. And neither one tells Claude *what a good design is*, *when to delegate*, or *how to pick a project back up next week*.
 
 Groundwork closes exactly those gaps, and nothing else:
 

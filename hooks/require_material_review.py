@@ -221,6 +221,12 @@ def scan_transcript(transcript_path: str):
                     entry = json.loads(line)
                 except Exception:
                     continue
+                if not isinstance(entry, dict):
+                    # One anomalous line (valid JSON, not an object) must not abort the whole
+                    # scan via the outer except below — that would silently discard every
+                    # review already parsed from earlier lines, including a real unresolved
+                    # MUST-FIX finding, and fail open in the unsafe direction (allow Stop).
+                    continue
                 content = (entry.get("message") or {}).get("content")
                 if not isinstance(content, list):
                     continue
@@ -270,6 +276,8 @@ def deny(reason: str) -> None:
 def main() -> None:
     try:
         data = json.load(sys.stdin)
+        if not isinstance(data, dict):
+            raise ValueError("hook input must be a JSON object")
     except Exception:
         sys.exit(0)
 
