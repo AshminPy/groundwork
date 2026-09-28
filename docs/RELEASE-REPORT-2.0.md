@@ -10,7 +10,7 @@ Groundwork 2.0.0 is implemented, tested, independently reviewed, and validated a
 
 Two owner decisions were deferred rather than force-completed: D5's three Tier-2 safety guards (Terraform-prod-guard, kubectl-prod-guard, IAM-mutation-guard) were explicitly declined at implementation authorization, per the owner's own stated reasoning that heuristic production-detection risks false confidence — this was an explicit instruction, not a gap this session introduced, and it does not block the release.
 
-**Recommendation: ready for owner review and, on approval, ready to install.** PR #20 (draft, this branch) is the review surface.
+**Release status: merged to `main` and ready for installation.** PR #20 was merged on 2026-09-28 after owner review.
 
 ## 2. Scope and status
 
@@ -236,13 +236,13 @@ Task 0.25 (owner sign-off) records the exact authorization this implementation p
 
 ## 26. Commit and PR state
 
-- **PR**: [#20](https://github.com/AshminPy/groundwork/pull/20), draft, open, against `main`.
-- **Branch**: `claude/groundwork-2-enterprise-upgrade-zx62y6`.
+- **PR**: #20, merged into `main` on 2026-09-28.
+- **Release branch**: `main`.
 - **Commits this branch**: 22 (2 audit/design, 20 implementation/fix/docs), none force-pushed, none rewriting history.
 - **Diff vs. `main`**: 44 files changed, 2766 insertions(+), 156 deletions(-) (`git diff --shortstat origin/main...HEAD`).
 - **Head commit**: `ed8db0b` at the time of this report.
-- PR #20's own description still shows the original audit/design-only summary from before implementation began — updating it now (see the accompanying PR-description update in this same turn).
-- PR was never merged by this session, per the standing instruction; it remains draft for owner review.
+- **Merge commit**: `ddeb432d584dde920770ca646888355588cd7aa5`.
+- PR #20's description contains the final implementation/test summary and is retained as release history.
 
 ## 27. Installation instructions — exact commands
 
@@ -250,7 +250,8 @@ Task 0.25 (owner sign-off) records the exact authorization this implementation p
 ```bash
 git clone https://github.com/AshminPy/groundwork.git
 cd groundwork
-git checkout claude/groundwork-2-enterprise-upgrade-zx62y6   # until PR #20 merges to main
+git checkout main
+git pull --ff-only
 ./setup.sh
 ```
 Requirements checked automatically: Claude Code ≥ 2.1 (must already be installed and signed in — not installed for you), Node ≥ 20.19.0, npm, Python 3.10+, git. Missing prerequisites are listed with the exact official command per OS and installed only after you answer **y** (or with `--install-prereqs`). `setup.sh` backs up your complete `~/.claude` first, asks three questions (profile, Agent Teams, dashboard schedule), then runs `install.sh`, applies the schedule, verifies, and prints a summary.
@@ -263,7 +264,8 @@ Scripted, non-interactive equivalent:
 **This machine already has Groundwork 1.5.1 (the realistic work-laptop case, and the exact path this session live-tested in §18):**
 ```bash
 cd groundwork && git pull
-git checkout claude/groundwork-2-enterprise-upgrade-zx62y6   # until PR #20 merges to main
+git checkout main
+git pull --ff-only
 ./setup.sh                   # re-backs-up ~/.claude, re-installs, re-verifies; answers to the 3 questions are idempotent
 ```
 
@@ -292,4 +294,4 @@ What to check in the response: (1) it inspects the existing analogous resource a
 
 ---
 
-*Generated as part of the Groundwork 2.0.0 implementation, PR #20, branch `claude/groundwork-2-enterprise-upgrade-zx62y6`. Every claim above traces to `docs/VALIDATION.md`, `openspec/changes/groundwork-2-enterprise-sre/{design.md,tasks.md}`, or a command re-run at report time (§16, §25). Nothing in this report was asserted without one of those three sources.*
+*Generated as part of the Groundwork 2.0.0 implementation in PR #20 and updated after merge to `main`. Every claim above traces to `docs/VALIDATION.md`, `openspec/changes/groundwork-2-enterprise-sre/{design.md,tasks.md}`, or a command re-run at report time (§16, §25). Nothing in this report was asserted without one of those three sources.*
