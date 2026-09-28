@@ -83,19 +83,20 @@ TRIVIAL/STANDARD-tier investigative work (troubleshooting, research, exploration
 ```
 # Investigation: <objective>
 
-## Proven facts
-## Evidence references
-## Decisions
 ## Rejected hypotheses
 - <hypothesis> — REJECTED: <reason>
 ## Active hypotheses
+## Next action
+## Proven facts
+## Evidence references
+## Decisions
 ## Files changed
 ## Validation results
 ## Blockers
 ## Uncertainty
 ## Remaining tasks
-## Next action
 ```
+**"Rejected hypotheses" comes first, right after the objective — deliberately, not alphabetically.** It is the one section this mechanism exists to protect: the session-start snapshot caps how much of this file it shows, and a prefix cut must never be able to drop this section before showing it. Keep the whole file compact enough that this ordering rarely matters in practice (see "keep it small" below) — the ordering is the backstop for when it does.
 Rules:
 - **Never persist chain-of-thought or reasoning traces** — only the conclusions above: established facts, evidence references, decisions, rejected hypotheses with their reason, active hypotheses, files changed, validation results, blockers, uncertainty, remaining tasks, next action. If a section has nothing to say, omit it.
 - **Keep it small** — current state only, not a running log; when a section changes, replace its content, don't append a history. A file that keeps growing every turn is being used as a database, which this is explicitly not; the snapshot hook truncates an oversized file, so an overlong one loses its own tail.

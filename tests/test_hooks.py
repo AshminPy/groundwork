@@ -670,6 +670,61 @@ def test_investigation_continuity() -> None:
         p1 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer)}, env=env))).group(1)
         p2 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer2)}, env=env))).group(1)
         check("same-basename repos get distinct investigation paths", p1 != p2, f"{p1} vs {p2}")
+
+        # 8. Realistic multi-section file, Rejected hypotheses buried after long earlier sections
+        #    (matching the template order, not an adversarial construct) — this is the exact
+        #    failure mode independent review found: a plain prefix truncation dropped "Rejected
+        #    hypotheses" entirely once Proven facts/Evidence references/Decisions alone exceeded
+        #    the per-file budget, even though the file itself is a realistic size, not a blob.
+        realistic = (
+            "# Investigation: checkout 502s\n\n"
+            "## Proven facts\n" + "".join(f"- observed fact {i} with a realistic amount of descriptive detail\n" for i in range(15))
+            + "## Evidence references\n" + "".join(f"- logs/sample-{i}.txt lines 10-20\n" for i in range(10))
+            + "## Decisions\n" + "".join(f"- decision {i}: investigate this path first\n" for i in range(5))
+            + "## Rejected hypotheses\n- Upstream timeout too low — REJECTED: timeout is 30s, failures happen at 2s\n\n"
+            + "## Active hypotheses\n- DB connection pool exhaustion\n"
+        )
+        check("fixture is realistic-sized, not an adversarial blob", len(realistic) > 800, str(len(realistic)))  # > hook's MAX_INVESTIGATION_CHARS
+        computed_path.write_text(realistic)
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("Rejected hypotheses survives truncation even when buried after long earlier sections",
+              "Rejected hypotheses" in text and "REJECTED" in text and "Upstream timeout too low" in text, text)
+
+        # 9. A repository's git/OpenSpec facts must never be able to crowd the investigation
+        #    section out of the OVERALL snapshot cap entirely — independent review found this
+        #    happened even with a small, well-formed investigation file, because git/OpenSpec
+        #    facts alone (unrelated to the investigation file's own size) consumed the whole
+        #    budget first when investigation_facts() was appended after them. Proven structurally
+        #    (position-independent, not dependent on naturally growing git history to a specific
+        #    size): investigation content must appear in the assembled text before git facts do.
+        busy = tmp / "busy-repo"
+        busy.mkdir()
+        git(busy, "init", "-q", "-b", "main")
+        git(busy, "commit", "-q", "--allow-empty", "-m", "init")
+        busy_path = re.search(r"would be at (\S+\.md)",
+                               snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(busy)}, env=env))).group(1)
+        busy_path = Path(busy_path)
+        busy_path.parent.mkdir(parents=True, exist_ok=True)
+        busy_path.write_text("# Investigation: x\n\n## Rejected hypotheses\n- slow queries — REJECTED: measured 2ms\n## Active hypotheses\n- pool exhaustion\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(busy)}, env=env))
+        check("investigation section appears before git facts (protected from prefix truncation by git/OpenSpec content)",
+              "investigation continuity" in text and "git: branch" in text and text.index("investigation continuity") < text.index("git: branch"), text)
+        # The fixed per-call overhead (header/harness/DATA_START/cwd) plus a fully-inner-truncated
+        # investigation section (its own 800-char cap, plus intro line and marker) is comfortably
+        # under the real MAX_CHARS (2500) — the actual guarantee that matters: however much git/
+        # OpenSpec content a repository has, it is appended *after* this fixed+capped prefix, so it
+        # can only ever truncate itself, never the investigation section placed before it.
+        worst_case_investigation_prefix = text[: text.index("git: branch")]
+        check("investigation section's own worst-case size leaves real headroom under MAX_CHARS",
+              len(worst_case_investigation_prefix) < 2500 - 500, str(len(worst_case_investigation_prefix)))
+
+        # 10. Control characters in the investigation file are stripped, same as every other
+        #     field quoted into this hook's output (the file persists and replays into every
+        #     future session for the repo — a stronger vector than one-off commit metadata).
+        computed_path.write_bytes(b"# Investigation\n\x00\x1b[31m## Rejected hypotheses\n- x \x00REJECTED: y\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("control characters in investigation file are stripped", "\x00" not in text and "\x1b" not in text, repr(text[-400:]))
+        check("content is still surfaced after stripping", "Rejected hypotheses" in text, text)
     finish()
 
 

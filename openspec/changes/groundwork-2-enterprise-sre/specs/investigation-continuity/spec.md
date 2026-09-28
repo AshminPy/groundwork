@@ -1,7 +1,7 @@
 # investigation-continuity Specification
 
 ## Purpose
-Closes the one Groundwork 2.0 acceptance criterion confirmed fully unmet by this audit: a rejected hypothesis from an investigative (typically TRIVIAL/STANDARD-tier, non-OpenSpec-tracked) session must not resurface as active or verified after context compaction or in a fresh session. **The mechanism is decision-pending (design.md Decision D2, Option A vs Option B) — this specification states the required observable behavior, which both options must satisfy, without presupposing which is chosen.** Requirements below apply once an option is selected and implemented; none are implemented yet.
+Closes the one Groundwork 2.0 acceptance criterion confirmed fully unmet by this audit: a rejected hypothesis from an investigative (typically TRIVIAL/STANDARD-tier, non-OpenSpec-tracked) session must not resurface as active or verified after context compaction or in a fresh session. **Implemented as Option B** (design.md Decision D2): a small, capped, per-repository investigation-state file, surfaced at session start by `hooks/groundwork_session_snapshot.py` and written/read by the model itself via `Read`/`Write` per `rules/engineering-workflow.md` §7's template and rules. The requirements below state the required observable behavior; see `docs/VALIDATION.md`'s Phase 5 entry for the live evidence they were validated against.
 
 ## ADDED Requirements
 
