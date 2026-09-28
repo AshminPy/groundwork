@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.0 — 2026-09-28
+
+Enterprise SRE/CloudOps upgrade. Tracked in `openspec/changes/groundwork-2-enterprise-sre/`; see that change's `tasks.md` for exact phase-by-phase status and `docs/VALIDATION.md` for evidence. This entry is updated as phases land, not written once at the end.
+
+**Phase 1 — Node/OpenSpec version correctness (Decision D1) + hook dedup:**
+- `install.sh` now checks Node's actual version (previously presence-only); both `install.sh` and `setup.sh` correct the documented floor from ≥18 to ≥20.19.0 — OpenSpec's real `engines.node` requirement, not ECC's lower one.
+- `setup.sh` distinguishes a Node still too old after an OS package manager "install" (common — distro packages lag upstream) from one still genuinely absent, with accurate guidance either way; `--verify` now reports the actually-installed ECC plugin version (`claude plugin list`), not only the version last checked against.
+- `dirty_change_names()` (previously duplicated in two hooks) and the `TEST_CMD` regex (previously duplicated in a third) consolidated into new `hooks/groundwork_shared.py`, imported defensively by each caller so a broken/partial shared module degrades one capability at a time, never crashes a hook.
+- **Corrected finding**: ECC installs unpinned from its GitHub `main` branch via `claude plugin marketplace add`/`claude plugin install` — not from npm, as an earlier design draft assumed. No upstream-supported mechanism exists to install a curated ECC skill/agent subset on this path (verified directly, including that Claude Code's `skillOverrides` is never consulted for plugin-sourced skills). `docs/ARCHITECTURE.md` and the `ecc-capability-policy` OpenSpec capability corrected accordingly; see that spec's Purpose section for the full evidence trail.
+- Tests: `tests/test_playbooks.py`, `tests/test_setup.py` extended (Node-floor checks at both installer layers, the still-too-old-after-install message, ECC version reporting and its drift-tolerant comparison); a test-suite PATH-isolation gap that let a real host's `node`/`apt-get`/`claude`/`openspec` leak into "should be absent" test fixtures closed (`filtered_sysbin`, both here and in `test_setup.py`).
+
+**Phase 2 — Evidence taxonomy (extends `evidence-policy.md`):**
+- `CONFLICTING EVIDENCE` and `UNKNOWN` added as first-class labels alongside VERIFIED/UNVERIFIED/ASSUMPTION/INFERENCE; the root-cause-analysis rule and the troubleshoot/research playbooks now require one of these labels rather than a softened guess when the evidence chain does not support a conclusion.
+
+**Phase 4 — Review-evidence strengthening (Decision D3):**
+- `hooks/require_material_review.py` rewritten: the gate previously only detected that *some* reviewer-shaped tool call happened after a MUST-FIX finding; an edit and a re-run of validation counted as resolution with no check that a fresh review actually confirmed it. Now parses a structured `REVIEW RESULT` block (documented in `output-contract.md`) and evaluates the *most recent* review's own verdict — MUST FIX → fix → revalidate → fresh independent re-review is enforced, not just any tool call. Falls back to the old presence-only check when a reviewer omits the block (never stricter without the reviewer's cooperation).
+- 9 new test cases, including the key strengthening case: edit + test alone, with no fresh review, still blocks.
+- A second independent review of the combined Phase 1/2/4 diff found and fixed 5 further issues: two real hook fail-open gaps (a crash on non-dict JSON hook input; a later malformed transcript line silently discarding an already-parsed, unresolved MUST-FIX finding and defaulting to allow — both now covered by regression tests confirmed to fail pre-fix and pass post-fix), an OpenSpec spec/implementation drift (the review-evidence-strengthening spec still described the first-pass contract, not the further-strengthened one actually shipped), an evidence citation pointing at a record that didn't yet exist (the figure itself was real, now recorded), and stale ECC catalog figures left in two files the ECC-install-source correction didn't touch. See `docs/VALIDATION.md` for the full evidence.
+
 ## 1.5.1 — 2026-09-21
 
 - `setup.sh` detects the OS and offers to install the missing prerequisites other than Claude Code — git, Node 18+ with npm, Python 3.10+ — with the official packages: Homebrew on macOS, apt / dnf / apk on Linux. Opt-in (`y` at the prompt or `--install-prereqs`; `--no-install-prereqs` never installs; `--non-interactive` never installs without the flag). Claude Code must already be installed (official link printed otherwise); Homebrew itself is never installed (official command printed); an existing Node older than 18 is left to the user's version manager. Ten new tests with stub package managers.

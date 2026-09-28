@@ -8,9 +8,12 @@ OpenSpec   → WHAT / WHY. Delta specs with acceptance criteria as scenarios,
              (openspec/ directory + .claude/commands/opsx + .claude/skills/openspec-*).
              No plugin, no hooks — nothing to conflict with ECC by construction.
 
-ECC        → HOW. 68 agents (planner, code-explorer, tdd-guide, code-reviewer,
-             language-specific reviewers, security-reviewer, …), 286 skills,
-             94 command shims. Installed once, user-scoped, as a single Claude
+ECC        → HOW. Dozens of agents (planner, code-explorer, tdd-guide, code-reviewer,
+             language-specific reviewers, security-reviewer, …) and hundreds of
+             skills and command shims — installs unpinned from ECC's own GitHub
+             `main`, so the exact count moves independently of Groundwork releases;
+             `claude plugin details ecc@ecc` shows the current one (see "Upstream
+             versions" below). Installed once, user-scoped, as a single Claude
              Code plugin. Its own hooks: GateGuard (investigate-before-edit,
              destructive-Bash fact gate), block-no-verify, session persistence,
              pre-compact save, continuous learning.
@@ -19,12 +22,17 @@ Claude Code → the runtime. Subagents (Agent tool), experimental Agent Teams
              (named Agent calls when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1),
              SendMessage, permissions, hooks, CLAUDE.md/rules loading, auto memory.
 
-Groundwork → the governance layer. Three rule files loaded into every session's
-             context; three hooks that enforce or inject what the rules can only
-             ask for.
+Groundwork → the governance layer. Rule files loaded into every session's
+             context (five — engineering-workflow, architecture-quality,
+             evidence-policy, task-routing, output-contract; unchanged count
+             since 1.5.1); hooks that enforce or inject what the rules can
+             only ask for (four — push guard, review gate, session snapshot,
+             telemetry; also unchanged in count since 1.5.1).
 ```
 
 Groundwork does not replace any upstream project's job. It exists because, tested plainly, neither ECC nor OpenSpec on its own reliably makes an agent plan, design for change, test against the real runtime, review, and honestly report completion for a request that doesn't spell every step out. See [VALIDATION.md](VALIDATION.md) for the actual tests that established this.
+
+**Upstream versions, verified 2026-09-28**: ECC installs via `claude plugin marketplace add affaan-m/ECC` + `claude plugin install ecc@ecc` (`install.sh`) — a plain `git clone` of ECC's GitHub `main` branch through Claude Code's own plugin mechanism, **not npm**, and **not version-pinned**: each fresh install or `claude plugin update ecc@ecc` resolves to whatever commit is HEAD on `main` at that moment. At verification time this resolved to `2.2.2` (68 agents, 386 skills per `claude plugin details ecc@ecc`). A published npm package `ecc-universal@2.2.1` (286 skills) also exists, but Groundwork does not install it or depend on it in any way — an earlier draft of this document conflated the two; see `openspec/changes/groundwork-2-enterprise-sre/design.md` §A.6 for the correction and evidence. OpenSpec, by contrast, genuinely installs from npm (`npm install -g @fission-ai/openspec@latest`) and was `1.13.2` as of the same date (Groundwork's own compatibility testing was last done against `1.12.0`); `openspec list --json`/`openspec status --all --json`, which Groundwork's continuation design depends on, are confirmed present and current through `1.13.2`. `setup.sh --verify` reports the installed OpenSpec version next to the version last verified here (no live network call, so drift is visible without adding a network dependency to every install run) and the installed ECC plugin version from `claude plugin list`.
 
 ## The three rules
 
@@ -32,7 +40,7 @@ Groundwork does not replace any upstream project's job. It exists because, teste
 |---|---|
 | `rules/engineering-workflow.md` | Tier classification (TRIVIAL / STANDARD / MATERIAL); the execution order UNDERSTAND → DESIGN → IMPLEMENT → TEST → INDEPENDENT REVIEW → FIX MUST FIX → VERIFY → RUNTIME VALIDATE → REPORT; the state table for existing projects; the completion status block; the six owner-decision triggers (autonomy); §6 execution model (main session / subagents / Agent Teams); §7 continuation procedure |
 | `rules/architecture-quality.md` | The governing design principle; quality dimensions as decision criteria; the pre-MATERIAL questions; the variation-point rule; no abstraction without a reason |
-| `rules/evidence-policy.md` | Evidence priority; VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / RUNTIME VALIDATION REQUIRED; the six-field DECISION record; source rules; the validation ladder; the completion-evidence table; the RCA rule; repository-wins-over-memory |
+| `rules/evidence-policy.md` | Evidence priority; VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / CONFLICTING EVIDENCE / UNKNOWN / RUNTIME VALIDATION REQUIRED (extended 2.0 — see CHANGELOG); the six-field DECISION record; source rules; the validation ladder; the completion-evidence table; the RCA rule (now requires UNKNOWN/CONFLICTING EVIDENCE rather than a softened guess when the chain doesn't support a cause); repository-wins-over-memory |
 
 Every line in these files is paid in every session (Claude Code loads `~/.claude/rules/**/*.md` at launch), so they are written as short imperative lines, and anything a hook can enforce is a hook instead.
 
@@ -46,7 +54,7 @@ Every line in these files is paid in every session (Claude Code loads `~/.claude
 
 ## Onboarding wrapper (1.5.x)
 
-`setup.sh` adds nothing to the installation logic. It first checks prerequisites per OS — Claude Code must already be present (never installed by the script); missing git, Node 18+/npm or Python 3.10+ are installed with the official packages (Homebrew on macOS, apt/dnf/apk on Linux) only after the user agrees or passes `--install-prereqs`, and the check is repeated afterwards. It then backs up the whole config dir (APFS clonefile when available), asks three questions, calls `install.sh`, `scripts/merge_settings.py --profile`, `groundwork_report.py schedule` and `generate`, then verifies read-only. `--rollback` never deletes: the current dir is renamed to `<dir>-groundwork-disabled-<ts>`, then the newest unambiguous backup (same `source=` in `BACKUP-INFO.txt`) is copied back. `--uninstall` runs `uninstall.sh`.
+`setup.sh` adds nothing to the installation logic. It first checks prerequisites per OS — Claude Code must already be present (never installed by the script); missing git, Node 20.19+/npm or Python 3.10+ are installed with the official packages (Homebrew on macOS, apt/dnf/apk on Linux) only after the user agrees or passes `--install-prereqs`, and the check is repeated afterwards. It then backs up the whole config dir (APFS clonefile when available), asks three questions, calls `install.sh`, `scripts/merge_settings.py --profile`, `groundwork_report.py schedule` and `generate`, then verifies read-only. `--rollback` never deletes: the current dir is renamed to `<dir>-groundwork-disabled-<ts>`, then the newest unambiguous backup (same `source=` in `BACKUP-INFO.txt`) is copied back. `--uninstall` runs `uninstall.sh`.
 
 ## Health dashboard (1.4.0)
 
@@ -102,7 +110,7 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 | Evidence labels, validation ladder, runtime-validation rule | Advisory |
 | Execution model choice (main / subagent / team) | Advisory; the platform itself gates team spawning on `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and interactivity |
 | Project snapshot at session start | **Injected** — `hooks/groundwork_session_snapshot.py`, a SessionStart hook. Deterministic facts, framed as data (explicit ▼/▲ boundary, per-field caps, control characters stripped). This *mitigates* prompt injection from hostile branch/commit/file names; it cannot eliminate it, because the text is still shown to the model |
-| Independent review before a MATERIAL change is "done" | **Enforced** — `hooks/require_material_review.py`, a Stop hook. Residual gameability: a call merely *named* "…review…" satisfies it; the gate proves a review-shaped delegation happened, not its quality |
+| Independent review before a MATERIAL change is "done" | **Enforced** — `hooks/require_material_review.py`, a Stop hook. Extended 2.0: if the reviewer emits the `REVIEW RESULT` block (`output-contract.md`), the gate also requires the *most recent* review's own verdict to report zero MUST FIX findings — an edit and a validation re-run afterward are not, by themselves, sufficient; a fresh review is structurally required. Without the block, degrades to the original presence-only check. Residual gameability: a call merely *named* "…review…" satisfies presence; a reviewer could self-report `Must-fix: 0` without a genuine fix — the gate proves a review-shaped delegation happened and what it reported, not that the review was thorough |
 | No direct push to main/master/production, no force-push | **Enforced** for every `git push` the parser can see — `hooks/block_protected_push.py`, a PreToolUse hook: shell chains, `sh/bash/zsh -c`, `eval`, `HEAD`/`@`, multi-refspec, `:branch` deletion, `--all`/`--mirror`. Not parsed: other wrappers (`xargs`, `python -c`, a script that pushes) and non-exact branch names (`Main`, `release/1.2`). Claude Code's own Bash permission prompt is the backstop for those |
 | Investigate before first edit of a file / destructive Bash | **Enforced** — ECC's own GateGuard hook |
 | No `--no-verify` git bypass | **Enforced** — ECC's own `block-no-verify` hook |
@@ -113,10 +121,11 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 On every `Stop` event:
 1. Look for `openspec/changes/*/tasks.md` under the current working directory where every checkbox is `[x]`.
 2. Of those, keep only the ones `git status` shows as dirty (uncommitted/untracked) — i.e. this session's own fresh work, not an old change someone already reviewed and merged.
-3. If any remain, scan the session transcript for a reviewer-shaped call: an `Agent`/`Task` tool call whose `subagent_type` or `name` contains "review", or a `Skill` call whose name contains "review". `name` matters because current Claude Code launches Agent Team teammates and named subagents through the same `Agent` tool, often with no reviewer-specific `subagent_type`. The free-text `description` deliberately does not count — an unrelated "Review existing tests" exploration would otherwise satisfy the gate by coincidence.
-4. Found → allow the Stop. Not found → block, naming the change and what's missing. Claude Code stops re-running any Stop hook after 8 consecutive blocks, so the gate can never trap a session.
+3. If any remain, scan the session transcript in order for every reviewer-shaped call: an `Agent`/`Task` tool call whose `subagent_type` or `name` contains "review", or a `Skill` call whose name contains "review". `name` matters because current Claude Code launches Agent Team teammates and named subagents through the same `Agent` tool, often with no reviewer-specific `subagent_type`. The free-text `description` deliberately does not count — an unrelated "Review existing tests" exploration would otherwise satisfy the gate by coincidence.
+4. None found → block, naming the change and what's missing (unchanged from 1.x).
+5. **(2.0)** One or more found → for each, look for its own `REVIEW RESULT` block (`output-contract.md`) in its tool result. If the *most recent* review-shaped call's own result reports `Must-fix: 0` (or no parseable block at all — legacy fallback) → allow. If it reports `Must-fix: N > 0` → block, naming the count and whether a follow-up edit and a validation re-run (`groundwork_telemetry.py`'s own `TEST_CMD` pattern, reused) have been observed since — an edit and a re-test are not, by themselves, sufficient; only a *further*, fresh review-shaped call whose own result reports zero remaining findings clears the gate, because the check always evaluates the transcript's most recent review verdict.
 
-Fails open on any error (no git, no `openspec/` directory, unreadable transcript). Reviewer *selection* is untouched — any reviewer-shaped call satisfies the gate. Groundwork enforces that independent review happened, not which specific reviewer ran it.
+Claude Code stops re-running any Stop hook after 8 consecutive blocks, so the gate can never trap a session. Fails open on any error (no git, no `openspec/` directory, unreadable transcript, unparseable review result). Reviewer *selection* is untouched — any reviewer-shaped call satisfies presence; the gate additionally proves what the most recent one's own self-reported verdict was, when it reported one, not that the review was thorough or that the fix is correct.
 
 ## `groundwork_session_snapshot.py` — what continuation is built on
 
@@ -127,6 +136,29 @@ Continuation itself is the rule in `engineering-workflow.md` §7: reconstruct fr
 ## Execution model — how Claude chooses main / subagent / team
 
 `engineering-workflow.md` §6. Main session for sequential work sharing context; subagents for isolated investigation, verbose reads, and independent judgment (reviews); an Agent Team only for two or more genuinely independent workstreams with separate file ownership, sized 2–4, with a one-line justification, specialists derived from the task (reusing existing subagent definitions), and the lead synthesizing. When teams are disabled or the session is non-interactive, the same decomposition runs on subagents. Groundwork adds no orchestration code: the Agent tool, `SendMessage`, the task list and the platform's own hooks are the runtime.
+
+## Capability ownership (2.0)
+
+Every Groundwork capability has exactly one owner. No two components define the same contract — this is checked explicitly during design and again at each phase's independent review, not just asserted. This is the same discipline `architecture-quality.md` §4 already states generally ("no abstraction, layer, plugin point, framework, or option without a concrete reason tied to a requirement or evidence") applied specifically to capability ownership — no new rule mechanism, just this table making the existing anti-fragmentation principle's outcome explicit and checkable. Summary (full detail and rationale: `openspec/changes/groundwork-2-enterprise-sre/design.md` §J, the authoritative source — this table is a pointer, not a second copy, and is not repeated in full to avoid drift):
+
+| Capability | Owner | Notes |
+|---|---|---|
+| WHAT/WHY, acceptance criteria for MATERIAL work | OpenSpec | Unchanged |
+| Agent/subagent/team execution primitive | Claude Code | Groundwork adds no orchestration code |
+| Task routing (10 categories) | Groundwork (`rules/task-routing.md`) | Unchanged in 2.0 |
+| Output truth (evidence, validation, completion) | Groundwork (`rules/output-contract.md`) | Never owned by a native output style — see design.md §H |
+| Evidence taxonomy | Groundwork (`rules/evidence-policy.md`) | Extended 2.0: `CONFLICTING EVIDENCE`, `UNKNOWN` |
+| Independent review (presence) | Groundwork (`hooks/require_material_review.py`) | Unchanged mechanism |
+| Protected-branch/push safety | Groundwork (`hooks/block_protected_push.py`) | Unchanged |
+| Session continuity snapshot | Groundwork (`hooks/groundwork_session_snapshot.py`) | Unchanged mechanism |
+| Telemetry | Groundwork (`hooks/groundwork_telemetry.py`) | Unchanged |
+| Health dashboard | Groundwork (`scripts/groundwork_report.py`) | Unchanged |
+| Installer/upgrade/rollback | Groundwork (`install.sh`/`setup.sh`) | Strengthened 2.0: corrected Node floor, enforced in `install.sh` itself |
+| ECC's specialist agents/skills | ECC | Installed, not forked or vendored |
+| MCP/external tool access | The task's own environment | Groundwork installs nothing by default |
+| Credential handling | The user's own MCP/CLI configuration | Never Groundwork |
+
+This table is extended, not rewritten, as later 2.0 phases ship (ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
 
 ## Autonomy — when Groundwork asks versus proceeds
 

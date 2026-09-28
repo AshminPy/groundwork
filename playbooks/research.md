@@ -7,7 +7,7 @@ Answer a question about current state, technology, or fact with evidence the use
 1. State the exact question and what would count as an answer.
 2. Check the strongest sources first in `evidence-policy.md` §1 order: the repository or configuration in front of you, runtime output, official vendor documentation for the version in use, standards, upstream source, release notes, then established practice. Community sources last and labelled.
 3. Read what you cite. A page you did not read is not evidence.
-4. Separate VERIFIED findings from INFERENCE and ASSUMPTION; date-sensitive facts carry the date or version they apply to.
+4. Separate VERIFIED findings from INFERENCE and ASSUMPTION; date-sensitive facts carry the date or version they apply to. When two comparable-priority sources disagree, label it `CONFLICTING EVIDENCE` and name both rather than silently picking one; when nothing available answers the question, label it `UNKNOWN` (`evidence-policy.md` §2).
 5. Stop when the question is answered or when further searching cannot change the answer.
 
 ## Evidence

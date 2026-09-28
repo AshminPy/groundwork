@@ -245,17 +245,22 @@ def test_report() -> None:
         check("markdown snapshot carries the same headline numbers and trends", "Completion: 80% (16/20) ↑30%" in snap_md and "Gap rate: 20% (4/20) ↓30%" in snap_md, snap_md[:600])
 
         # -- schedules: all frequencies, replacement without duplicates, disabled removes
+        # GROUNDWORK_OS=darwin forces the launchd path deterministically regardless of the
+        # CI host's real platform (Linux sandboxes included) — the override is production
+        # code (scripts/groundwork_report.py's is_macos()), mirroring setup.sh's own
+        # GROUNDWORK_OS pattern; real users never set it, so real behavior is unchanged.
+        macos_env = {**env, "GROUNDWORK_OS": "darwin"}
         for freq, key in (("daily", {"Hour": 8, "Minute": 0}), ("weekly", {"Weekday": 1, "Hour": 8, "Minute": 0}),
                           ("monthly", {"Day": 1, "Hour": 8, "Minute": 0}), ("yearly", {"Month": 1, "Day": 1, "Hour": 8, "Minute": 0})):
-            r = run_cli(["schedule", freq], env)
+            r = run_cli(["schedule", freq], macos_env)
             plists = list(agents.glob("*.plist"))
             pl = plistlib.load(open(plists[0], "rb")) if plists else {}
             check(f"schedule {freq}: exactly one plist, correct calendar, snapshot command", r.returncode == 0 and len(plists) == 1 and pl.get("StartCalendarInterval") == key and pl["ProgramArguments"][-2:] == ["generate", "--snapshot"] and pl["Label"] == "com.groundwork.report", r.stdout + r.stderr + json.dumps(pl))
             check(f"schedule {freq}: config saved", json.loads((cfg / "groundwork" / "report.json").read_text())["schedule"] == freq)
-        r = run_cli(["schedule", "weekly", "--hour", "6"], env)
+        r = run_cli(["schedule", "weekly", "--hour", "6"], macos_env)
         pl = plistlib.load(open(next(agents.glob("*.plist")), "rb"))
         check("schedule --hour replaces in place (still one plist)", pl["StartCalendarInterval"]["Hour"] == 6 and len(list(agents.glob("*.plist"))) == 1)
-        r = run_cli(["schedule", "disabled"], env)
+        r = run_cli(["schedule", "disabled"], macos_env)
         check("schedule disabled: plist removed, config disabled", r.returncode == 0 and not list(agents.glob("*.plist")) and json.loads((cfg / "groundwork" / "report.json").read_text())["schedule"] == "disabled")
         m.is_macos = lambda: False
         try:

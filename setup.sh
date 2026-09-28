@@ -5,7 +5,7 @@
 #                                   install.sh → reporting schedule → verification → first dashboard
 #   ./setup.sh --non-interactive [--profile NAME] [--agent-teams | --no-agent-teams] [--schedule FREQ]
 #                                   [--install-prereqs | --no-install-prereqs]
-#   Claude Code must already be installed. The other prerequisites (git, Node 18+, npm, Python 3.10+)
+#   Claude Code must already be installed. The other prerequisites (git, Node 20.19+, npm, Python 3.10+)
 #   are detected per OS and, after you say yes, installed with the official packages:
 #   Homebrew on macOS, apt / dnf / apk on Linux.
 #   ./setup.sh --verify             read-only check of the current installation (changes nothing)
@@ -66,8 +66,10 @@ done
 OS_KIND="${GROUNDWORK_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"   # darwin | linux (override is for tests)
 PKG=""
 MISSING=()
-NODE_MIN=18
+NODE_MIN_MAJOR=20; NODE_MIN_MINOR=19   # matches OpenSpec's actual engines.node (>=20.19.0), not ECC's lower floor
 PY_MIN_MAJOR=3; PY_MIN_MINOR=10
+LAST_VERIFIED_OPENSPEC="1.13.2"   # OpenSpec is npm-pinned by version; a mismatch here means real upstream drift
+LAST_VERIFIED_ECC="2.2.2"   # ECC installs unpinned from GitHub main (see docs/ARCHITECTURE.md) — this is only the version Groundwork's docs were last checked against, not a pin; a mismatch is expected over time, not an error
 
 detect_pm() {
   case "$OS_KIND" in
@@ -89,7 +91,15 @@ refresh_path() {  # make freshly installed tools visible in this run
   hash -r 2>/dev/null || true
 }
 
-node_ok() { command -v node >/dev/null 2>&1 && [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge "$NODE_MIN" ]; }
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  local major minor
+  major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  minor="$(node -p 'process.versions.node.split(".")[1]' 2>/dev/null || echo 0)"
+  [ "$major" -gt "$NODE_MIN_MAJOR" ] && return 0
+  [ "$major" -eq "$NODE_MIN_MAJOR" ] && [ "$minor" -ge "$NODE_MIN_MINOR" ] && return 0
+  return 1
+}
 py_ok()   { command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.exit(0 if sys.version_info >= ($PY_MIN_MAJOR, $PY_MIN_MINOR) else 1)" 2>/dev/null; }
 
 find_missing() {
@@ -106,7 +116,7 @@ describe_missing() {
   for t in "${MISSING[@]}"; do
     case "$t" in
       git) say "  - git" ;;
-      node) if command -v node >/dev/null 2>&1; then say "  - Node.js >= $NODE_MIN (found $(node --version 2>/dev/null))"; else say "  - Node.js >= $NODE_MIN (with npm)"; fi ;;
+      node) if command -v node >/dev/null 2>&1; then say "  - Node.js >= $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0 (found $(node --version 2>/dev/null))"; else say "  - Node.js >= $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0 (with npm)"; fi ;;
       npm) say "  - npm" ;;
       python3) if command -v python3 >/dev/null 2>&1; then say "  - Python $PY_MIN_MAJOR.$PY_MIN_MINOR+ (found $(python3 --version 2>&1))"; else say "  - Python $PY_MIN_MAJOR.$PY_MIN_MINOR+"; fi ;;
       claude) say "  - Claude Code (https://code.claude.com/docs/en/setup)" ;;
@@ -158,7 +168,7 @@ check_prereqs() {
   esac
   # a Node.js that exists but is too old is left alone: it is usually managed by nvm/asdf/volta
   if command -v node >/dev/null 2>&1 && ! node_ok; then
-    die "Node.js $(node --version) is older than $NODE_MIN. Upgrade it with your Node version manager (nvm/asdf/volta) or from https://nodejs.org/en/download, then run ./setup.sh again (nothing was changed)"
+    die "Node.js $(node --version) is older than $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0. Upgrade it with your Node version manager (nvm/asdf/volta) or from https://nodejs.org/en/download, then run ./setup.sh again (nothing was changed)"
   fi
   if [ "$PKG" = none ]; then
     if [ "$OS_KIND" = darwin ]; then
@@ -196,6 +206,13 @@ check_prereqs() {
   refresh_path
   find_missing
   if [ ${#MISSING[@]} -gt 0 ]; then
+    case " ${MISSING[*]} " in
+      *" node "*)
+        if command -v node >/dev/null 2>&1 && ! node_ok; then
+          die "Node.js is now installed ($(node --version)) but it is still older than $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0 — this is expected from $PKG's default package on many Linux distros, which lags upstream Node releases. A new terminal will not fix this. Install a current Node with a version manager (nvm: https://github.com/nvm-sh/nvm, or asdf/volta) or from the NodeSource repository (https://github.com/nodesource/distributions), then run ./setup.sh again."
+        fi
+        ;;
+    esac
     say "Still missing after installation:"; describe_missing
     die "open a new terminal (so PATH picks up the new tools) and run ./setup.sh again"
   fi
@@ -334,9 +351,38 @@ verify_install() {
   reg="$(hooks_registered)"
   if [ "$hooks" -eq 4 ] && [ "$reg" -ge 4 ]; then line "Hooks" PASS "4 hook files, $reg registered in settings.json"; else line "Hooks" FAIL "$hooks of 4 hook files, $reg registered"; fi
   if command -v claude >/dev/null 2>&1; then
-    if claude plugin list 2>/dev/null | grep -q "ecc@ecc"; then line "ECC" PASS "plugin ecc@ecc"; else line "ECC" "NOT CONFIGURED" "plugin ecc@ecc not listed by 'claude plugin list'"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
+    local ecc_list ecc_v
+    ecc_list="$(claude plugin list 2>/dev/null)" || true
+    if printf '%s\n' "$ecc_list" | grep -q "ecc@ecc"; then
+      # `|| true` on the *statement*: under pipefail, a `grep 'Version:'` with no match (e.g. an
+      # older/differently-formatted `claude plugin list`) fails the whole pipeline and would
+      # otherwise silently abort --verify under set -e (same class of bug as the OpenSpec row above).
+      ecc_v="$(printf '%s\n' "$ecc_list" | grep -A1 'ecc@ecc' | grep 'Version:' | head -1 | awk '{print $2}')" || true
+      if [ -z "$ecc_v" ]; then
+        line "ECC" PASS "plugin ecc@ecc installed (version not parsed from 'claude plugin list' output — run 'claude plugin details ecc@ecc' to see it)"
+      elif [ "$ecc_v" != "$LAST_VERIFIED_ECC" ]; then
+        # Expected over time, not an error: ECC installs unpinned from GitHub main (docs/ARCHITECTURE.md).
+        line "ECC" PASS "plugin ecc@ecc $ecc_v (Groundwork's docs were last checked against $LAST_VERIFIED_ECC — ECC has no version pin, so this drifting is normal, not a bug)"
+      else
+        line "ECC" PASS "plugin ecc@ecc $ecc_v"
+      fi
+    else line "ECC" "NOT CONFIGURED" "plugin ecc@ecc not listed by 'claude plugin list'"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
   else line "ECC" FAIL "'claude' not on PATH"; fi
-  if command -v openspec >/dev/null 2>&1; then line "OpenSpec" PASS "$(openspec --version 2>/dev/null | head -1)"; else line "OpenSpec" "NOT CONFIGURED" "'openspec' not on PATH"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
+  line "Node" $(node_ok && echo PASS || echo FAIL) "$(command -v node >/dev/null 2>&1 && node --version || echo 'not found'), need >= $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0 (OpenSpec's own requirement)"
+  if command -v openspec >/dev/null 2>&1; then
+    local os_v
+    os_v="$(openspec --version 2>/dev/null | head -1)" || true   # under set -e this command substitution's own
+    # failure would otherwise abort --verify entirely (found by independent review of Phase 1) —
+    # `|| true` on the *statement* neutralises that; os_v itself still correctly ends up empty.
+    if [ -z "$os_v" ]; then
+      line "OpenSpec" FAIL "'openspec' is on PATH but did not report a version — often means Node is too old to run it ($(node --version 2>/dev/null || echo 'no node')); see the Node row above"
+      VERIFY_FAILS=$((VERIFY_FAILS + 1))
+    elif [ "$os_v" != "$LAST_VERIFIED_OPENSPEC" ]; then
+      line "OpenSpec" PASS "$os_v (last verified here: $LAST_VERIFIED_OPENSPEC — no network check performed; if OpenSpec commands misbehave, compare against its current release notes)"
+    else
+      line "OpenSpec" PASS "$os_v"
+    fi
+  else line "OpenSpec" "NOT CONFIGURED" "'openspec' not on PATH"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
   if [ -f "$CLAUDE_DIR/hooks/groundwork_telemetry.py" ] && [ "$reg" -ge 4 ]; then
     tel=0; [ -f "$CLAUDE_DIR/groundwork/telemetry/events.jsonl" ] && tel="$(wc -l < "$CLAUDE_DIR/groundwork/telemetry/events.jsonl" | tr -d ' ')"
     line "Telemetry" PASS "hook registered, ${tel:-0} records, profile: $(settings_env GROUNDWORK_PROFILE | sed 's/^$/not set/')"

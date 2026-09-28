@@ -9,7 +9,7 @@ Find the real cause of a failure with evidence, apply or recommend the smallest 
 3. Gather evidence: logs, events, config, code, recent changes (`git log`), environment differences; compare a working path with the failing path side by side.
 4. Separate FACT (seen in output/code/logs) from INFERENCE and HYPOTHESIS. A symptom or state (`CrashLoopBackOff`, 502, OOMKilled) is not a root cause.
 5. List the plausible hypotheses; test the highest-value one first with a check that can disprove it.
-6. Declare a root cause only when the evidence chain supports it (`evidence-policy.md` §7); otherwise keep it a hypothesis and say so.
+6. Declare a root cause only when the evidence chain supports it (`evidence-policy.md` §7); otherwise keep it a hypothesis and say so — label it `UNKNOWN` when nothing available determines it, or `CONFLICTING EVIDENCE` when two findings point different ways and nothing adjudicates between them.
 7. Apply or recommend the smallest safe fix that addresses the verified cause — no stacked unrelated fixes, no retries/sleeps/suppression without a verified reason.
 8. Validate: the original failing path now succeeds, related tests pass, runtime shows the expected behaviour.
 9. Check for material regression risk and for siblings of the same defect (same pattern elsewhere).

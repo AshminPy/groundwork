@@ -40,7 +40,14 @@ echo ""
 
 # ---- 0. Preconditions -------------------------------------------------------
 command -v claude >/dev/null 2>&1 || { echo "ERROR: 'claude' (Claude Code) not found on PATH. Install it first: https://claude.com/claude-code"; exit 1; }
-command -v node >/dev/null 2>&1 || { echo "ERROR: Node.js not found on PATH. Groundwork needs Node >=18 (ECC's hooks and the OpenSpec CLI both require it)."; exit 1; }
+NODE_MIN_MAJOR=20; NODE_MIN_MINOR=19   # OpenSpec's actual engines.node requirement (>=20.19.0); ECC itself only needs >=18
+command -v node >/dev/null 2>&1 || { echo "ERROR: Node.js not found on PATH. Groundwork needs Node >=$NODE_MIN_MAJOR.$NODE_MIN_MINOR.0 (the OpenSpec CLI requires it; ECC's own floor is lower, >=18)."; exit 1; }
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]' 2>/dev/null || echo 0)"
+if [ "$NODE_MAJOR" -lt "$NODE_MIN_MAJOR" ] || { [ "$NODE_MAJOR" -eq "$NODE_MIN_MAJOR" ] && [ "$NODE_MINOR" -lt "$NODE_MIN_MINOR" ]; }; then
+  echo "ERROR: Node.js $(node --version) is older than $NODE_MIN_MAJOR.$NODE_MIN_MINOR.0. The OpenSpec CLI requires it. Upgrade with your Node version manager (nvm/asdf/volta) or from https://nodejs.org/en/download."
+  exit 1
+fi
 command -v npm >/dev/null 2>&1 || { echo "ERROR: npm not found on PATH."; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found on PATH (Groundwork's own hooks are Python)."; exit 1; }
 

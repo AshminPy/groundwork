@@ -104,6 +104,46 @@ def write_transcript(tmp: Path, name: str, tool_uses: list[dict] | None) -> Path
     return path
 
 
+def write_review_events(tmp: Path, name: str, events: list[dict]) -> Path:
+    """Build a transcript from ordered events for the Groundwork 2.0 D3 (review-evidence
+    strengthening) tests. Each event is one of:
+      {"kind": "review", "id": "r1", "review_name": "Task", "input": {...}, "result": "<text>"|None}
+        -> a tool_use (with id) followed by its tool_result carrying `result` (unless None,
+           which simulates a review-shaped call whose result never made it into the transcript).
+      {"kind": "edit"}  -> an Edit tool_use (no result needed)
+      {"kind": "test"}  -> a Bash tool_use running a pytest-shaped command (no result needed)
+      {"kind": "bash", "command": "..."}  -> an arbitrary non-test Bash call
+    """
+    path = tmp / name
+    lines = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+              "input": {"command": "echo hi"}}]}}]
+    for i, ev in enumerate(events):
+        kind = ev["kind"]
+        if kind == "review":
+            tid = ev.get("id", f"r{i}")
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tid, "name": ev.get("review_name", "Task"), "input": ev.get("input", {"subagent_type": "code-reviewer"})}
+            ]}})
+            if ev.get("result") is not None:
+                lines.append({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": tid, "content": ev["result"]}
+                ]}})
+        elif kind == "edit":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "x.py", "old_string": "a", "new_string": "b"}}
+            ]}})
+        elif kind == "test":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "python3 -m pytest tests -q"}}
+            ]}})
+        elif kind == "bash":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": ev.get("command", "ls")}}
+            ]}})
+    path.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+    return path
+
+
 # --------------------------------------------------------------------------- review gate
 
 def test_review_gate() -> None:
@@ -220,6 +260,152 @@ def test_review_gate() -> None:
     finish()
 
 
+# ------------------------------------------------- review gate, strengthened (2.0, Decision D3)
+
+def test_review_gate_must_fix_strengthening() -> None:
+    print("require_material_review.py — MUST FIX -> fresh re-review (2.0)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        def fresh_repo():
+            repo = make_repo(tmp, f"repo-{fresh_repo.n}")
+            fresh_repo.n += 1
+            write_tasks(repo, done=True)
+            return repo
+        fresh_repo.n = 0
+
+        clean_result = "Looks good.\n\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\n"
+        problem_result = "Found issues.\n\nREVIEW RESULT\nVerdict: changes-required\nMust-fix: 2\nFindings: null check, timeout\n"
+
+        # 1. Single review, structured block, Must-fix: 0 -> allow (explicit structured case,
+        #    distinct from the legacy no-block cases already covered in test_review_gate).
+        repo = fresh_repo()
+        t = write_review_events(tmp, "clean.jsonl", [
+            {"kind": "review", "id": "r1", "result": clean_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("structured Must-fix: 0 -> allow", out == "", out)
+
+        # 2. MUST FIX found, nothing at all afterward -> BLOCK, message says so plainly.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-nothing.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, no follow-up at all -> block", '"decision": "block"' in out and "2 unresolved MUST FIX" in out
+              and "no follow-up edit has been observed yet" in out and "validation has not been re-run yet" in out, out)
+
+        # 3. MUST FIX found, edit made, but no validation re-run and NO fresh review -> still BLOCK
+        #    (this is the exact first-pass weakness the owner flagged: edit alone is not enough).
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-edit-only.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit only, no re-review -> block", '"decision": "block"' in out
+              and "a follow-up edit was observed" in out and "validation has not been re-run yet" in out, out)
+
+        # 4. MUST FIX found, edit + validation re-run, but still NO fresh independent review ->
+        #    still BLOCK. This is the core strengthening: "Edit -> Test alone is NOT sufficient
+        #    evidence of resolution" (owner's exact wording) — the most recent review call in the
+        #    transcript is still the one that reported 2 unresolved findings.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-edit-test-no-rereview.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit + validation re-run, no fresh review -> still block", '"decision": "block"' in out
+              and "the affected validation was re-run" in out
+              and "a follow-up edit was observed" in out, out)
+
+        # 5. MUST FIX found, edit + test + a FRESH independent review whose own result shows
+        #    Must-fix: 0 -> allow. This is the full strengthened contract satisfied end to end.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-then-clean-rereview.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+            {"kind": "review", "id": "r2", "result": clean_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX -> edit -> test -> fresh clean review -> allow", out == "", out)
+
+        # 6. MUST FIX found, then a SECOND review that ALSO reports Must-fix > 0 -> still block,
+        #    with the updated (smaller) count, proving the gate always looks at the *most recent*
+        #    review's own verdict, not just "a second review happened at all".
+        repo = fresh_repo()
+        second_problem = "REVIEW RESULT\nVerdict: changes-required\nMust-fix: 1\nFindings: one remains\n"
+        t = write_review_events(tmp, "mf-then-still-mf.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+            {"kind": "review", "id": "r2", "result": second_problem},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX -> fresh review still finds 1 -> block with updated count", '"decision": "block"' in out and "1 unresolved MUST FIX" in out, out)
+
+        # 7. Reviewer does not emit a REVIEW RESULT block at all (most reviewers don't know this
+        #    format yet) -> degrades to legacy presence-only behavior -> allow, never stricter
+        #    than the pre-2.0 gate.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "no-block-at-all.jsonl", [
+            {"kind": "review", "id": "r1", "result": "Looks fine to me, no notes."},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("reviewer emits no REVIEW RESULT block -> legacy allow", out == "", out)
+
+        # 8. Reviewer's tool_result never appears in the transcript at all (e.g. truncated/lag) ->
+        #    same graceful legacy fallback, not a crash or an incorrect block.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "no-result-at-all.jsonl", [
+            {"kind": "review", "id": "r1", "result": None},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("review call with no tool_result at all -> legacy allow, no crash", out == "", out)
+
+        # 9. A non-test Bash command after a MUST FIX finding must NOT count as "validation re-run".
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-irrelevant-bash.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "bash", "command": "git status"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit + unrelated bash (not a test) -> still says validation not re-run", '"decision": "block"' in out
+              and "validation has not been re-run yet" in out, out)
+
+        # 10. Hook stdin is valid JSON but not an object (a list/string/number/null) -> fail open,
+        #     never a crash. Found by independent review of this phase: `data.get("cwd")` on a
+        #     non-dict raised AttributeError, an uncaught exception and exit 1 (a hard crash, not
+        #     the fail-open behavior this hook's own docstring promises).
+        for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
+            result = subprocess.run(["python3", str(REVIEW_HOOK)], input=bad_stdin,
+                                     capture_output=True, text=True, timeout=15)
+            check(f"non-dict JSON stdin ({bad_stdin}) -> fail open, no crash",
+                  result.returncode == 0 and result.stdout.strip() == "" and result.stderr == "",
+                  f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
+
+        # 11. A MUST FIX finding is correctly parsed, but a later transcript line is valid JSON
+        #     that is not an object (e.g. a stray array) — this must NOT wipe out the already-
+        #     parsed finding and silently fail open to allow. Found by independent review: the
+        #     scan's outer try/except caught the AttributeError from calling .get() on a non-dict
+        #     entry and discarded every review already parsed, defaulting to allow — the unsafe
+        #     direction, and a regression versus the pre-2.0 gate's safer default-block behavior.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-then-anomalous-line.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+        ])
+        with open(t, "a") as f:
+            f.write(json.dumps([1, 2, 3]) + "\n")
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX finding survives a later anomalous (non-dict) transcript line -> still block",
+              '"decision": "block"' in out and "2 unresolved MUST FIX" in out, out)
+    finish()
+
+
 # --------------------------------------------------------------------------- push guard
 
 def test_push_guard() -> None:
@@ -257,6 +443,16 @@ def test_push_guard() -> None:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
             denied = '"permissionDecision": "deny"' in out
             check(f"{cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
+
+        # Hook stdin is valid JSON but not an object -> fail open, never a crash. Found by the
+        # Phase 1/2/4 re-review: this hook had the identical unguarded `data.get(...)` bug that
+        # require_material_review.py was fixed for in the same round — same fix here.
+        for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
+            result = subprocess.run(["python3", str(PUSH_HOOK)], input=bad_stdin,
+                                     capture_output=True, text=True, timeout=15)
+            check(f"non-dict JSON stdin ({bad_stdin}) -> fail open, no crash",
+                  result.returncode == 0 and result.stdout.strip() == "" and result.stderr == "",
+                  f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
     finish()
 
 
@@ -400,6 +596,140 @@ def test_session_snapshot() -> None:
     finish()
 
 
+# ------------------------------------- investigation continuity (2.0, Decision D2, Option B)
+
+def test_investigation_continuity() -> None:
+    print("groundwork_session_snapshot.py — investigation continuity (2.0, Decision D2)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        repo = make_repo(tmp, "inv-repo")
+        cfg = tmp / "cfg"
+        env = {"CLAUDE_CONFIG_DIR": str(cfg)}
+
+        # 1. No investigation file yet -> names the deterministic path, does not invent content.
+        out = run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env)
+        text = snapshot_text(out)
+        check("no investigation file -> names where one would be", "no saved investigation file for this repo yet" in text and "would be at" in text, text)
+        m = re.search(r"would be at (\S+\.md)", text)
+        check("path is under the investigations dir", m is not None and "groundwork/investigations/" in m.group(1), text)
+        computed_path = Path(m.group(1)) if m else None
+
+        # 2. The exact same path is computed again on a second call (determinism — required so a
+        #    file the model writes on one turn is found on the next, same repo, same path).
+        out2 = run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env)
+        m2 = re.search(r"would be at (\S+\.md)", snapshot_text(out2))
+        check("investigation path is deterministic across calls", m2 is not None and m2.group(1) == str(computed_path), f"{m} vs {m2}")
+
+        # 3. A file written at exactly that path is picked up, with the rejected-hypothesis
+        #    invariant instruction attached — the core D2 acceptance criterion's supporting fact.
+        computed_path.parent.mkdir(parents=True, exist_ok=True)
+        computed_path.write_text(
+            "# Investigation: intermittent 502s\n\n"
+            "## Rejected hypotheses\n"
+            "- Upstream timeout too low — REJECTED: timeout is 30s, failures happen at 2s\n\n"
+            "## Active hypotheses\n"
+            "- DB connection pool exhaustion\n\n"
+            "## Next action\n"
+            "Add pool-wait-time metric\n"
+        )
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("saved investigation file content is surfaced", "Rejected hypotheses" in text and "Upstream timeout too low" in text and "REJECTED" in text, text)
+        check("rejected-stays-rejected instruction is attached", "stays rejected unless new evidence explicitly reopens it" in text, text)
+        check("hint-not-fact framing present (evidence-policy.md §8)", "hints to verify against current repository/runtime evidence, never fact on their own" in text, text)
+
+        # 4. An oversized investigation file is truncated with its own marker, not silently
+        #    dropped and not allowed to crowd out git/OpenSpec facts.
+        computed_path.write_text("# Investigation\n" + ("x" * 5000))
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("oversized investigation file is truncated with a marker", "truncated here" in text, text[-300:])
+        check("truncated investigation content still fits the overall snapshot cap", len(text) <= 2500, str(len(text)))
+
+        # 5. Empty file -> treated as if absent (no empty section injected).
+        computed_path.write_text("   \n\n  ")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("whitespace-only investigation file -> no investigation section injected", "investigation continuity:" not in text, text)
+
+        # 6. Non-git directory -> no investigation facts at all (no stable identity to key on),
+        #    and no crash.
+        plain = tmp / "plain-dir"
+        plain.mkdir()
+        (plain / "openspec" / "changes" / "c").mkdir(parents=True)
+        (plain / "openspec" / "changes" / "c" / "tasks.md").write_text("- [ ] a\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(plain)}, env=env))
+        check("non-git dir -> no investigation continuity section", "investigation continuity" not in text, text)
+
+        # 7. Two different repos with the same basename get two different files (no collision).
+        outer = tmp / "outer1" / "inv-repo"
+        outer.mkdir(parents=True)
+        git(outer, "init", "-q", "-b", "main")
+        git(outer, "commit", "-q", "--allow-empty", "-m", "init")
+        outer2 = tmp / "outer2" / "inv-repo"
+        outer2.mkdir(parents=True)
+        git(outer2, "init", "-q", "-b", "main")
+        git(outer2, "commit", "-q", "--allow-empty", "-m", "init")
+        p1 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer)}, env=env))).group(1)
+        p2 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer2)}, env=env))).group(1)
+        check("same-basename repos get distinct investigation paths", p1 != p2, f"{p1} vs {p2}")
+
+        # 8. Realistic multi-section file, Rejected hypotheses buried after long earlier sections
+        #    (matching the template order, not an adversarial construct) — this is the exact
+        #    failure mode independent review found: a plain prefix truncation dropped "Rejected
+        #    hypotheses" entirely once Proven facts/Evidence references/Decisions alone exceeded
+        #    the per-file budget, even though the file itself is a realistic size, not a blob.
+        realistic = (
+            "# Investigation: checkout 502s\n\n"
+            "## Proven facts\n" + "".join(f"- observed fact {i} with a realistic amount of descriptive detail\n" for i in range(15))
+            + "## Evidence references\n" + "".join(f"- logs/sample-{i}.txt lines 10-20\n" for i in range(10))
+            + "## Decisions\n" + "".join(f"- decision {i}: investigate this path first\n" for i in range(5))
+            + "## Rejected hypotheses\n- Upstream timeout too low — REJECTED: timeout is 30s, failures happen at 2s\n\n"
+            + "## Active hypotheses\n- DB connection pool exhaustion\n"
+        )
+        check("fixture is realistic-sized, not an adversarial blob", len(realistic) > 800, str(len(realistic)))  # > hook's MAX_INVESTIGATION_CHARS
+        computed_path.write_text(realistic)
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("Rejected hypotheses survives truncation even when buried after long earlier sections",
+              "Rejected hypotheses" in text and "REJECTED" in text and "Upstream timeout too low" in text, text)
+
+        # 9. A repository's git/OpenSpec facts must never be able to crowd the investigation
+        #    section out of the OVERALL snapshot cap entirely — independent review found this
+        #    happened even with a small, well-formed investigation file, because git/OpenSpec
+        #    facts alone (unrelated to the investigation file's own size) consumed the whole
+        #    budget first when investigation_facts() was appended after them. Proven structurally
+        #    (position-independent, not dependent on naturally growing git history to a specific
+        #    size): investigation content must appear in the assembled text before git facts do.
+        busy = tmp / "busy-repo"
+        busy.mkdir()
+        git(busy, "init", "-q", "-b", "main")
+        git(busy, "commit", "-q", "--allow-empty", "-m", "init")
+        busy_path = re.search(r"would be at (\S+\.md)",
+                               snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(busy)}, env=env))).group(1)
+        busy_path = Path(busy_path)
+        busy_path.parent.mkdir(parents=True, exist_ok=True)
+        busy_path.write_text("# Investigation: x\n\n## Rejected hypotheses\n- slow queries — REJECTED: measured 2ms\n## Active hypotheses\n- pool exhaustion\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(busy)}, env=env))
+        check("investigation section appears before git facts (protected from prefix truncation by git/OpenSpec content)",
+              "investigation continuity" in text and "git: branch" in text and text.index("investigation continuity") < text.index("git: branch"), text)
+        # The fixed per-call overhead (header/harness/DATA_START/cwd) plus a fully-inner-truncated
+        # investigation section (its own 800-char cap, plus intro line and marker) is comfortably
+        # under the real MAX_CHARS (2500) — the actual guarantee that matters: however much git/
+        # OpenSpec content a repository has, it is appended *after* this fixed+capped prefix, so it
+        # can only ever truncate itself, never the investigation section placed before it.
+        worst_case_investigation_prefix = text[: text.index("git: branch")]
+        check("investigation section's own worst-case size leaves real headroom under MAX_CHARS",
+              len(worst_case_investigation_prefix) < 2500 - 500, str(len(worst_case_investigation_prefix)))
+
+        # 10. Control characters in the investigation file are stripped, same as every other
+        #     field quoted into this hook's output (the file persists and replays into every
+        #     future session for the repo — a stronger vector than one-off commit metadata).
+        computed_path.write_bytes(b"# Investigation\n\x00\x1b[31m## Rejected hypotheses\n- x \x00REJECTED: y\r\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("control characters in investigation file are stripped", "\x00" not in text and "\x1b" not in text, repr(text[-400:]))
+        check("carriage return is stripped too (found by independent review: an earlier fix stripped \\x00-\\x08/\\x0b-\\x1f minus \\x0e-\\x1f, accidentally skipping \\r=0x0D)",
+              "\r" not in text, repr(text[-400:]))
+        check("content is still surfaced after stripping", "Rejected hypotheses" in text, text)
+    finish()
+
+
 # --------------------------------------------------------------------------- settings merge / unmerge
 
 def load(path: Path) -> dict:
@@ -540,7 +870,7 @@ if __name__ == "__main__":
     if shutil.which("git") is None:
         print("git not found on PATH — cannot run these tests")
         sys.exit(1)
-    for test in (test_review_gate, test_push_guard, test_session_snapshot, test_settings_merge, test_legacy_migration):
+    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_investigation_continuity, test_settings_merge, test_legacy_migration):
         try:
             test()
         except AssertionError:
