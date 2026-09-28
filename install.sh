@@ -57,12 +57,18 @@ if [ -n "$CLAUDE_VERSION" ]; then
 fi
 
 # ---- 1. ECC -------------------------------------------------------------
+# Pinned to a real, tested release tag (Groundwork 2.1) rather than floating `main` — `claude plugin
+# marketplace add owner/repo#ref` pins the clone to that ref (confirmed current on Claude Code's
+# plugin-marketplace path, 2026-09-28). Bump ECC_REF only after re-testing clean install/upgrade/
+# rollback/uninstall against the new tag; set GROUNDWORK_ECC_REF to override for a specific machine
+# (e.g. to track `main` again: GROUNDWORK_ECC_REF=main ./install.sh).
+ECC_REF="${GROUNDWORK_ECC_REF:-v2.2.1}"
 echo ""
-echo "-- Installing ECC (github.com/affaan-m/ECC) --"
+echo "-- Installing ECC (github.com/affaan-m/ECC, pinned to $ECC_REF) --"
 if claude plugin list 2>/dev/null | grep -q "ecc@ecc"; then
-  echo "ECC already installed — skipping (run 'claude plugin update ecc@ecc' to upgrade)."
+  echo "ECC already installed — skipping (run 'claude plugin update ecc@ecc' to upgrade within the pinned ref)."
 else
-  claude plugin marketplace add affaan-m/ECC
+  claude plugin marketplace add "affaan-m/ECC#$ECC_REF"
   claude plugin install ecc@ecc --scope user --config hook_profile=standard
 fi
 
@@ -101,6 +107,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
 else
   python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule "$SCHED" >/dev/null && echo "  report schedule: $SCHED recorded, but automatic runs need macOS launchd — on this OS run 'python3 ~/.claude/groundwork/bin/groundwork_report.py generate --snapshot' manually or from cron"
 fi
+# Capability configuration and Routines (Groundwork 2.1) — installed unconditionally, dormant
+# until a config.json exists (setup.sh's optional capability-selection flow writes one; without
+# it, groundwork_config.py falls back to the minimal profile and every routine stays disabled).
+cp "$HERE/scripts/groundwork_config.py" "$HERE/scripts/groundwork_routines.py" "$CLAUDE_DIR/groundwork/bin/"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_config.py" "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
+
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 

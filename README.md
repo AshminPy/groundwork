@@ -1,34 +1,31 @@
 # Groundwork
 
-**Version 2.0.0** — a small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.
+**A small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.**
 
 Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: five rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and four small deterministic hooks — a push guard, an enforced independent review for material changes, a session-start snapshot of the repository so a fresh session can continue an existing project, and a usage-telemetry recorder. That's the whole product: rule files, hooks, an installer. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
 
 Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) — see [CREDITS.md](CREDITS.md) for exactly what's original here versus what's installed from upstream.
 
-## Groundwork 2.0 — What's new
+## Version history
 
-Groundwork 2.0 moves from a lightweight engineering harness to a more complete evidence-first SRE/CloudOps workflow, on the same small-footprint model: rule text and composition first, new files only when nothing existing can satisfy the requirement. Full detail, live-validation evidence and exact test/task status: [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE-REPORT-2.0.md](docs/RELEASE-REPORT-2.0.md).
+**Groundwork 2.1** (current) added context engineering, capability resolution, scheduled Routines, a setup-time capability configurator, and ECC version pinning, on the same small-footprint model below — see [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) and [CHANGELOG.md](CHANGELOG.md) for full detail.
+
+**Groundwork 2.0 — what shipped** moved from a lightweight engineering harness to a more complete evidence-first SRE/CloudOps workflow, on the same small-footprint model: rule text and composition first, new files only when nothing existing can satisfy the requirement. Full detail, live-validation evidence and exact test/task status: [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE-REPORT-2.0.md](docs/RELEASE-REPORT-2.0.md).
 
 - **Repository-aware engineering** — before proposing infrastructure/platform/delivery work, Groundwork inspects the existing module/pipeline structure, naming and label conventions, environment organization, IAM/networking and state/backend patterns, CI/CD conventions, and the closest existing analogous implementation, and follows them unless they're demonstrably unsafe or broken.
 - **Dynamic engineering roles** — automatically reasons from an Infrastructure, Platform, Delivery, or Application Engineer perspective when the task calls for it, as a rule-text persona selected per task — never a permanent agent file, so there's no agent sprawl to maintain.
-- **Stronger evidence model** — adds `CONFLICTING EVIDENCE` and `UNKNOWN` to the existing VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / RUNTIME VALIDATION REQUIRED labels, so Claude can say evidence is insufficient or contradictory instead of forcing a conclusion.
+- **Stronger evidence model** — added `CONFLICTING EVIDENCE` and `UNKNOWN` to the evidence labels (see "Why this exists" below).
 - **Stronger independent review** — a MATERIAL change with a MUST FIX finding now requires fix → re-run the affected validation → a **fresh** independent re-review confirming the finding is resolved, not just an edit and a test run, before the change can be called complete.
-- **Investigation continuity** — for work not tracked by an OpenSpec change, a small, capped per-repository file (objective, proven facts, evidence, decisions, active/rejected hypotheses with reasons, files changed, validation results, blockers, next action) survives context compaction and fresh sessions — never chain-of-thought, and current repository/runtime evidence always outranks what was saved.
-- **Rejected hypotheses stay rejected** — unless new evidence is presented that actually contradicts the original reason, stated explicitly, not silently re-proposed as still-open.
+- **Investigation continuity** — for work not tracked by an OpenSpec change, a small, capped per-repository file (objective, proven facts, evidence, decisions, active/rejected hypotheses with reasons, files changed, validation results, blockers, next action) survives context compaction and fresh sessions — never chain-of-thought, and current repository/runtime evidence always outranks what was saved. Rejected hypotheses stay rejected unless new evidence actually contradicting the original reason is stated, not silently re-proposed as still-open.
 - **SRE/CloudOps workflow composition** — troubleshooting, RCA, deployment, validation, audit, and documentation compose the existing playbooks, curated ECC agents/skills, repository-understanding, and MCP/CLI tool access; this shipped zero new agent or skill files.
-- **Clearer execution boundaries** — read-only discovery stays always allowed; nonprod mutation explicitly authorized by the task proceeds under existing permissions; production, IAM, data-destructive, or paid-resource changes require explicit authorization, separated from a merely-reversible file edit. (A further tier of deterministic, naming-pattern-based guards for production/IAM operations was designed but deliberately not built this release — heuristic production-detection by name risks false confidence; see [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).)
+- **Clearer execution boundaries** — read-only discovery stays always allowed; nonprod mutation explicitly authorized by the task proceeds under existing permissions; production, IAM, data-destructive, or paid-resource changes require explicit authorization, separated from a merely-reversible file edit. (A further tier of deterministic, naming-pattern-based guards for production/IAM operations was designed but deliberately not built — heuristic production-detection by name risks false confidence; see [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).)
 - **Completion truth extended to builder work** — the existing Code / Tests / Reviewed / Merged / Deployed / Live-validated facts now explicitly cover infrastructure/platform/delivery work too, with a closed loop: a failed runtime validation routes to root-cause analysis, a fix, and a re-validation before any completion claim.
 - **Presentation support** — technical work can be turned into a Markdown/Mermaid presentation by default (portable, no plan/tool gate), or handed to an installed document-generation plugin for a bundled `.pptx`/`.docx` when the user wants one and it's actually present — the underlying technical truth is the same regardless of how it's presented; a native Claude Code output style may change tone, never that truth.
-- **Teach/Learn mode** — Groundwork can explain what was fixed, why it failed, and what evidence proved it, using only the actual evidence this session (or a recoverable investigation file) established — and says plainly when that evidence trail isn't available, rather than inventing a plausible-sounding story.
-- **Improved install/upgrade lifecycle** — clean install, upgrade from a real prior version, rollback, and uninstall were each tested live end-to-end in an isolated environment; a real bug in version reporting after an upgrade was found and fixed in the process.
-- **Harness telemetry/dashboard retained** — the existing local evaluation dashboard is unchanged and still available for understanding harness activity and effectiveness.
-- **OpenSpec integration remains risk-based** — material architecture/security/infrastructure changes get a structured spec; small changes don't get unnecessary process.
-- **Automatic orchestration remains simple** — main session, a focused subagent, or Claude Code's native Agent Teams is still selected by the work, now including which builder-role perspective applies, without you ever having to manage the AI architecture yourself.
+- **Teach/Learn mode** — Groundwork can explain what was fixed, why it failed, and what evidence proved it, using only the actual evidence that session (or a recoverable investigation file) established — and says plainly when that evidence trail isn't available, rather than inventing a plausible-sounding story.
 
 ## Why this exists
 
-ECC ships dozens of agents and hundreds of skills (run `claude plugin details ecc@ecc` for the exact, currently-installed count — it installs unpinned from ECC's own GitHub `main`, so the number moves independently of Groundwork releases; see [ARCHITECTURE.md](docs/ARCHITECTURE.md)) that are excellent once invoked — but nothing invokes them on its own. Left alone, a plain request to "add X" gets implemented without a plan, without tests, without review, and the final report says it's done regardless. OpenSpec gives you a real spec-driven change lifecycle, but only when you run `/opsx:*` — and even then, nothing stops an agent from claiming a change is complete with a failing test still in the suite. And neither one tells Claude *what a good design is*, *when to delegate*, or *how to pick a project back up next week*.
+ECC ships dozens of agents and hundreds of skills (run `claude plugin details ecc@ecc` for the exact count — installed pinned to a tested ref since Groundwork 2.1, so the number only moves when Groundwork itself re-pins it; see [ARCHITECTURE.md](docs/ARCHITECTURE.md)) that are excellent once invoked — but nothing invokes them on its own. Left alone, a plain request to "add X" gets implemented without a plan, without tests, without review, and the final report says it's done regardless. OpenSpec gives you a real spec-driven change lifecycle, but only when you run `/opsx:*` — and even then, nothing stops an agent from claiming a change is complete with a failing test still in the suite. And neither one tells Claude *what a good design is*, *when to delegate*, or *how to pick a project back up next week*.
 
 Groundwork closes exactly those gaps, and nothing else:
 
@@ -106,20 +103,25 @@ Claude Code itself must already be installed and signed in (it is the product be
 
 Deliberate limits: Homebrew itself is not installed for you (its official one-liner is printed instead, because it needs your password); a Node.js that exists but is older than 20.19.0 is left to your version manager (nvm, asdf, volta) with a clear message; `--non-interactive` never installs anything unless `--install-prereqs` is given. After installing, the check runs again.
 
-The three questions:
+The three required questions, plus one optional fourth:
 
 - **Profile** — Work / Personal / Other. Sets `GROUNDWORK_PROFILE` in your `settings.json` `env` (machine-specific; recorded by telemetry, shown on the dashboard). Nothing in the repo hard-codes it.
 - **Agent Teams** — No (recommended) / Yes. Yes runs `./install.sh --agent-teams`.
 - **Dashboard schedule** — Weekly (recommended) / Daily / Monthly / Yearly / Disabled, applied through the existing report scheduler.
+- **Capabilities and Routines** (optional, defaults to skip) — pick a profile (SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, Custom) to enable cloud/platform/integration awareness, optional skills, and scheduled Routines like a Jira end-of-day update or a daily news digest. See [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) below.
 
 Other modes:
 
 ```bash
 ./setup.sh --verify       # read-only: version, rules, playbooks, hooks, ECC, OpenSpec, telemetry, dashboard, schedule → PASS / FAIL / NOT CONFIGURED
+./setup.sh --doctor       # read-only: everything --verify checks, plus configured capabilities and every Routine's status
+./setup.sh --configure    # revisit capability/Routine selection only — no backup, no reinstall
+./setup.sh --routines     # list configured Routines and their last-run status
 ./setup.sh --rollback     # restore the latest setup.sh backup; the current ~/.claude is moved to ~/.claude-groundwork-disabled-<timestamp>/ first, never deleted
 ./setup.sh --rollback ~/.claude-backups/groundwork-20260921-144500   # a specific backup (required when timestamps are ambiguous)
 ./setup.sh --uninstall    # delegates to uninstall.sh: removes Groundwork, keeps telemetry and reports
 ./setup.sh --non-interactive --profile work --no-agent-teams --schedule weekly   # scripted setup
+./setup.sh --non-interactive --profile work --capability-profile sre-cloudops    # scripted setup with a capability profile
 ```
 
 If setup fails after the backup was taken, it prints the failure, the backup path and the rollback command; your previous configuration is never deleted.
@@ -187,6 +189,14 @@ open ~/.claude/groundwork/reports/dashboard.html
 
 The schedule is a macOS launchd agent (`com.groundwork.report`, default weekly, Monday 08:00; `--hour` to change) that runs `generate --snapshot` — Claude does not need to be running and no API call is made. On Linux the schedule is only recorded: run `generate --snapshot` manually or from cron. Schedule and analysis window are separate: `~/.claude/groundwork/report.json` holds `schedule` and `window_days` (default 30). Report generation is a separate process that no hook calls, so a reporting failure cannot affect task execution or telemetry collection. Uninstall removes the job and the script but keeps `telemetry/` and `reports/`.
 
+## Capabilities, profiles and Routines
+
+Entirely optional, and off by default — `./setup.sh` with no interaction installs the same core as above with nothing here configured. A capability profile (chosen during setup's optional fourth question, or later via `./setup.sh --configure`) pre-selects cloud/platform/integration awareness, optional skills, and scheduled **Routines** for a role: SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, or Custom. It's a starting point, not a forced install — everything stays individually toggleable in one plain JSON file, `~/.claude/groundwork/config.json` (never credentials — `groundwork_config.py validate` actively flags anything that looks like one).
+
+A **Routine** is recurring automation that runs on a schedule, without an active session — distinct from a Playbook (how Groundwork handles a request *now*), a Role (a dynamic builder persona), a Skill, or a Tool (see [rules/task-routing.md](rules/task-routing.md) §4). Six ship today: a Jira end-of-day update, a daily technical-news digest, a weekly status summary, a PR/review follow-up, a daily work/TODO digest, and a documentation-drift check. **Configure once, run automatically** — a routine's identity (which Jira site, which GitHub user), scope (which tickets, which repositories, which topics), access mechanism, and mutation permission are collected once by a short per-routine wizard (only for routines you enable) and never re-asked; a scheduled run loads that saved scope and resolves exactly the capabilities it needs. Each invokes a real headless `claude -p` session under a fixed safety contract — never `--dangerously-skip-permissions`, never `--bare`, an `--allowedTools` allowlist built from that specific routine's own configured access (never one shared allowlist), and a required structured result block so completion is never inferred from exit code alone. Output is stored separately from telemetry (`./setup.sh --routines NAME` retrieves it); telemetry itself stays structured and secret-free, never raw prompts or output. Full detail: [docs/ROUTINES.md](docs/ROUTINES.md).
+
+`docs/INTEGRATIONS.md` is the companion evidence for external systems (GitHub, Jira, AWS, GCP, Kubernetes, Terraform, Spacelift, observability): what's trustworthy and how to wire it yourself — Groundwork never installs, configures, or stores credentials for any of them. `docs/CONTEXT-ENGINEERING.md` is the audit behind why none of this needed new context infrastructure — everything above composes Claude Code's own native mechanisms (progressive-disclosure skills, deferred tool search, subagent isolation).
+
 ## The completion facts
 
 Every STANDARD/MATERIAL task establishes six facts with evidence — Code · Tests · Reviewed · Merged · Deployed · Live validated (✅ / ❌ / N/A) — plus `Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED`, and reports them once, inside the output contract's Validation / Technical details. The aligned `STATUS` block layout is produced only when the user asks for a release/deployment checklist. Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime.
@@ -206,14 +216,14 @@ Everything there is labelled **CURRENT** (implemented, with the version it lande
 ```
 groundwork/
 ├── setup.sh                           one-click onboarding: prerequisites (installs missing git/Node/npm/Python per OS),
-│                                      full ~/.claude backup, profile / Agent Teams / schedule questions, then install.sh;
-│                                      --verify, --rollback, --uninstall, --non-interactive
-├── install.sh / uninstall.sh          the actual installer/remover, idempotent, reversible (--agent-teams opt-in)
+│                                      full ~/.claude backup, profile / Agent Teams / schedule / capability questions, then install.sh;
+│                                      --verify, --rollback, --uninstall, --doctor, --configure, --routines, --non-interactive
+├── install.sh / uninstall.sh          the actual installer/remover, idempotent, reversible (--agent-teams opt-in; ECC pinned to a tested ref)
 ├── rules/                             always-loaded governance (installed to ~/.claude/rules/groundwork/)
-│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, continuation, completion facts
+│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, capability resolution (§6a), continuation, completion facts
 │   ├── architecture-quality.md        governing principle, dimensions as criteria, pre-MATERIAL questions, variation points
 │   ├── evidence-policy.md             evidence priority, labels, DECISION record, validation ladder, completion evidence
-│   ├── task-routing.md                one category per task → one playbook
+│   ├── task-routing.md                one category per task → one playbook; Playbook/Routine/Role/Skill/Tool (§4)
 │   └── output-contract.md             three-layer response shape, checklist style, Harness metadata block
 ├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
 ├── hooks/
@@ -224,6 +234,8 @@ groundwork/
 │   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
+│   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
+│   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
 │   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
 │   └── migrate_legacy_rules.py        moves a pre-Groundwork rules/harness copy to a backup
@@ -232,15 +244,21 @@ groundwork/
 │   ├── test_playbooks.py              routing rule, playbooks, output contract, install.sh / uninstall.sh
 │   ├── test_telemetry.py              telemetry hook (classifier, privacy, tail read, fail-open)
 │   ├── test_report.py                 dashboard generator (metrics, filters, Python↔JS parity, schedules)
-│   └── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall)
+│   ├── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall, capabilities, doctor, routines)
+│   ├── test_groundwork_config.py      capability config (profiles, validation, fail-open, CLAUDE_CONFIG_DIR resolution)
+│   └── test_groundwork_routines.py    Routines (safety contract, off-switches, scheduling, telemetry)
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
     ├── VALIDATION.md                  real test results and live runs, including the failures on the way
     ├── RELEASE-REPORT-2.0.md          Groundwork 2.0 release-readiness report: per-capability evidence, test results, known limitations
+    ├── RELEASE-REPORT-2.1.md          Groundwork 2.1 release report: same shape, this version's evidence
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
     ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
+    ├── CONTEXT-ENGINEERING.md         what enters context, classified always/selective/lazy/isolated/persisted/reconstructed
+    ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
+    ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
     └── images/                        overview diagram and dashboard screenshot
 ```
 

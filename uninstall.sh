@@ -3,9 +3,12 @@
 #
 # Removes only what Groundwork added:
 #   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/ and VERSION
-#     (telemetry records under ~/.claude/groundwork/telemetry/, dashboards under reports/, and
-#      investigation-continuity notes under investigations/ are all kept — they are your data;
-#      the launchd report job com.groundwork.report is removed)
+#     (telemetry records under ~/.claude/groundwork/telemetry/ — including Routines' own run
+#      history, routines.jsonl — dashboards under reports/, and investigation-continuity notes
+#      under investigations/ are all kept — they are your data; the launchd report job
+#      com.groundwork.report and any per-Routine com.groundwork.routine.* jobs are removed)
+#   - ~/.claude/groundwork/config.json (Groundwork 2.1's own capability/Routines selection —
+#     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
 #   - the four hook entries, the deny rules, and the env defaults this repo's
@@ -32,8 +35,35 @@ echo "== Groundwork uninstaller =="
 if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" ]; then
   python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule disabled >/dev/null 2>&1 || true
 fi
+# Same for any scheduled Routines (Groundwork 2.1) — unschedule every known one before deleting
+# the script; idempotent and safe even for a routine that was never actually scheduled. Routine
+# names are read from groundwork_routines.py's own ROUTINES registry (single owner for that list —
+# independent-review nice-to-have: a hardcoded name list here would silently stop unscheduling a
+# future routine the registry adds), falling back to the known 2.1 set only if that read fails.
+if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" ]; then
+  routine_names="$(python3 -c "
+import sys
+sys.path.insert(0, '$CLAUDE_DIR/groundwork/bin')
+import groundwork_routines as m
+print('\n'.join(sorted(m.ROUTINES)))
+" 2>/dev/null || true)"
+  if [ -z "$routine_names" ]; then
+    routine_names="jira_eod
+news
+weekly_status
+pr_followup
+work_digest
+doc_drift"
+  fi
+  while IFS= read -r r; do
+    if [ -n "$r" ]; then
+      python3 "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" schedule "$r" disabled >/dev/null 2>&1 || true
+    fi
+  done <<< "$routine_names"
+fi
 rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
-rm -f "$CLAUDE_DIR/groundwork/VERSION" \
+rm -f "$CLAUDE_DIR/groundwork/config.json" \
+      "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \

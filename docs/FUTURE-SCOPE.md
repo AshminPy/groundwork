@@ -129,7 +129,27 @@ Nothing is added because it sounds useful. A mechanism is added only when all fo
 
 The **SRE Agent pilot** is the first major real-world validation of Groundwork 1.1.0. Its evidence decides what Groundwork needs next. Until then, every FUTURE item in this document is a candidate, not a plan of record.
 
-## 13. Summary table
+## 13. Curated skills and routine candidates (Groundwork 2.1, evaluated 2026-09-28)
+
+Researched live against current sources, not adopted automatically — "third-party skills must not become mandatory Groundwork dependencies," per explicit instruction.
+
+**Skills:**
+- **`wshobson/agents`** (40K★, MIT, weekly commits) — a native Claude Code plugin marketplace with materially deeper SRE/CloudOps skill coverage than ECC (dedicated cloud-infrastructure, kubernetes-operations, incident-response, CI/CD, observability plugins, each individually installable). Identified during the 2.1 dependency audit. **Remains a documented candidate only, not adopted** — third-party trust surface unaudited, per explicit owner instruction not to auto-adopt.
+- **`mattpocock/skills`' `teach` skill** (MIT, actively maintained) — a genuine teaching-technique skill (persistent multi-session workspace: mission/resources/lessons/learning-records; implements retrieval practice, spacing, interleaving), and it ships `disable-model-invocation: true` — already lazy, user-invoked-only (`/teach`) by its own design. **Recommended as an optional install** for anyone who wants deeper teaching technique than `playbooks/explain.md`'s own evidence-grounded teaching branch (Groundwork 2.0) provides; not installed by Groundwork, EXPLAIN's routing/evidence ownership is unchanged.
+- **Task Observer** (canonical: `rebelytics/one-skill-to-rule-them-all`, CC BY 4.0, active) — real, but its own install instructions ask for a CLAUDE.md directive invoking it "at the start of any task-oriented session" because description-matching alone under-triggers it, i.e. it's designed near-always-on with standing file-write side effects — the opposite of Groundwork's context-frugality principle. Combined with Groundwork's own telemetry schema not capturing the sequence/timing detail a reliable pattern-miner needs (it records tool/agent/validation *classes*, not sequences), a safe Groundwork-native implementation would need a telemetry-schema change with its own privacy review first. **Deferred**, not built speculatively; the telemetry extension it would need is the actual future candidate, not the observer itself.
+- Security-review, architecture-review, documentation-generation, and diagram/presentation capability all already exist as official or well-established options (Anthropic's `/security-review`, official `code-review`/`feature-dev` plugins, official PPTX skill) — no gap for Groundwork to fill here.
+
+**Routine candidates evaluated, not built in 2.1** (scored against VALUE / RELIABILITY / EVIDENCE QUALITY / AUTOMATION SAFETY / EXTERNAL ACCESS / NOISE RISK / MAINTENANCE COST — six other routines shipped in 2.1: Jira EOD, daily tech news, weekly status, PR/review follow-up, daily work/TODO digest, documentation drift):
+- **Certificate/PKI expiry awareness** — high value, but needs a configured certificate inventory source Groundwork doesn't have by default; candidate once a concrete evidence source is named.
+- **Dependency/security advisory digest** — high value, moderate reliability (advisory feeds vary in quality/noise per ecosystem); candidate, needs a curated source list first.
+- **Infrastructure drift detection** — high value for IaC-heavy environments, but needs `terraform plan`-equivalent evidence run somewhere Groundwork can read; overlaps with what a real CI pipeline should already be doing.
+- **Cost anomaly review** — needs a configured cloud billing/cost-explorer access Groundwork doesn't assume exists.
+- **Stale RCA follow-up** — plausible extension of the existing troubleshoot/investigation-continuity mechanism; a real candidate for a future pass once the six shipped routines have real-world evidence behind them.
+- **Release readiness** — overlaps significantly with the existing completion-facts model (`engineering-workflow.md` §3) and the weekly-status routine; likely folds into that rather than becoming a seventh separate routine.
+
+None of these were marked high-priority in the 2.1 brief; building all of them untested against real external accounts (this implementation environment has none) would be exactly the overbuilding Groundwork's own principles warn against. Revisit after the six shipped routines have real usage evidence.
+
+## 14. Summary table
 
 | Area | CURRENT (1.1.0) | FUTURE / PLANNED DIRECTION |
 |---|---|---|
