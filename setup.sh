@@ -356,6 +356,14 @@ choose_capabilities() {  # Groundwork 2.1: optional profile-driven capability/Ro
 # every user). All helpers below shell out to groundwork_config.py so the schema/validation logic
 # lives in exactly one place (Python), never duplicated in bash.
 cfg_get() { python3 "$CONFIG_PY" get "$1" "$2" --path "$CLAUDE_DIR/groundwork/config.json" 2>/dev/null || true; }
+cfg_get_bool() {  # a boolean field, normalized to bash-comparable "true"/"false" regardless of the
+                   # underlying tool's case convention (groundwork_config.py's `get` prints JSON's
+                   # lowercase "true"/"false" for a Python bool, never Python's own "True"/"False")
+  case "$(cfg_get "$1" "$2")" in
+    [Tt][Rr][Uu][Ee]) echo true ;;
+    *) echo false ;;
+  esac
+}
 cfg_get_csv() {  # a list-typed field (e.g. news.topics) as a comma-joined string, for pre-filling `ask`
   python3 -c "
 import json, sys
@@ -386,7 +394,7 @@ configure_routine_jira_eod() {
   say ""
   say "Jira end-of-day update — reviews today's evidenced work, drafts (and optionally posts) a Jira comment."
   local en=""; say "Enable? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get jira_eod enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool jira_eod enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set jira_eod enabled=false; return; fi
   local site="" identity="" acc="" mcp_server="" scope_choice="" projects="" jql="" posting_choice="" time=""
   ask site "Jira URL / site" "$(cfg_get jira_eod site)"
@@ -442,7 +450,7 @@ configure_routine_pr_followup() {
   say "GitHub PR follow-up — the configured identity's OWN pull requests needing attention (never"
   say "an unfiltered scan of every PR the account can see)."
   local en=""; say "Enable? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get pr_followup enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool pr_followup enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set pr_followup enabled=false; return; fi
   local suggested=""
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
@@ -474,7 +482,7 @@ configure_routine_pr_followup() {
 configure_routine_news() {
   say ""
   local en=""; say "Enable daily technical news digest? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get news enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool news enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set news enabled=false; return; fi
   say "Suggested topics: AI, Claude, Agentic AI, PKI, Cybersecurity, GCP, AWS, Kubernetes, Terraform, SRE"
   local topics=""
@@ -488,7 +496,7 @@ configure_routine_news() {
 configure_routine_weekly_status() {
   say ""
   local en=""; say "Enable weekly status summary? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get weekly_status enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool weekly_status enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set weekly_status enabled=false; return; fi
   local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get weekly_status schedule.time)"
   [ -n "$time" ] || time="08:00"
@@ -499,7 +507,7 @@ configure_routine_weekly_status() {
 configure_routine_work_digest() {
   say ""
   local en=""; say "Enable daily work/TODO digest? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get work_digest enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool work_digest enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set work_digest enabled=false; return; fi
   local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get work_digest schedule.time)"
   [ -n "$time" ] || time="08:00"
@@ -514,7 +522,7 @@ configure_routine_work_digest() {
 configure_routine_doc_drift() {
   say ""
   local en=""; say "Enable documentation-drift check? 1. No  2. Yes"
-  ask en "Choice" "$([ "$(cfg_get doc_drift enabled)" = "True" ] && echo 2 || echo 1)"
+  ask en "Choice" "$([ "$(cfg_get_bool doc_drift enabled)" = "true" ] && echo 2 || echo 1)"
   if [ "$en" != "2" ]; then cfg_set doc_drift enabled=false; return; fi
   local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get doc_drift schedule.time)"
   [ -n "$time" ] || time="08:00"
@@ -528,12 +536,12 @@ configure_routines_interactive() {  # per-routine follow-up, only for routines a
   [ -f "$CLAUDE_DIR/groundwork/config.json" ] || return
   say ""
   say "-- Routine configuration (only for what you enabled; press Enter to accept each default) --"
-  if [ "$(cfg_get jira_eod enabled)" = "True" ]; then configure_routine_jira_eod; fi
-  if [ "$(cfg_get pr_followup enabled)" = "True" ]; then configure_routine_pr_followup; fi
-  if [ "$(cfg_get news enabled)" = "True" ]; then configure_routine_news; fi
-  if [ "$(cfg_get weekly_status enabled)" = "True" ]; then configure_routine_weekly_status; fi
-  if [ "$(cfg_get work_digest enabled)" = "True" ]; then configure_routine_work_digest; fi
-  if [ "$(cfg_get doc_drift enabled)" = "True" ]; then configure_routine_doc_drift; fi
+  if [ "$(cfg_get_bool jira_eod enabled)" = "true" ]; then configure_routine_jira_eod; fi
+  if [ "$(cfg_get_bool pr_followup enabled)" = "true" ]; then configure_routine_pr_followup; fi
+  if [ "$(cfg_get_bool news enabled)" = "true" ]; then configure_routine_news; fi
+  if [ "$(cfg_get_bool weekly_status enabled)" = "true" ]; then configure_routine_weekly_status; fi
+  if [ "$(cfg_get_bool work_digest enabled)" = "true" ]; then configure_routine_work_digest; fi
+  if [ "$(cfg_get_bool doc_drift enabled)" = "true" ]; then configure_routine_doc_drift; fi
 }
 
 schedule_all_enabled_routines() {

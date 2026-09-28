@@ -90,6 +90,10 @@ A routine that requires an access mechanism (`jira_eod`, `pr_followup`, and `wee
 - **WHEN** `news`, `doc_drift`, and a configured `jira_eod` are each asked for their capability set
 - **THEN** `news` receives `WebSearch`/`WebFetch` and no Jira/GitHub-shaped tool, `doc_drift` receives only base repository-read tools, and `jira_eod` receives the base tools plus exactly its own configured Jira access mechanism's tools — no routine's grant is copied from another's
 
+#### Scenario: Cross-referencing Jira never borrows jira_eod's own write-capable grant
+- **WHEN** `weekly_status` (`jira_projects` non-empty) or `work_digest` (`use_jira: true`) is asked for its capability set, and `jira_eod`'s own configured access is `jira_mcp` (a server-level wildcard, since jira_eod itself is permitted to mutate)
+- **THEN** the resulting tool list contains no Jira-shaped tool at all (no `mcp__<server>__*`, no `Bash(jira *)`, no `mcp__Claude_Browser__*`/`mcp__claude-in-chrome__*`) — its prompt instead points at `jira_eod`'s own already-stored result file (read via the already-granted `Read`/`Glob` tools), never a live Jira call, so a non-mutating routine can never inherit a mutating routine's write-shaped surface
+
 ### Requirement: Routine completion status is semantic, never exit-code-only
 Every routine's prompt SHALL require a structured `ROUTINE RESULT` block (`Status: COMPLETE|PARTIAL|BLOCKED|FAILED|SKIPPED`) in its output. A `claude -p` exit code of 0 SHALL NOT by itself be treated as `COMPLETE`: a missing or unparseable block on an otherwise-successful process run SHALL be recorded as `FAILED`, and a block whose own `Status` is `BLOCKED` or `PARTIAL` SHALL be recorded as exactly that, never upgraded.
 
@@ -122,6 +126,10 @@ The setup/configure flow SHALL ask routine-specific configuration questions only
 #### Scenario: Declining a routine asks nothing further
 - **WHEN** the user answers "No" to enabling a given routine during setup or `--configure`
 - **THEN** no further question is asked for that routine, and its configuration is saved as disabled with no other fields required
+
+#### Scenario: Enabling a routine via profile selection actually asks its questions
+- **WHEN** a capability profile that enables one or more routines is chosen — interactively (first-time `./setup.sh`, or `--configure` → "Change capability profile") or via `--capability-profile NAME` — and at least one routine in that profile is enabled
+- **THEN** `configure_routines_interactive()` actually invokes each enabled routine's own `configure_routine_*` wizard function on that same run (not only when the user separately chooses the "reconfigure one routine" menu), and `config.json` reflects the answers given
 
 ### Requirement: `--configure` allows revisiting any single routine's configuration without reinstalling
 `setup.sh --configure` SHALL offer a way to reconfigure one specific routine's fields (identity, scope, access, schedule, etc.) in place, without requiring a backup or reinstall of Groundwork.

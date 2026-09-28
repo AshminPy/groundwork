@@ -302,6 +302,21 @@ If nothing material happened across these topics since the last run, say so plai
 {RESULT_CONTRACT}"""
 
 
+def _jira_evidence_note(indent: str = "") -> str:
+    """weekly_status/work_digest never get a live Jira tool (they're mutates: False — see
+    _capabilities_for()'s comment). Instead they're pointed at jira_eod's own already-stored,
+    already-evidenced result file: zero additional capability, since Read/Glob are already granted
+    to every routine via BASE_REPO_READ."""
+    d = _results_dir("jira_eod")
+    return (
+        f"{indent}For Jira status, do NOT call any live Jira tool — none is granted to this "
+        f"routine. Instead, use Read/Glob to check {d}/run-*.json for the most recent file "
+        f"(sort by filename/timestamp) — it holds jira_eod's own last stored result (status, "
+        f"summary, content) as JSON. If no such file exists, say plainly that no Jira EOD run "
+        f"has produced evidence yet rather than fabricating Jira status."
+    )
+
+
 def _weekly_status_prompt(rc: dict) -> str:
     repo_scope = rc.get("repository_scope", ["current"])
     repo_desc = "the current repository only" if repo_scope == ["current"] else ", ".join(repo_scope)
@@ -309,8 +324,10 @@ def _weekly_status_prompt(rc: dict) -> str:
     parts = [f"the repository scope: {repo_desc}, over the last {period} days"]
     if rc.get("include_openspec", True):
         parts.append("OpenSpec task progress")
-    if rc.get("jira_projects"):
-        parts.append(f"Jira project(s) {', '.join(rc['jira_projects'])}")
+    jira_projects = rc.get("jira_projects") or []
+    if jira_projects:
+        parts.append(f"Jira project(s) {', '.join(jira_projects)}")
+    jira_block = f"\n\n{_jira_evidence_note()} Only the ticket(s)/project(s) {', '.join(jira_projects)} are in scope — ignore anything else in that file." if jira_projects else ""
     return f"""You are running Groundwork's weekly status routine, a scheduled Routine (not an interactive session).
 
 Configured scope (set once during setup, not re-asked here): {'; '.join(parts)}. Do not pull in unrelated projects or repositories simply because they happen to be accessible.
@@ -318,6 +335,7 @@ Configured scope (set once during setup, not re-asked here): {'; '.join(parts)}.
 Using engineering-workflow.md §3's own completion-facts model (code written, tests run, independent review, merged, deployed, live validated — plus completed/in-progress/blocked), summarize the in-scope repository's status from real evidence: git history, PR state, OpenSpec task progress, test results, review outcomes, deployment/runtime validation actually observed.
 
 Cover: completed, in progress, blocked, decisions made, next actions. Do not invent status for anything you lack evidence for — state it as unknown rather than guessing. Merged is not deployed; deployed is not runtime-validated; keep those distinctions exact.
+{jira_block}
 
 {RESULT_CONTRACT}"""
 
@@ -339,12 +357,14 @@ MERGED IS NOT DEPLOYED — only report something as deployed if you have direct 
 def _work_digest_prompt(rc: dict) -> str:
     repo_scope = rc.get("repository_scope", ["current"])
     repo_desc = "the current repository only" if repo_scope == ["current"] else ", ".join(repo_scope)
+    wants_jira = bool(rc.get("use_jira"))
     sources = ["git branches and dirty work", "open PRs" if rc.get("use_github", True) else None,
                "OpenSpec task state" if rc.get("include_openspec", True) else None,
-               "Jira ticket state" if rc.get("use_jira") else None,
+               "Jira ticket state (via jira_eod's stored result, see below)" if wants_jira else None,
                "the investigation-continuity file if one exists", "failed validation", "pending review",
                "blocked deployments"]
     sources = [s for s in sources if s]
+    jira_block = f"\n\n{_jira_evidence_note()}" if wants_jira else ""
     return f"""You are running Groundwork's daily work/TODO digest routine, a scheduled Routine (not an interactive session).
 
 Configured scope (set once during setup, not re-asked here): {repo_desc}. Do not search repositories outside this scope.
@@ -352,6 +372,7 @@ Configured scope (set once during setup, not re-asked here): {repo_desc}. Do not
 From real evidence only — {', '.join(sources)} — produce three short sections: TODAY (concrete next actions with real evidence behind them), BLOCKED (what's blocking, and on what), FOLLOW-UP (loose ends worth revisiting).
 
 Do not create a task from a weak or ambiguous signal — a real task needs real evidence, not a guess dressed up as one.
+{jira_block}
 
 {RESULT_CONTRACT}"""
 
@@ -401,7 +422,6 @@ def _capabilities_for(name: str, cfg: dict) -> tuple[list, str | None]:
         return tools, None
     if name in ("weekly_status", "work_digest"):
         wants_github = rc.get("use_github", name == "weekly_status")
-        wants_jira = rc.get("use_jira", False)
         if wants_github:
             pr_rc = cfg.get("routines", {}).get("pr_followup", {})
             if pr_rc.get("access", "unconfigured") == "unconfigured":
@@ -410,14 +430,15 @@ def _capabilities_for(name: str, cfg: dict) -> tuple[list, str | None]:
             if reason:
                 return [], reason
             tools += gtools
-        if wants_jira:
-            jira_rc = cfg.get("routines", {}).get("jira_eod", {})
-            if jira_rc.get("access", "unconfigured") == "unconfigured":
-                return [], f"{name} is configured to use Jira, but no Jira access is configured (configure jira_eod or run ./setup.sh --configure)"
-            jtools, reason = _jira_tools(jira_rc)
-            if reason:
-                return [], reason
-            tools += jtools
+        # Jira cross-referencing (weekly_status's `jira_projects`, work_digest's `use_jira`) never
+        # grants a live Jira tool: weekly_status/work_digest are declared mutates: False, and none
+        # of the configured Jira access mechanisms (jira_mcp/cli/browser) can be safely narrowed to
+        # read-only — granting jira_eod's own wildcard here would hand a structurally non-mutating
+        # routine the same write-shaped surface as jira_eod's live-posting mode, which
+        # specs/routines/spec.md's non-mutating-routine requirement forbids regardless of
+        # configuration. Instead these routines read jira_eod's own already-stored, already-
+        # evidenced result file (see _jira_evidence_note() below) — Read/Glob are already in
+        # BASE_REPO_READ, so this needs no additional tool grant at all.
         return tools, None
     return tools, None
 

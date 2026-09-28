@@ -586,8 +586,82 @@ def test_routine_configuration_wizard() -> None:
     finish()
 
 
+def test_profile_driven_wizard_fires_on_both_entry_points() -> None:
+    """Regression test for a MUST FIX found by a fresh adversarial reviewer: `cfg_get`'s CLI prints
+    a boolean as JSON's lowercase true/false, but every `configure_routines_interactive()` dispatch
+    guard and every `configure_routine_*` "Enable?" default used to compare against the capitalized
+    string "True" — a comparison that was always false, making the profile-driven wizard trigger a
+    silent no-op. `test_routine_configuration_wizard` above never caught this because it drives the
+    wizard exclusively through --configure's "2" (reconfigure one routine) menu, which dispatches a
+    `configure_routine_*` function directly and never goes through the buggy guard at all. This test
+    drives the OTHER two entry points instead: (a) a fresh, fully interactive first-time install
+    (choose_capabilities -> pick_cap_profile -> configure_routines_interactive), and (b) --configure's
+    "1" (change capability profile) branch on an already-installed box with no profile configured yet
+    — the exact scenario the reviewer live-reproduced against."""
+    print("setup.sh: the profile-driven routine wizard actually asks its questions (not just the reconfigure-one-routine menu)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    jira_eod_answers = "2\nhttps://acme.atlassian.net\nalice@acme.com\n1\natlassian\n1\n1\n17:30\n"
+    pr_followup_answers = "2\nalice-gh\n1\n1\n08:15\n"
+    news_answers = "2\nAI, Kubernetes, PKI\n08:00\n"
+    weekly_status_answers = "2\n09:00\n"
+    work_digest_answers = "2\n08:30\n"
+    routine_answers = jira_eod_answers + pr_followup_answers + news_answers + weekly_status_answers + work_digest_answers
+
+    def check_config(cfg: dict) -> None:
+        jira = cfg["routines"]["jira_eod"]
+        check("(a/b) Jira site persisted from the profile-driven wizard, not left blank",
+              jira["site"] == "https://acme.atlassian.net", jira)
+        check("(a/b) Jira identity persisted from the profile-driven wizard", jira["identity"] == "alice@acme.com", jira)
+        check("(a/b) Jira access mechanism persisted (jira_mcp), not stuck at unconfigured",
+              jira["access"] == "jira_mcp", jira)
+        check("(a/b) Jira MCP server name persisted", jira["mcp_server"] == "atlassian", jira)
+        check("(a/b) Jira schedule time persisted exactly", jira["schedule"]["time"] == "17:30", jira)
+        pr = cfg["routines"]["pr_followup"]
+        check("(a/b) PR follow-up identity persisted, not stuck at unconfigured", pr["identity"] == "alice-gh", pr)
+        check("(a/b) PR follow-up access mechanism persisted (gh_cli)", pr["access"] == "gh_cli", pr)
+        news = cfg["routines"]["news"]
+        check("(a/b) News topics persisted from the profile-driven wizard", news["topics"] == ["AI", "Kubernetes", "PKI"], news)
+        check("(a/b) Weekly Status schedule time persisted", cfg["routines"]["weekly_status"]["schedule"]["time"] == "09:00", cfg["routines"]["weekly_status"])
+        wd = cfg["routines"]["work_digest"]
+        check("(a/b) Work Digest schedule time persisted", wd["schedule"]["time"] == "08:30", wd)
+        check("(a/b) Work Digest auto-detected use_github/use_jira from the now-configured pr_followup/jira_eod",
+              wd["use_github"] is True and wd["use_jira"] is True, wd)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # ---- (a) fresh, fully interactive first-time install: profile/teams/schedule prompts,
+        # then "2" (yes, pick a profile) -> "1" (sre-cloudops) -> every enabled routine's own wizard
+        a = Box(tmp / "a")
+        stdin_a = "1\n1\n1\n2\n1\n" + routine_answers
+        r = a.run(stdin=stdin_a)
+        check("(a) fresh interactive install with capability selection exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-400:])
+        cfgfile_a = a.cfg / "groundwork" / "config.json"
+        check("(a) config.json was written by the first-time interactive wizard", cfgfile_a.is_file(), r.stdout[-800:])
+        if cfgfile_a.is_file():
+            check_config(json.loads(cfgfile_a.read_text()))
+
+        # ---- (b) --configure's "1" (change capability profile) branch, on an already-installed box
+        # with no capability profile configured yet — the exact scenario the reviewer reproduced
+        b = Box(tmp / "b")
+        r = b.run("--non-interactive", "--profile", "work")
+        check("(b) base install (no capability profile yet) exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfgfile_b = b.cfg / "groundwork" / "config.json"
+        check("(b) no config.json yet before --configure", not cfgfile_b.exists())
+        stdin_b = "1\n1\n" + routine_answers
+        r = b.run("--configure", stdin=stdin_b)
+        check("(b) --configure 'change profile' exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-400:])
+        check("(b) config.json was written by --configure's profile-driven wizard", cfgfile_b.is_file(), r.stdout[-800:])
+        if cfgfile_b.is_file():
+            check_config(json.loads(cfgfile_b.read_text()))
+    finish()
+
+
 if __name__ == "__main__":
-    for t in (test_setup, test_verify_reports_ecc_version, test_capabilities_and_routines, test_routine_configuration_wizard):
+    for t in (test_setup, test_verify_reports_ecc_version, test_capabilities_and_routines, test_routine_configuration_wizard,
+              test_profile_driven_wizard_fires_on_both_entry_points):
         try:
             t()
         except AssertionError:

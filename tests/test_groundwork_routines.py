@@ -219,6 +219,79 @@ def test_work_digest_cross_references_jira_and_github_access() -> None:
     finish()
 
 
+def test_non_mutating_routines_never_inherit_jiras_write_capable_wildcard() -> None:
+    """Regression test for a MUST FIX found by a fresh adversarial reviewer: `_capabilities_for()`'s
+    old `weekly_status`/`work_digest` branch called `_jira_tools()` for the Jira cross-reference
+    case exactly as `jira_eod`'s own branch does — for the `jira_mcp` mechanism this is the
+    unrestricted `mcp__<server>__*` wildcard, identical to what `jira_eod` itself gets when
+    configured to post live. Both routines are declared `mutates: False` in the ROUTINES registry,
+    so this violated specs/routines/spec.md's own requirement that a non-mutating routine "SHALL
+    NEVER be granted a write-shaped tool... regardless of configuration". The prior version of this
+    test file only ever exercised `use_github`, never `use_jira`/`jira_projects` — exactly the
+    blind spot that let the bug ship. Fix: no live Jira tool is granted for the reuse case at all,
+    any mechanism, any configuration — the routine's prompt instead points at jira_eod's own already
+    -stored result file, readable via the Read/Glob tools already in BASE_REPO_READ."""
+    print("groundwork_routines.py — weekly_status/work_digest never inherit jira_eod's write-capable Jira wildcard")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfgdir = Path(tmpdir) / "cfg"
+        init_config(cfgdir)
+        # jira_eod itself configured for live posting via the jira_mcp mechanism — the routine that
+        # legitimately gets the wildcard, since it's the one declared mutates: True.
+        set_routine(cfgdir, "jira_eod", "access=jira_mcp", "mcp_server=atlassian", "posting=automatic")
+        # use_github=false isolates this test to the Jira cross-reference path — work_digest's own
+        # default is use_github=true, and weekly_status's GitHub reuse defaults on too, both of
+        # which would otherwise BLOCK on pr_followup being unconfigured before Jira is even reached.
+        set_routine(cfgdir, "work_digest", "use_jira=true", "use_github=false")
+        set_routine(cfgdir, "weekly_status", "use_github=false")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        try:
+            cfg = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+
+            def has_jira_tool(tools):
+                return any("jira" in t.lower() or t == "mcp__atlassian__*" or t.startswith("Bash(jira")
+                           or "Browser" in t or "claude-in-chrome" in t for t in tools)
+
+            tools_jira, blocked_jira = mod._capabilities_for("jira_eod", cfg)
+            check("jira_eod (mutates: True, posting=automatic) still gets its own Jira wildcard",
+                  blocked_jira is None and "mcp__atlassian__*" in tools_jira, (tools_jira, blocked_jira))
+
+            tools_wd, blocked_wd = mod._capabilities_for("work_digest", cfg)
+            check("work_digest with use_jira=true and jira_eod configured live: never blocked on Jira",
+                  blocked_wd is None, blocked_wd)
+            check("work_digest (mutates: False) gets NO Jira-shaped tool at all, despite use_jira=true "
+                  "and jira_eod's own access being the write-capable jira_mcp mechanism",
+                  not has_jira_tool(tools_wd), tools_wd)
+            check("work_digest still has its base repo-read tools underneath",
+                  set(mod.BASE_REPO_READ) <= set(tools_wd), tools_wd)
+
+            # weekly_status's own schema field for this is `jira_projects`, not `use_jira` — assert
+            # its capability set is equally clean, and independently that its prompt actually
+            # references jira_eod's evidence-reuse path rather than staying silent about it.
+            set_routine(cfgdir, "weekly_status", "jira_projects=[\"PROJ\"]")
+            cfg2 = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+            tools_ws, blocked_ws = mod._capabilities_for("weekly_status", cfg2)
+            check("weekly_status with jira_projects set: never blocked on Jira", blocked_ws is None, blocked_ws)
+            check("weekly_status (mutates: False) gets NO Jira-shaped tool either, with jira_projects set",
+                  not has_jira_tool(tools_ws), tools_ws)
+
+            # Every mechanism jira_eod could be configured with is equally excluded from the reuse
+            # path, not just jira_mcp — cli (`Bash(jira *)`) and browser are just as write-capable.
+            for mech, extra in (("cli", {}), ("browser", {})):
+                set_routine(cfgdir, "jira_eod", f"access={mech}")
+                cfg3 = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+                tools3, blocked3 = mod._capabilities_for("work_digest", cfg3)
+                check(f"work_digest with jira_eod access={mech}: still no Jira-shaped tool granted",
+                      blocked3 is None and not has_jira_tool(tools3), (mech, tools3, blocked3))
+
+            prompt = mod._work_digest_prompt(cfg["routines"]["work_digest"])
+            check("work_digest's prompt points at jira_eod's stored result file, never a live Jira tool",
+                  "do NOT call any live Jira tool" in prompt and "routines" in prompt and "results" in prompt and "jira_eod" in prompt, prompt)
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+    finish()
+
+
 def claude_unreachable_path() -> str:
     """A PATH with python3 (needed to run the script itself) reachable but no `claude` binary
     anywhere on it — proves BLOCKED/off-switch paths never even attempt to spawn `claude`."""
@@ -572,7 +645,9 @@ def test_reconfigure_schedule_no_duplication() -> None:
 if __name__ == "__main__":
     for fn in (test_module_level_registry_and_result_parsing, test_capabilities_for_never_grants_beyond_configured_access,
                test_capabilities_for_configured_jira_and_github, test_github_mcp_tools_are_real_and_read_only,
-               test_work_digest_cross_references_jira_and_github_access, test_run_routine_off_switches_and_disabled,
+               test_work_digest_cross_references_jira_and_github_access,
+               test_non_mutating_routines_never_inherit_jiras_write_capable_wildcard,
+               test_run_routine_off_switches_and_disabled,
                test_run_routine_blocked_before_any_subprocess, test_semantic_status_from_routine_result_block,
                test_result_storage_separate_from_telemetry, test_result_retention_bounded,
                test_check_access_never_asserts_connected_without_checking, test_doctor_rows_and_formatting,

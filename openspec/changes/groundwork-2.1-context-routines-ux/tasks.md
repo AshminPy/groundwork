@@ -155,7 +155,10 @@ erased — this phase's own independent review is separate and additional.
   `tests/test_setup.py` gained `test_routine_configuration_wizard` (55 checks: the full interactive
   wizard for Jira/PR-followup/News/disable-a-routine, end to end through `--doctor`); existing
   `--configure`/`--doctor` assertions updated for the new menu/output format. Full suite: 43 test
-  functions, 0 failed.
+  functions, 0 failed. (Superseded by 13.12a below: this round's tests all shared one blind spot —
+  every routine-wizard test drove `--configure`'s "reconfigure one routine" menu, never the
+  profile-driven trigger — and `test_work_digest_cross_references_jira_and_github_access` only
+  exercised `use_github`, never `use_jira`/`jira_projects`. Both gaps are closed in 13.12a.)
 - [x] 13.10 Re-reviewed all six routines individually against configuration/identity/scope/
   capabilities/authorization/schedule/execution/result-delivery/semantic-status/verification/
   failure-behavior — `design.md` §D.2's "Per-routine review" paragraph; confirmed genuinely
@@ -168,11 +171,32 @@ erased — this phase's own independent review is separate and additional.
   and this phase's own review verdict are both known — updating them now would mean rewriting
   twice. Recorded honestly throughout that this was found during owner review of PR #22, without
   erasing the Phase 12.3a/12.3b review history.
-- [ ] 13.12 Full validation loop (focused tests → full regression → strict OpenSpec validation →
-  fresh install → setup wizard → configure representative routines → verify saved config → doctor
-  → routines listing → routine result retrieval → reconfiguration → schedule update → disable →
-  uninstall → safe live routine validation) then a NEW adversarial independent reviewer dispatched
-  specifically against the Routine Configuration Contract, every MUST FIX fixed, a fresh
-  confirmation reviewer, Must-fix: 0.
+- [x] 13.12a A NEW adversarial independent reviewer, dispatched specifically against the Routine
+  Configuration Contract (13.1-13.11) with instructions to live-reproduce rather than infer,
+  returned `changes-required`, 3 MUST FIX (2 underlying bugs + their direct documentation
+  consequence) — recorded, not erased: (1) `setup.sh` compared `cfg_get`'s lowercase JSON boolean
+  output against the capitalized string `"True"` in 12 places, making `configure_routines_interactive()`
+  a silent no-op on both the places it's actually invoked from (first-time interactive install and
+  `--configure`'s "change profile" branch) — every prior test happened to drive the wizard through
+  the *other* menu path ("reconfigure one routine"), which bypasses the bug entirely. Fixed with a
+  new `cfg_get_bool()` helper normalizing the comparison; re-verified live (fresh interactive
+  install and `--configure` → "1", full piped wizard answers, `config.json` inspected directly —
+  every field landed). (2) `_capabilities_for()`'s `weekly_status`/`work_digest` Jira cross-reference
+  path granted the same unrestricted `mcp__<server>__*` wildcard `jira_eod` itself gets for live
+  posting, to routines declared `mutates: False` — violating this same phase's own `specs/routines/
+  spec.md` SHALL. Fixed by granting no live Jira tool at all for the reuse case (no mechanism can be
+  safely narrowed to read-only); `weekly_status`/`work_digest` now read `jira_eod`'s own stored
+  result file instead (zero additional capability — `Read`/`Glob` already granted). (3) `docs/
+  ROUTINES.md`/`design.md`'s claims were falsified by (1) and (2); corrected to match the fixed
+  code, not weakened to match the bug. Both bugs fixed at the code; `specs/routines/spec.md` gained
+  two new scenarios; two new regression tests added targeting exactly the blind spots that let them
+  ship (`tests/test_setup.py::test_profile_driven_wizard_fires_on_both_entry_points`, `tests/
+  test_groundwork_routines.py::test_non_mutating_routines_never_inherit_jiras_write_capable_wildcard`)
+  — both independently confirmed, by temporarily reverting the fix, to actually fail against the
+  pre-fix code. Full suite after fixes: 45 test functions, 0 failed. `openspec validate --strict`:
+  valid. Full detail: `docs/VALIDATION.md`'s "Two more bugs found by a fresh adversarial reviewer"
+  entry.
+- [ ] 13.12b A fresh confirmation reviewer re-reviews the 13.12a fixes specifically, Must-fix: 0
+  required before this phase is considered complete.
 - [ ] 13.13 PR #22 updated (commit + push to the existing branch) and its description refreshed to
   reflect this phase, still draft/unmerged/untagged/unpublished.
