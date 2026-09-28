@@ -109,7 +109,7 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 8.1 Extend `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` with the domain-specific discovery checklist (§E.2), referencing `architecture-quality.md` §5 rather than restating it
 - [x] 8.2 Model-behavior validation: the "repository pattern vs. generic knowledge" and "rejected unsafe pattern" scenarios from design.md §L.2, run live against fixture repositories — both passed; see docs/VALIDATION.md
 - [x] 8.3 Non-regression check (playbooks stay within their existing size discipline; no new always-loaded file) — all three playbooks remain within `MAX_PLAYBOOK_BYTES` (4000); no rule file touched
-- [ ] 8.4 Independent fresh-context review
+- [x] 8.4 Independent fresh-context review — combined Phase 8-11 review (background agent, fresh context, no prior-turn knowledge): APPROVE WITH NICE-TO-HAVES (no MUST FIX); found the three domain playbooks' discovery checklists had drifted from design.md §E.2's 8-item list — fixed (checklists now use identical item wording and a scope sentence in all three; see docs/VALIDATION.md)
 - [x] 8.5 docs/VALIDATION.md entry with the fixture-repository transcripts
 
 ### Phase 9 — Builder execution roles (new this pass)
@@ -118,7 +118,7 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 9.3 Add the closed-loop troubleshoot-and-revalidate line to `playbooks/deploy.md`
 - [x] 9.4 Confirmed (no file change): `evidence-policy.md` §6's completion-evidence table (code/tests/review/CI/PR/deploy/runtime-check) already covers builder work generically (Terraform apply = "Deploy command exit 0", kubectl health check = "Runtime check"); no illustrative example rows added to `deploy.md`'s Output Format — the existing generic wording already applies without restating anything domain-specific
 - [x] 9.5 Model-behavior validation, live (not simulated), against a real Groundwork install: repository-aware infra build (Terraform/GKE, Phase 8 + a Cloud Run/app-plus-infra two-file case here); no-authorization (a prod-database-deletion request correctly stopped before any mutation, separating "edit the file" from "apply live" as two distinct authorization decisions); cross-domain build in non-interactive mode (a genuinely two-file, low-complexity app+infra task correctly stayed in the main session with an explicit one-line reason, never fabricating subagent/team use it didn't perform). Platform onboarding (Helm/Flux) and Delivery (GitHub Actions) domain-specific fixtures were not independently re-run — the underlying mechanism (repository-understanding discovery + persona-scoped reasoning) is domain-agnostic and already validated twice (Infrastructure Engineer via Terraform, a mixed app+infra case here); re-running the identical mechanism against two more fixture domains was judged low marginal evidence for the cost. Nonprod deployment (a real applied change against a live sandboxed target) is **RUNTIME VALIDATION REQUIRED, not performed** — no real cloud/Kubernetes target is available in this environment, and creating one is out of scope ("do not create paid cloud resources merely to satisfy acceptance testing")
-- [ ] 9.6 Independent fresh-context review (MATERIAL)
+- [x] 9.6 Independent fresh-context review (MATERIAL) — combined Phase 8-11 review (background agent, fresh context): APPROVE (clean) — confirmed no `.claude/agents/*.md`-style file exists anywhere in the repo, and the new engineering-workflow.md §6 text could not reasonably be mistaken for a persistent agent definition; see docs/VALIDATION.md
 - [x] 9.7 docs/VALIDATION.md entry with live scenario transcripts
 - [x] 9.8 Depends on: Phase 7 (curated ECC composition) and Phase 8 (shared discovery) — both shipped first
 
@@ -129,7 +129,7 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 10.2 Add the truth/style separation invariant to `rules/output-contract.md`
 - [x] 10.3 Add the presentation branch to `playbooks/document.md` (source-of-truth rule, portable-format default, optional `document-skills` plugin usage)
 - [x] 10.4 Model-behavior validation: the "presentation truth" and "output style invariance" scenarios from design.md §L.2 — both live-tested; see docs/VALIDATION.md
-- [ ] 10.5 Independent fresh-context review
+- [x] 10.5 Independent fresh-context review — combined Phase 8-11 review (background agent, fresh context): APPROVE WITH NICE-TO-HAVES (no MUST FIX); found `document.md`'s plugin-absence branch dropped design.md §H.3's explicit "say so" instruction — fixed (branch now states the plugin absence explicitly before falling back to Markdown); see docs/VALIDATION.md
 - [x] 10.6 docs/VALIDATION.md entry
 - [-] 10.7 (OPTIONAL/LATER, not scheduled this phase) author Groundwork-provided output-style presets and the presentation design-system template — not built; no real presentation task in this implementation exposed a concrete need for one, per the design's own deferral condition
 
@@ -138,6 +138,7 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 11.2 Model-behavior validation: complete-evidence and unavailable-prior-session scenarios — both live-tested; see docs/VALIDATION.md
 - [x] 11.3 Non-regression check (no new storage introduced) — confirmed: implementation touches only `playbooks/explain.md`, consuming existing evidence (session evidence, git history, `investigation-continuity`'s saved state) rather than adding a store
 - [x] 11.4 docs/VALIDATION.md entry
+- [x] 11.5 Independent-review scoping confirmed intentional: Phase 11 was scoped STANDARD, not MATERIAL, per `engineering-workflow.md` §1 — single-file change (`playbooks/explain.md`), no new mechanism, no new persisted state, reuses evidence sources already validated in Phases 5/8/9/10; the combined Phase 8-11 review (see 10.5) independently confirmed this scoping was defensible and found no gap from the omission
 
 ## STAGE 5 — VALIDATION
 
