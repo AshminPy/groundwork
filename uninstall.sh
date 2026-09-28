@@ -3,9 +3,12 @@
 #
 # Removes only what Groundwork added:
 #   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/ and VERSION
-#     (telemetry records under ~/.claude/groundwork/telemetry/, dashboards under reports/, and
-#      investigation-continuity notes under investigations/ are all kept — they are your data;
-#      the launchd report job com.groundwork.report is removed)
+#     (telemetry records under ~/.claude/groundwork/telemetry/ — including Routines' own run
+#      history, routines.jsonl — dashboards under reports/, and investigation-continuity notes
+#      under investigations/ are all kept — they are your data; the launchd report job
+#      com.groundwork.report and any per-Routine com.groundwork.routine.* jobs are removed)
+#   - ~/.claude/groundwork/config.json (Groundwork 2.1's own capability/Routines selection —
+#     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
 #   - the four hook entries, the deny rules, and the env defaults this repo's
@@ -32,8 +35,16 @@ echo "== Groundwork uninstaller =="
 if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" ]; then
   python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule disabled >/dev/null 2>&1 || true
 fi
+# Same for any scheduled Routines (Groundwork 2.1) — unschedule every known one before deleting
+# the script; idempotent and safe even for a routine that was never actually scheduled.
+if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" ]; then
+  for r in jira_eod news weekly_status pr_followup work_digest doc_drift; do
+    python3 "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" schedule "$r" disabled >/dev/null 2>&1 || true
+  done
+fi
 rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
-rm -f "$CLAUDE_DIR/groundwork/VERSION" \
+rm -f "$CLAUDE_DIR/groundwork/config.json" \
+      "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \

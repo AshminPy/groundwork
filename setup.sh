@@ -11,6 +11,9 @@
 #   ./setup.sh --verify             read-only check of the current installation (changes nothing)
 #   ./setup.sh --rollback [DIR]     restore the latest backup made by setup.sh (or the given backup DIR)
 #   ./setup.sh --uninstall          delegates to uninstall.sh (telemetry and reports are kept)
+#   ./setup.sh --doctor             read-only: Groundwork/ECC/OpenSpec plus configured capabilities and Routines
+#   ./setup.sh --configure          re-run the optional capability/Routines selection only (no backup/reinstall)
+#   ./setup.sh --routines           list configured Routines and their last-run status
 #
 # setup.sh never installs anything itself: install.sh installs, uninstall.sh removes,
 # scripts/groundwork_report.py schedules. This file only backs up, asks, delegates and verifies.
@@ -36,20 +39,28 @@ NONINT=0
 INSTALL_PREREQS=""   # yes | no | "" (ask)
 INSTALLED_PREREQS="no"
 PROFILE=""
+CAP_PROFILE=""    # sre-cloudops | platform-engineering | devops | software-engineering |
+                  # cloud-architecture | security-engineering | minimal | custom | "" (ask)
 TEAMS=""          # yes | no | ""
 SCHEDULE=""       # weekly | daily | monthly | yearly | disabled | ""
 ROLLBACK_DIR=""
 BACKUP_PATH=""
+CONFIG_PY="$CLAUDE_DIR/groundwork/bin/groundwork_config.py"
+ROUTINES_PY="$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --verify) [ "$MODE" = setup ] || die "cannot combine --$MODE with --verify"; MODE=verify ;;
     --rollback) [ "$MODE" = setup ] || die "cannot combine --$MODE with --rollback"; MODE=rollback; if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then ROLLBACK_DIR="$2"; shift; fi ;;
     --uninstall) [ "$MODE" = setup ] || die "cannot combine --$MODE with --uninstall"; MODE=uninstall ;;
+    --doctor) [ "$MODE" = setup ] || die "cannot combine --$MODE with --doctor"; MODE=doctor ;;
+    --configure) [ "$MODE" = setup ] || die "cannot combine --$MODE with --configure"; MODE=configure ;;
+    --routines) [ "$MODE" = setup ] || die "cannot combine --$MODE with --routines"; MODE=routines ;;
     --non-interactive) NONINT=1 ;;
     --install-prereqs) INSTALL_PREREQS=yes ;;
     --no-install-prereqs) INSTALL_PREREQS=no ;;
     --profile) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--profile requires a value (e.g. --profile work)"; PROFILE="$2"; shift ;;
+    --capability-profile) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--capability-profile requires a value (e.g. --capability-profile sre-cloudops)"; CAP_PROFILE="$2"; shift ;;
     --agent-teams) TEAMS=yes ;;
     --no-agent-teams) TEAMS=no ;;
     --schedule) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--schedule requires a value: weekly|daily|monthly|yearly|disabled"; SCHEDULE="$2"; shift ;;
@@ -69,7 +80,7 @@ MISSING=()
 NODE_MIN_MAJOR=20; NODE_MIN_MINOR=19   # matches OpenSpec's actual engines.node (>=20.19.0), not ECC's lower floor
 PY_MIN_MAJOR=3; PY_MIN_MINOR=10
 LAST_VERIFIED_OPENSPEC="1.13.2"   # OpenSpec is npm-pinned by version; a mismatch here means real upstream drift
-LAST_VERIFIED_ECC="2.2.2"   # ECC installs unpinned from GitHub main (see docs/ARCHITECTURE.md) — this is only the version Groundwork's docs were last checked against, not a pin; a mismatch is expected over time, not an error
+ECC_REF="${GROUNDWORK_ECC_REF:-v2.2.1}"   # Groundwork 2.1: install.sh pins ECC to this ref (see install.sh); kept in sync with it, not independently drifting
 
 detect_pm() {
   case "$OS_KIND" in
@@ -301,6 +312,65 @@ choose_schedule() {
   case "$c" in 1) SCHEDULE=weekly ;; 2) SCHEDULE=daily ;; 3) SCHEDULE=monthly ;; 4) SCHEDULE=yearly ;; 5) SCHEDULE=disabled ;; *) die "invalid choice: $c" ;; esac
 }
 
+choose_capabilities() {  # Groundwork 2.1: optional profile-driven capability/Routines selection
+  if [ -n "$CAP_PROFILE" ]; then return; fi
+  if [ "$NONINT" = 1 ]; then return; fi   # non-interactive: config.json stays absent, minimal profile, everything disabled
+  say ""
+  say "Configure optional capabilities and Routines (cloud/platform/integrations/skills/scheduled"
+  say "automation like a Jira end-of-day update or a daily news digest)? This is entirely optional —"
+  say "Groundwork's core governance works identically either way."
+  say "  1. No — skip (recommended if you're not sure; revisit any time with ./setup.sh --configure)"
+  say "  2. Yes — pick a profile"
+  local c=""; ask c "Choice" "1"
+  case "$c" in
+    1) return ;;
+    2) ;;
+    *) die "invalid choice: $c" ;;
+  esac
+  say ""
+  say "Profile (a starting point, not a forced install — every capability and Routine stays"
+  say "individually toggleable afterward by editing $CLAUDE_DIR/groundwork/config.json):"
+  say "  1. SRE / CloudOps          5. Cloud Architecture"
+  say "  2. Platform Engineering    6. Security Engineering"
+  say "  3. DevOps                  7. Minimal"
+  say "  4. Software Engineering    8. Custom (blank — configure entirely by hand)"
+  local p=""; ask p "Choice" "1"
+  case "$p" in
+    1) CAP_PROFILE=sre-cloudops ;; 2) CAP_PROFILE=platform-engineering ;; 3) CAP_PROFILE=devops ;;
+    4) CAP_PROFILE=software-engineering ;; 5) CAP_PROFILE=cloud-architecture ;;
+    6) CAP_PROFILE=security-engineering ;; 7) CAP_PROFILE=minimal ;; 8) CAP_PROFILE=custom ;;
+    *) die "invalid choice: $p" ;;
+  esac
+}
+
+apply_capabilities() {  # writes config.json from CAP_PROFILE, if one was chosen; safe to call when absent
+  [ -n "$CAP_PROFILE" ] || return 0
+  [ -f "$CONFIG_PY" ] || { say "  (capability configurator not installed — skipping)"; return 0; }
+  python3 "$CONFIG_PY" init "$CAP_PROFILE" --force >/dev/null
+  say "  capability profile: $CAP_PROFILE (edit $CLAUDE_DIR/groundwork/config.json to fine-tune, or run ./setup.sh --configure again)"
+  local enabled_routines
+  enabled_routines="$(python3 -c "
+import json
+cfg = json.load(open('$CLAUDE_DIR/groundwork/config.json'))
+names = [n for n, r in cfg.get('routines', {}).items() if r.get('enabled')]
+print(', '.join(sorted(names)) or 'none')
+" 2>/dev/null || echo "none")"
+  say "  routines enabled: $enabled_routines"
+  if [ "$enabled_routines" != "none" ] && [ -f "$ROUTINES_PY" ]; then
+    python3 -c "
+import json
+cfg = json.load(open('$CLAUDE_DIR/groundwork/config.json'))
+for name, r in cfg.get('routines', {}).items():
+    if r.get('enabled'):
+        print(name, r.get('schedule', 'daily'))
+" 2>/dev/null | while read -r rname rfreq; do
+      python3 "$ROUTINES_PY" schedule "$rname" "$rfreq" >/dev/null 2>&1 || true
+    done
+    say "  (each enabled routine's schedule was applied the same way the dashboard's is — macOS launchd,"
+    say "   cron elsewhere; verify any time with ./setup.sh --routines)"
+  fi
+}
+
 validate_choices() {
   if [ -n "$PROFILE" ] && ! printf '%s' "$PROFILE" | grep -Eq '^[A-Za-z0-9_-]{1,32}$'; then
     die "profile must be 1-32 letters, digits, - or _ (got: $PROFILE)"
@@ -360,11 +430,14 @@ verify_install() {
       ecc_v="$(printf '%s\n' "$ecc_list" | grep -A1 'ecc@ecc' | grep 'Version:' | head -1 | awk '{print $2}')" || true
       if [ -z "$ecc_v" ]; then
         line "ECC" PASS "plugin ecc@ecc installed (version not parsed from 'claude plugin list' output — run 'claude plugin details ecc@ecc' to see it)"
-      elif [ "$ecc_v" != "$LAST_VERIFIED_ECC" ]; then
-        # Expected over time, not an error: ECC installs unpinned from GitHub main (docs/ARCHITECTURE.md).
-        line "ECC" PASS "plugin ecc@ecc $ecc_v (Groundwork's docs were last checked against $LAST_VERIFIED_ECC — ECC has no version pin, so this drifting is normal, not a bug)"
+      elif [ "v$ecc_v" != "$ECC_REF" ] && [ "$ecc_v" != "$ECC_REF" ]; then
+        # Groundwork 2.1 pins ECC to $ECC_REF (install.sh) rather than floating main — a mismatch
+        # here usually means `claude plugin update ecc@ecc` was run manually outside that pin, or
+        # GROUNDWORK_ECC_REF was overridden at install time; still PASS (not a broken install),
+        # but surfaced distinctly from the expected, pinned-match case below.
+        line "ECC" PASS "plugin ecc@ecc $ecc_v (pinned to $ECC_REF — this differs, likely from a manual 'claude plugin update' outside the pin)"
       else
-        line "ECC" PASS "plugin ecc@ecc $ecc_v"
+        line "ECC" PASS "plugin ecc@ecc $ecc_v (pinned to $ECC_REF)"
       fi
     else line "ECC" "NOT CONFIGURED" "plugin ecc@ecc not listed by 'claude plugin list'"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
   else line "ECC" FAIL "'claude' not on PATH"; fi
@@ -396,6 +469,37 @@ verify_install() {
   [ "$VERIFY_FAILS" -eq 0 ]
 }
 
+verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to verify_install()
+  if [ ! -f "$CLAUDE_DIR/groundwork/config.json" ]; then
+    line "Capabilities" "NOT CONFIGURED" "no config.json — nothing selected (./setup.sh --configure to set one up)"
+    return
+  fi
+  local cfg="$CLAUDE_DIR/groundwork/config.json"
+  python3 -c "
+import json
+cfg = json.load(open('$cfg'))
+print('PROFILE\t' + cfg.get('profile', 'unknown'))
+for k in ('cloud', 'platform', 'integrations'):
+    vals = cfg.get(k, [])
+    print(k.upper() + '\t' + (', '.join(vals) if vals else '(none selected)'))
+for name, s in cfg.get('skills', {}).items():
+    print('SKILL\t' + name + '\t' + ('enabled' if s else 'disabled'))
+" 2>/dev/null | while IFS="$(printf '\t')" read -r kind a b; do
+    case "$kind" in
+      PROFILE) line "Capability profile" CONFIGURED "$a" ;;
+      CLOUD) line "Cloud" CONFIGURED "$a — availability not connectivity-checked here; wire your own MCP/CLI per docs/INTEGRATIONS.md" ;;
+      PLATFORM) line "Platform" CONFIGURED "$a" ;;
+      INTEGRATIONS) line "Integrations" CONFIGURED "$a" ;;
+      SKILL) line "Skill: $a" "$([ "$b" = enabled ] && echo AVAILABLE || echo DISABLED)" "" ;;
+    esac
+  done
+  if [ -f "$ROUTINES_PY" ]; then
+    say ""
+    say "  -- Routines --"
+    python3 "$ROUTINES_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done
+  fi
+}
+
 # ---------------------------------------------------------------- modes
 run_setup() {
   say "== Groundwork setup =="
@@ -407,7 +511,7 @@ run_setup() {
   make_backup
   say "Backup: $BACKUP_PATH"
   trap on_setup_failure ERR
-  choose_profile; choose_teams; choose_schedule; validate_choices
+  choose_profile; choose_teams; choose_schedule; choose_capabilities; validate_choices
   say ""
   say "-- Running install.sh (the actual installer) --"
   local install_args=()
@@ -415,6 +519,11 @@ run_setup() {
   bash "$INSTALLER" "${install_args[@]+"${install_args[@]}"}"
   if [ -n "$PROFILE" ]; then
     python3 "$HERE/scripts/merge_settings.py" --profile "$PROFILE" "$CLAUDE_DIR/settings.json" >/dev/null
+  fi
+  if [ -n "$CAP_PROFILE" ]; then
+    say ""
+    say "-- Capabilities and Routines --"
+    apply_capabilities
   fi
   say ""
   say "-- Reporting schedule: $SCHEDULE --"
@@ -521,9 +630,44 @@ run_uninstall() {
   bash "$UNINSTALLER"
 }
 
+run_doctor() {  # Groundwork 2.1: verify_install() plus capability/Routines status, still read-only
+  say "== Groundwork doctor (read-only) =="
+  say "Target: $CLAUDE_DIR"
+  # verify_install's own failing checks must not short-circuit this function under `set -e` —
+  # capability/Routines status is exactly what you need to see when core checks are already
+  # failing, not something to silently drop. Exit code still reflects core health, same as --verify.
+  local core_ok=0
+  verify_install || core_ok=1
+  say ""
+  verify_capabilities
+  [ "$core_ok" -eq 0 ]
+}
+
+run_configure() {  # Groundwork 2.1: re-run capability selection only — no backup, no reinstall
+  say "== Groundwork configure =="
+  [ -d "$CLAUDE_DIR/groundwork" ] || die "Groundwork is not installed at $CLAUDE_DIR — run ./setup.sh first"
+  choose_capabilities
+  if [ -z "$CAP_PROFILE" ]; then
+    say "No change made."
+    return 0
+  fi
+  apply_capabilities
+  say ""
+  say "Done. Check anytime with ./setup.sh --doctor or ./setup.sh --routines."
+}
+
+run_routines() {  # Groundwork 2.1: list configured Routines and last-run status, read-only
+  say "== Groundwork Routines =="
+  [ -f "$ROUTINES_PY" ] || die "Routines are not installed at $ROUTINES_PY — run ./setup.sh first"
+  python3 "$ROUTINES_PY" list
+}
+
 case "$MODE" in
   setup) run_setup ;;
   verify) run_verify ;;
   rollback) run_rollback ;;
   uninstall) run_uninstall ;;
+  doctor) run_doctor ;;
+  configure) run_configure ;;
+  routines) run_routines ;;
 esac

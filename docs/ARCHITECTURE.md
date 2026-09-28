@@ -155,10 +155,14 @@ Every Groundwork capability has exactly one owner. No two components define the 
 | Health dashboard | Groundwork (`scripts/groundwork_report.py`) | Unchanged |
 | Installer/upgrade/rollback | Groundwork (`install.sh`/`setup.sh`) | Strengthened 2.0: corrected Node floor, enforced in `install.sh` itself |
 | ECC's specialist agents/skills | ECC | Installed, not forked or vendored |
-| MCP/external tool access | The task's own environment | Groundwork installs nothing by default |
+| MCP/external tool access | The task's own environment | Groundwork installs nothing by default; `docs/INTEGRATIONS.md` (2.1) documents, never wires |
 | Credential handling | The user's own MCP/CLI configuration | Never Groundwork |
+| Capability resolution (which tool for a task) | Groundwork (`rules/engineering-workflow.md` §6a, 2.1) | Judgment guidance over repo tooling → native → skill → MCP/CLI → browser → user; never overrides tier/evidence/authorization |
+| Scheduled/recurring automation (Routines) | Groundwork (`scripts/groundwork_routines.py`, 2.1) | New in 2.1; reuses `groundwork_report.py`'s launchd/cron scheduling pattern, not a new scheduler |
+| Capability/Routines configuration | Groundwork (`scripts/groundwork_config.py`, `setup.sh --configure`, 2.1) | New in 2.1; one human-readable `config.json`, no secrets ever |
+| Dependency version pinning (ECC) | Groundwork (`install.sh`, 2.1) | Pinned via `#ref`; unchanged for OpenSpec (already npm-version-pinned) |
 
-This table is extended, not rewritten, as later 2.0 phases ship (ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
+This table is extended, not rewritten, as later phases ship (2.0: ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn; 2.1: capability resolution, Routines, capability configuration, ECC pinning) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
 
 ## Autonomy — when Groundwork asks versus proceeds
 

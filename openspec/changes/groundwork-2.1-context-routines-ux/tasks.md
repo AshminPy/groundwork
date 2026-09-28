@@ -1,0 +1,91 @@
+## Phase 0 — OpenSpec scaffold
+- [x] 0.1 Write `proposal.md` (why, what changes, what doesn't, impact)
+- [x] 0.2 Write `design.md` (§A–§L: context engineering, capability resolution, native-scheduling research, Routines, MCP strategy, curated skills, setup config format, doctor/configure/routines, terminal UX, live-activity deferral, ECC pinning, deliberately-not-built summary)
+- [x] 0.3 Write this `tasks.md`
+- [x] 0.4 Write delta specs for every capability this change actually adds or modifies (`specs/routines/`, `specs/dependency-pinning/`, plus ADDED requirements folded into the existing `onboarding` and `task-routing` baseline capabilities) — new capability names chosen instead of `MODIFIED` deltas against the still-unarchived `groundwork-2-enterprise-sre` change's own specs (ecc-capability-policy, etc.), since OpenSpec deltas validate against the archived baseline in `openspec/specs/`, not against another open change
+- [x] 0.5 Fix a real proposal/design drift found while writing this scaffold: both `proposal.md` item 7 and two lines in `design.md` §D still described the capability-config file as YAML (`config.yaml`), left over from the brief's own illustrative example, after the actual implementation (§G, already built and tested) chose JSON (`config.json`) — corrected both files to match what was actually shipped
+- [x] 0.6 `openspec validate groundwork-2.1-context-routines-ux --strict` passes (zero errors, zero warnings)
+
+## Phase 1 — Context-engineering audit
+- [x] 1.1 Inventory every current context source (rules, playbooks, session snapshot, investigation-continuity file, ECC, MCP, skills, deferred tools, subagents, telemetry, git state, CLAUDE.md) and classify each as always-loaded / selectively-loaded / lazy-deferred / isolated / persisted / reconstructed / unnecessary-duplicated
+- [x] 1.2 Confirm native Claude Code lazy-loading mechanisms directly (not from memory): Tool Search (observed live in this session's own deferred-tool listing), progressive-disclosure skills (description-only until invoked), MCP tool-schema deferral, subagent isolation (only the final report crosses back)
+- [x] 1.3 Write `docs/CONTEXT-ENGINEERING.md` with real measured numbers (rule-file line counts, snapshot/investigation-file byte caps, playbook byte range) and an honest "none found" conclusion for unnecessary/duplicated context
+- [x] 1.4 Conclusion: no custom context infrastructure needed — every 2.1 capability composes native mechanisms
+
+## Phase 2 — Capability resolution model
+- [x] 2.1 Add `## 6a. Capability resolution` to `rules/engineering-workflow.md` — six-step resolution order as judgment guidance, not a hard-coded decision tree, explicitly deferring to §1 (tier), `evidence-policy.md` and §4 (authorization) rather than replacing them
+- [x] 2.2 Add `## 4. Five distinct concepts` to `rules/task-routing.md` — Playbook/Routine/Role/Skill/Tool, kept structurally distinct; renumber the old `## 4. Universal output contract` to `## 5.`
+- [x] 2.3 Fix the resulting test breakage: `tests/test_playbooks.py`'s literal-string router check (`"## 4. Universal output contract"` → `"## 5. Universal output contract"`), add a new check asserting the Routine/Role/Skill/Tool distinction is present
+
+## Phase 3 — MCP/integration capability matrix
+- [x] 3.1 Research current (2026-09-28) official/community MCP servers and CLI/API alternatives for GitHub, Spacelift, AWS, GCP, Kubernetes, Terraform, Jira, Confluence, and common observability systems (Grafana, Datadog, PagerDuty, Sentry, Prometheus)
+- [x] 3.2 For each: vendor/maintainer, license, auth model, read/write/destructive capability, tool-count/context impact, lazy-loading support, Claude Code compatibility, whether CLI/API is preferable to an MCP server
+- [x] 3.3 Write `docs/INTEGRATIONS.md` as a capability matrix (domain / preferred access / trust level / read-write / auth model / context strategy); explicit note that Slack is deliberately not included, per instruction
+- [x] 3.4 Documentation only — no live wiring, no credentials stored or requested; this repository's sandbox has none of these credentials available, consistent with `evidence-policy.md`
+
+## Phase 4 — Curated optional skills evaluation
+- [x] 4.1 Evaluate Matt Pocock's `teach` skill (github.com/mattpocock/skills, MIT) — already lazy (`disable-model-invocation: true`, user-invoked via `/teach`); recommend as optional, do not install by default
+- [x] 4.2 Evaluate Task Observer (rebelytics/one-skill-to-rule-them-all) — designed near-always-on, conflicts with context-frugality and the brief's own strict privacy requirement (no raw prompts/source/credentials/transcripts); decline, document why
+- [x] 4.3 Evaluate `wshobson/agents` (40k★, MIT, native plugin marketplace) — deeper SRE/CloudOps coverage than ECC; per the owner's explicit instruction, document as a candidate only, do not adopt automatically
+- [x] 4.4 Confirm security-review/architecture-review/doc-gen/diagram capability already exists (from `groundwork-2-enterprise-sre`'s builder-execution-roles/presentation work) rather than proposing duplicates
+- [x] 4.5 Write `## 13. Curated skills and routine candidates` into `docs/FUTURE-SCOPE.md` (renumbering the old `## 13. Summary table` to `## 14.`)
+
+## Phase 5 — Routines subsystem
+- [x] 5.1 Confirm no native local (bare CLI) scheduler exists for unattended, repeatable Claude Code invocation (cloud Routines need the hosted product; Desktop scheduled tasks need the separate GUI app; `/loop` needs a live session and self-expires after 7 days) — headless `claude -p` is the documented composition point
+- [x] 5.2 Confirm the safe unattended-invocation flag contract via live docs research: never `--dangerously-skip-permissions` (container/VM-restricted, refused under root/sudo), never `--bare` (skips Groundwork's own hooks/skills/MCP config); use `--permission-mode dontAsk` + `--permission-prompts none` + an explicit `--allowedTools` allowlist
+- [x] 5.3 Build `scripts/groundwork_config.py` — one profile-driven, human-readable, no-secrets `config.json`; 8 profiles; `show`/`profiles`/`init`/`validate` CLI; `validate_config()` scans for secret-like keys
+- [x] 5.4 Build `scripts/groundwork_routines.py` — one generic framework (name + prompt template + `mutates` flag + default schedule), not six bespoke scripts; six concrete routines: `jira_eod` (mutating, dry-run-capable, offline-work folding, verify-after-post), `news` (topic-driven digest, no filler when nothing material), `weekly_status`, `pr_followup`, `work_digest`, `doc_drift` (report-only, never auto-rewrites docs)
+- [x] 5.5 Scheduling reuses `scripts/groundwork_report.py`'s exact launchd-plist pattern, parameterized per routine (`com.groundwork.routine.<name>`), with the same macOS-launchd/elsewhere-cron fallback
+- [x] 5.6 Telemetry: `~/.claude/groundwork/telemetry/routines.jsonl`, same 0600 owner-only append-only pattern as `groundwork_telemetry.py`; structured fields only (routine, mutates, dry_run, exit_code, status, duration_s, output_chars) — never raw prompt/output text
+- [x] 5.7 Off-switches: `GROUNDWORK_ROUTINES=off` (whole subsystem), `GROUNDWORK_ROUTINES_<NAME>=off` (one routine)
+- [x] 5.8 Task Observer and the six further routine candidates (cert/PKI expiry, dependency advisories, infra drift, cost anomaly, stale-RCA follow-up, release readiness) scored and recorded as deferred future candidates in `docs/FUTURE-SCOPE.md`, not built this pass
+- [x] 5.9 Live-validate against a real `claude` CLI in this sandbox: `work_digest` ran to completion (exit 0, real duration, structured telemetry recorded with 0600 permissions); `jira_eod --dry-run` with an `--offline-work` string also ran to completion
+
+## Phase 6 — Browser/Chrome governed execution policy
+- [x] 6.1 Extend `rules/engineering-workflow.md` §6a so browser/Chrome execution is governed by the exact same §4 authorization rule as MCP/CLI mutations — capability availability never implies mutation permission
+- [x] 6.2 Add the "read the result back before reporting VERIFIED" rule explicitly for browser-driven mutations (a successful click/submit is not evidence of a successful underlying change)
+- [x] 6.3 No new code — this phase is rule text only, reusing the existing authorization model
+
+## Phase 7 — setup.sh capability configurator
+- [x] 7.1 Add `choose_capabilities()` — optional (default No), profile-driven (8 profiles), never forced
+- [x] 7.2 Add `apply_capabilities()` — writes `config.json` via `groundwork_config.py init`, schedules every enabled routine the same way the dashboard's schedule is applied
+- [x] 7.3 Add `--capability-profile VALUE` non-interactive flag
+- [x] 7.4 Wire into `run_setup()`'s existing question sequence and post-install sequence
+- [x] 7.5 **Bug found and fixed during live end-to-end testing**: `apply_capabilities()`/`verify_capabilities()` called `groundwork_config.py` without `--path`, and `groundwork_config.py`'s `DEFAULT_PATH` was a bare `Path.home()/.claude/...` constant that ignored `CLAUDE_CONFIG_DIR` entirely — every other Groundwork Python file (`groundwork_report.py`, `groundwork_routines.py`, all four hooks) resolves `CLAUDE_CONFIG_DIR` first. Reproduced live: a sandboxed `setup.sh --non-interactive --capability-profile sre-cloudops` run wrote `config.json` into the real `/root/.claude/groundwork/` instead of the target `CLAUDE_CONFIG_DIR`, and setup's own "routines enabled: ..." summary silently reported `none` because it read back from the (correct, but never-written) target path. Fixed at the root: `groundwork_config.py`'s `DEFAULT_PATH` now resolves `CLAUDE_CONFIG_DIR` the same way every other script does. Re-verified live: config.json lands under the target dir, `--doctor`/`--routines` report real enabled routines, no leak to the real home directory. Regression-tested in `tests/test_groundwork_config.py` and `tests/test_setup.py`.
+
+## Phase 8 — groundwork doctor / configure / routines commands
+- [x] 8.1 Add `--doctor` / `--configure` / `--routines` modes to `setup.sh`'s existing mode-dispatch pattern
+- [x] 8.2 `verify_capabilities()` — additive to `verify_install()`; reports CONFIGURED/AVAILABLE/DISABLED/NOT CONFIGURED, never asserts connectivity it didn't check (cloud/platform rows explicitly say "availability not connectivity-checked here")
+- [x] 8.3 `run_configure()` — re-runs capability selection only, no backup, no reinstall
+- [x] 8.4 `run_routines()` — lists configured routines and last-run status via `groundwork_routines.py list`
+- [x] 8.5 **Bug found and fixed during live testing**: `run_doctor()` called `verify_install()` unguarded; under `set -euo pipefail`, a non-zero return (any core check failing) terminated the function immediately, silently skipping the entire Capabilities/Routines section — exactly the moment a doctor command's full diagnostic picture matters most. Fixed: `verify_install() || core_ok=1`, capabilities section always runs, overall exit code still reflects core health. Regression-tested in `tests/test_setup.py`.
+
+## Phase 9 — ECC pinning
+- [x] 9.1 Confirm `claude plugin marketplace add owner/repo#ref` version-pinning support (live docs research, 2026-09-28)
+- [x] 9.2 Pin `install.sh`'s ECC install to `v2.2.1` via `#ref`, override via `GROUNDWORK_ECC_REF`
+- [x] 9.3 Update `setup.sh`'s `verify_install()` ECC row: rename `LAST_VERIFIED_ECC`/its "drifting is normal, not a bug" messaging (stale after pinning) to `ECC_REF`-based pinned/differs-from-pin messaging
+- [x] 9.4 Update `tests/test_setup.py`'s ECC-version tests to match the new pinned messaging (was still asserting the old drift-note text)
+- [x] 9.5 Live-validate: fresh non-interactive install with the pinned ECC ref, `--doctor` reports `plugin ecc@ecc 2.2.1 (pinned to v2.2.1)`
+- [x] 9.6 Live-validate uninstall after a capability-configured, pinned install: `config.json` removed, every scheduled routine plist unscheduled (via the new `tests/test_setup.py` capability/routines test's uninstall coverage)
+- [ ] 9.7 Upgrade-cycle re-proof (`claude plugin update ecc@ecc` against the pinned ref) — not exercisable in this sandbox (no real plugin-marketplace network access); documented as a known gap in the final RC report rather than claimed as tested
+
+## Phase 10 — Testing
+- [x] 10.1 `tests/test_groundwork_config.py` (new, 112 checks) — default_config/validate_config per profile, load/save round-trip, fail-open on missing/corrupt files, CLI (init/show/profiles/validate, --force semantics), secret-key detection, and the CLAUDE_CONFIG_DIR regression test for the Phase 7 bug
+- [x] 10.2 `tests/test_groundwork_routines.py` (new, 114 checks) — ROUTINES registry shape, build_command's safety contract (never --dangerously-skip-permissions/--bare, correct --permission-mode/--permission-prompts/--allowedTools) for all six routines × dry-run states, off-switches, real subprocess run against a stub `claude` (success/failure/timeout paths), telemetry format and 0600 permissions, schedule_routine's plist generation and macOS/non-macOS branching, CLI `list`
+- [x] 10.3 `tests/test_setup.py` — extended `test_verify_reports_ecc_version` for the new pin-based messaging; new `test_capabilities_and_routines` (20 checks) covering --capability-profile end-to-end, --doctor (including the Phase 8 regression), --configure (explicit profile and declined-prompt paths), --routines, no-profile-chosen NOT CONFIGURED path, and uninstall cleanup
+- [x] 10.4 `tests/test_playbooks.py` — router renumbering fix plus the new Routine/Role/Skill/Tool distinction check (Phase 2.3)
+- [x] 10.5 Full regression: `python3 -m pytest tests -q` — 28 test functions, all passing, after every change in this pass
+- [ ] 10.6 Additional coverage the brief's own checklist calls for but this pass leaves to Phase 11's live validation rather than new unit tests: news-topic deduplication/materiality filtering and TUI/doctor's "never invent unobservable data" property are behavioral properties of an LLM-driven routine prompt, not of the Python framework — verified by reading the actual runtime output in Phase 11, not asserted by a deterministic unit test
+
+## Phase 11 — Live validation
+- [x] 11.1 Formalize the Phase 5.9 / 7.5 / 8.5 / 9.5–9.6 manual sandbox runs into a dated `docs/VALIDATION.md` "Groundwork 2.1.0" entry with full command + result evidence
+- [x] 11.2 Fresh install → capability profile selection (`sre-cloudops` exercised end-to-end; the remaining 7 profiles share the same `groundwork_config.py`/`apply_capabilities()` code path and are covered structurally by `tests/test_groundwork_config.py`'s per-profile `validate_config()` checks, not re-run live individually) → doctor → configure → routines → uninstall, full cycle — live-verified via `tests/test_setup.py::test_capabilities_and_routines` plus the standalone sandbox reproductions in `docs/VALIDATION.md`
+- [x] 11.3 Live routine run: `work_digest` (mutates=false) against the real `claude` CLI in this sandbox, and `jira_eod --dry-run` (from the pre-compaction portion of this session) — both recorded in `docs/VALIDATION.md`. Not independently re-run live per routine class this pass: `news`/`weekly_status`/`pr_followup`/`doc_drift` share `work_digest`'s exact invocation path (`build_command()`/`run_routine()`), differing only in prompt text, which is not what this phase's live-validation claim is about (prompt-content quality is a model-behavior property, not a framework-mechanism one)
+- [x] 11.4 Version-bump sanity check: fresh install after the CHANGELOG 2.1.0 entry was added reports `Groundwork 2.1.0 installed successfully` and stamps `VERSION` as `2.1.0` (was `2.0.0` through Phase 9's live tests, confirming `install.sh`'s CHANGELOG-derived version stamping works end-to-end with the new entry)
+
+## Phase 12 — Independent review loop, documentation, final release-candidate report
+- [x] 12.1 Write `docs/ROUTINES.md` (referenced by `rules/task-routing.md` §4 but not created until this phase)
+- [x] 12.2 Update `README.md`'s repo-layout tree and a new "Capabilities, profiles and Routines" section, `docs/ARCHITECTURE.md`'s capability-ownership table (5 new rows), `CHANGELOG.md` (2.1.0 entry added, version heading bumped — confirmed live in 11.4 above)
+- [ ] 12.3 Dispatch a fresh-context independent reviewer; classify findings MUST FIX / NICE TO HAVE; fix every MUST FIX; rerun affected validation; repeat until MUST FIX: 0
+- [ ] 12.4 Write the final release-candidate report per the brief's required structure (release identity, architecture, context engineering, skills, MCP/integrations, routines, UX, tests, runtime validation, independent review, known limitations, deferred items, acceptance-standard walkthroughs)
+- [ ] 12.5 Never merge to main, never tag, never publish a release — the branch stays a release candidate for owner review

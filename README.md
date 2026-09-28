@@ -86,20 +86,25 @@ Claude Code itself must already be installed and signed in (it is the product be
 
 Deliberate limits: Homebrew itself is not installed for you (its official one-liner is printed instead, because it needs your password); a Node.js that exists but is older than 20.19.0 is left to your version manager (nvm, asdf, volta) with a clear message; `--non-interactive` never installs anything unless `--install-prereqs` is given. After installing, the check runs again.
 
-The three questions:
+The three required questions, plus one optional fourth:
 
 - **Profile** — Work / Personal / Other. Sets `GROUNDWORK_PROFILE` in your `settings.json` `env` (machine-specific; recorded by telemetry, shown on the dashboard). Nothing in the repo hard-codes it.
 - **Agent Teams** — No (recommended) / Yes. Yes runs `./install.sh --agent-teams`.
 - **Dashboard schedule** — Weekly (recommended) / Daily / Monthly / Yearly / Disabled, applied through the existing report scheduler.
+- **Capabilities and Routines** (optional, defaults to skip) — pick a profile (SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, Custom) to enable cloud/platform/integration awareness, optional skills, and scheduled Routines like a Jira end-of-day update or a daily news digest. See [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) below.
 
 Other modes:
 
 ```bash
 ./setup.sh --verify       # read-only: version, rules, playbooks, hooks, ECC, OpenSpec, telemetry, dashboard, schedule → PASS / FAIL / NOT CONFIGURED
+./setup.sh --doctor       # read-only: everything --verify checks, plus configured capabilities and every Routine's status
+./setup.sh --configure    # revisit capability/Routine selection only — no backup, no reinstall
+./setup.sh --routines     # list configured Routines and their last-run status
 ./setup.sh --rollback     # restore the latest setup.sh backup; the current ~/.claude is moved to ~/.claude-groundwork-disabled-<timestamp>/ first, never deleted
 ./setup.sh --rollback ~/.claude-backups/groundwork-20260921-144500   # a specific backup (required when timestamps are ambiguous)
 ./setup.sh --uninstall    # delegates to uninstall.sh: removes Groundwork, keeps telemetry and reports
 ./setup.sh --non-interactive --profile work --no-agent-teams --schedule weekly   # scripted setup
+./setup.sh --non-interactive --profile work --capability-profile sre-cloudops    # scripted setup with a capability profile
 ```
 
 If setup fails after the backup was taken, it prints the failure, the backup path and the rollback command; your previous configuration is never deleted.
@@ -167,6 +172,14 @@ open ~/.claude/groundwork/reports/dashboard.html
 
 The schedule is a macOS launchd agent (`com.groundwork.report`, default weekly, Monday 08:00; `--hour` to change) that runs `generate --snapshot` — Claude does not need to be running and no API call is made. On Linux the schedule is only recorded: run `generate --snapshot` manually or from cron. Schedule and analysis window are separate: `~/.claude/groundwork/report.json` holds `schedule` and `window_days` (default 30). Report generation is a separate process that no hook calls, so a reporting failure cannot affect task execution or telemetry collection. Uninstall removes the job and the script but keeps `telemetry/` and `reports/`.
 
+## Capabilities, profiles and Routines
+
+Entirely optional, and off by default — `./setup.sh` with no interaction installs the same core as above with nothing here configured. A capability profile (chosen during setup's optional fourth question, or later via `./setup.sh --configure`) pre-selects cloud/platform/integration awareness, optional skills, and scheduled **Routines** for a role: SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, or Custom. It's a starting point, not a forced install — everything stays individually toggleable in one plain JSON file, `~/.claude/groundwork/config.json` (never credentials — `groundwork_config.py validate` actively flags anything that looks like one).
+
+A **Routine** is recurring automation that runs on a schedule, without an active session — distinct from a Playbook (how Groundwork handles a request *now*), a Role (a dynamic builder persona), a Skill, or a Tool (see [rules/task-routing.md](rules/task-routing.md) §4). Six ship today: a Jira end-of-day update, a daily technical-news digest, a weekly status summary, a PR/review follow-up, a daily work/TODO digest, and a documentation-drift check. Each invokes a real headless `claude -p` session under a fixed safety contract — never `--dangerously-skip-permissions`, never `--bare`, always an explicit `--allowedTools` allowlist — and records only structured, secret-free telemetry of what ran, never raw prompts or output. Full detail: [docs/ROUTINES.md](docs/ROUTINES.md).
+
+`docs/INTEGRATIONS.md` is the companion evidence for external systems (GitHub, Jira, AWS, GCP, Kubernetes, Terraform, Spacelift, observability): what's trustworthy and how to wire it yourself — Groundwork never installs, configures, or stores credentials for any of them. `docs/CONTEXT-ENGINEERING.md` is the audit behind why none of this needed new context infrastructure — everything above composes Claude Code's own native mechanisms (progressive-disclosure skills, deferred tool search, subagent isolation).
+
 ## The completion facts
 
 Every STANDARD/MATERIAL task establishes six facts with evidence — Code · Tests · Reviewed · Merged · Deployed · Live validated (✅ / ❌ / N/A) — plus `Overall: COMPLETE / PARTIAL / BLOCKED / PLANNED / FAILED`, and reports them once, inside the output contract's Validation / Technical details. The aligned `STATUS` block layout is produced only when the user asks for a release/deployment checklist. Hard rules: merged ≠ complete, tested ≠ deployed, deployed ≠ live validated, code written ≠ done. A failing test — including one that was already failing before you started — makes `Tests: ❌` and `Overall: PARTIAL`, never COMPLETE. Mocks never prove runtime.
@@ -186,14 +199,14 @@ Everything there is labelled **CURRENT** (implemented, with the version it lande
 ```
 groundwork/
 ├── setup.sh                           one-click onboarding: prerequisites (installs missing git/Node/npm/Python per OS),
-│                                      full ~/.claude backup, profile / Agent Teams / schedule questions, then install.sh;
-│                                      --verify, --rollback, --uninstall, --non-interactive
-├── install.sh / uninstall.sh          the actual installer/remover, idempotent, reversible (--agent-teams opt-in)
+│                                      full ~/.claude backup, profile / Agent Teams / schedule / capability questions, then install.sh;
+│                                      --verify, --rollback, --uninstall, --doctor, --configure, --routines, --non-interactive
+├── install.sh / uninstall.sh          the actual installer/remover, idempotent, reversible (--agent-teams opt-in; ECC pinned to a tested ref)
 ├── rules/                             always-loaded governance (installed to ~/.claude/rules/groundwork/)
-│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, continuation, completion facts
+│   ├── engineering-workflow.md        tiers, execution order, autonomy, execution model, capability resolution (§6a), continuation, completion facts
 │   ├── architecture-quality.md        governing principle, dimensions as criteria, pre-MATERIAL questions, variation points
 │   ├── evidence-policy.md             evidence priority, labels, DECISION record, validation ladder, completion evidence
-│   ├── task-routing.md                one category per task → one playbook
+│   ├── task-routing.md                one category per task → one playbook; Playbook/Routine/Role/Skill/Tool (§4)
 │   └── output-contract.md             three-layer response shape, checklist style, Harness metadata block
 ├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
 ├── hooks/
@@ -203,6 +216,8 @@ groundwork/
 │   └── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
+│   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write/validate, no secrets ever
+│   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
 │   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
 │   └── migrate_legacy_rules.py        moves a pre-Groundwork rules/harness copy to a backup
@@ -211,7 +226,9 @@ groundwork/
 │   ├── test_playbooks.py              routing rule, playbooks, output contract, install.sh / uninstall.sh
 │   ├── test_telemetry.py              telemetry hook (classifier, privacy, tail read, fail-open)
 │   ├── test_report.py                 dashboard generator (metrics, filters, Python↔JS parity, schedules)
-│   └── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall)
+│   ├── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall, capabilities, doctor, routines)
+│   ├── test_groundwork_config.py      capability config (profiles, validation, fail-open, CLAUDE_CONFIG_DIR resolution)
+│   └── test_groundwork_routines.py    Routines (safety contract, off-switches, scheduling, telemetry)
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
@@ -219,6 +236,9 @@ groundwork/
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
     ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
+    ├── CONTEXT-ENGINEERING.md         what enters context, classified always/selective/lazy/isolated/persisted/reconstructed
+    ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
+    ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
     └── images/                        overview diagram and dashboard screenshot
 ```
 

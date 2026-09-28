@@ -29,5 +29,12 @@ Same threshold as `engineering-workflow.md` §4, applied to every category. Ask 
 
 COMPARE → DESIGN (approaches) or RESEARCH (technologies); AUTOMATE → IMPLEMENT; REPORT findings → DOCUMENT; VERIFY → VALIDATE; DECIDE → DESIGN. Do not invent new categories.
 
-## 4. Universal output contract
+## 4. Five distinct concepts (Groundwork 2.1 — do not conflate)
+- **Playbook** — how Groundwork handles a request *now*, in this session (§3's ten categories).
+- **Routine** — recurring/scheduled automation that runs *without* an active session (`docs/ROUTINES.md`): a Jira end-of-day update, a daily digest. A routine's own scheduled run still follows this same router and `engineering-workflow.md` internally — it is not a second, separate rule system, just a different trigger (a schedule, not a user message) and a different execution mode (a headless, non-interactive session).
+- **Role** — an engineering perspective a subagent or teammate adopts for a task (`engineering-workflow.md` §6's builder personas) — dynamic, never a permanent file.
+- **Skill** — specialized knowledge/workflow, native or plugin-sourced, invoked when relevant.
+- **Tool** — an execution/access mechanism (Bash, MCP, CLI, browser) — see `engineering-workflow.md` §6a for how one is chosen.
+
+## 5. Universal output contract
 Every response follows `output-contract.md`: a plain-language main response (result first, only material findings, validation stated honestly, one next action when needed), then `Technical details` when useful evidence exists, then `Evidence & references` when the conclusion depends on sources. The playbook names the main-response headings for its category; the contract supplies the other two layers and the rules (omit empty sections, no narration, conciseness never hides risk or failed validation).
