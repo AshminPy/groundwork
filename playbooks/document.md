@@ -4,8 +4,8 @@
 Produce a document that its intended audience can use, grounded in the actual code, configuration, runtime or findings — never in what the system was meant to do.
 
 ## Workflow
-1. Identify the audience and the format they asked for (README, runbook, report, executive summary, incident write-up, implementation doc); the audience decides depth and language.
-2. Gather the source of truth before writing: the repository, configuration, tests, CI, runtime evidence, or the findings being reported. A document that describes features that do not exist in the code is wrong.
+1. Identify the audience and the format they asked for (README, runbook, report, executive summary, incident write-up, implementation doc, presentation/deck); the audience decides depth and language.
+2. Gather the source of truth before writing: the repository, configuration, tests, CI, runtime evidence, or the findings being reported. A document that describes features that do not exist in the code is wrong. For a presentation specifically: every metric, status and architecture claim traces to this same evidence — never an invented number or a component added to make a slide look more complete; an unverified aspect (e.g. no runtime validation performed) is stated plainly, not smoothed over or omitted. Default output is Markdown/Mermaid (portable, git-diffable, no plan/tool gate); use an installed document-generation plugin (e.g. `document-skills`) for `.pptx`/`.docx` only when the user wants a bundled file and the plugin is actually present — never assume it, never degrade quality when it is absent.
 3. Reuse an existing template or convention in the repository if there is one; otherwise use the simplest structure the format implies.
 4. Write for the audience: answer first, simple English, one idea per sentence, commands and paths exact and runnable, no filler.
 5. Mark anything not verified as such inside the document rather than smoothing it over; distinguish implemented from planned.

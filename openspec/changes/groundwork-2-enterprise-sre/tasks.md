@@ -125,13 +125,13 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 ## STAGE 4 — EXPERIENCE
 
 ### Phase 10 — Output-style and presentation architecture (new this pass)
-- [ ] 10.1 RUNTIME VALIDATION REQUIRED: confirm whether selecting a non-Default output style affects `~/.claude/rules/**/*.md` loading, before any Groundwork-authored style file ships
-- [ ] 10.2 Add the truth/style separation invariant to `rules/output-contract.md`
-- [ ] 10.3 Add the presentation branch to `playbooks/document.md` (source-of-truth rule, portable-format default, optional `document-skills` plugin usage)
-- [ ] 10.4 Model-behavior validation: the "presentation truth" and "output style invariance" scenarios from design.md §L.2
+- [x] 10.1 RUNTIME VALIDATION REQUIRED: confirm whether selecting a non-Default output style affects `~/.claude/rules/**/*.md` loading, before any Groundwork-authored style file ships — **RESOLVED during Phase 1** (design.md §H.2/§N item 7): rules load unchanged regardless of output style
+- [x] 10.2 Add the truth/style separation invariant to `rules/output-contract.md`
+- [x] 10.3 Add the presentation branch to `playbooks/document.md` (source-of-truth rule, portable-format default, optional `document-skills` plugin usage)
+- [x] 10.4 Model-behavior validation: the "presentation truth" and "output style invariance" scenarios from design.md §L.2 — both live-tested; see docs/VALIDATION.md
 - [ ] 10.5 Independent fresh-context review
-- [ ] 10.6 docs/VALIDATION.md entry
-- [ ] 10.7 (OPTIONAL/LATER, not scheduled this phase) author Groundwork-provided output-style presets and the presentation design-system template — only after 10.1's runtime check and only if a real presentation task exposes what the template actually needs
+- [x] 10.6 docs/VALIDATION.md entry
+- [-] 10.7 (OPTIONAL/LATER, not scheduled this phase) author Groundwork-provided output-style presets and the presentation design-system template — not built; no real presentation task in this implementation exposed a concrete need for one, per the design's own deferral condition
 
 ### Phase 11 — Teach/learn capability (new this pass)
 - [ ] 11.1 Extend `playbooks/explain.md` with the teach-from-verified-work branch
