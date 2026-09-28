@@ -38,6 +38,14 @@ rm -f "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
       "$CLAUDE_DIR/hooks/groundwork_telemetry.py" \
       "$CLAUDE_DIR/hooks/groundwork_shared.py"
+# Python leaves a compiled cache behind for each hook it has run; clean up just Groundwork's own
+# entries by name (never the whole __pycache__ dir — it may hold other tools' cached modules too).
+rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/require_material_review.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_session_snapshot.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_telemetry.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc 2>/dev/null || true
+rmdir "$CLAUDE_DIR/hooks/__pycache__" 2>/dev/null || true
 if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ]; then
   for kept in telemetry reports; do
     [ -d "$CLAUDE_DIR/groundwork/$kept" ] && echo "Kept $CLAUDE_DIR/groundwork/$kept/ (your data) — delete it yourself if you do not want it."

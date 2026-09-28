@@ -57,20 +57,26 @@ session over a broken guard.
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Imported separately (not one combined try/except): a stale or partially-installed
+# groundwork_shared.py that is missing just one of these two names must not also take down
+# the other — each degrades independently to its own safe fail-open default.
 try:
-    from groundwork_shared import dirty_change_names, TEST_CMD  # shared with the other hooks
+    from groundwork_shared import dirty_change_names  # shared with groundwork_session_snapshot.py
 except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook — no dirty
-    # changes found means no review candidates, which is the same safe outcome as
-    # every other fail-open path below; a TEST_CMD that matches nothing just means
-    # "validation re-run" evidence is not detected (degraded, not broken).
+    # changes found means no review candidates, the same safe outcome as every other
+    # fail-open path below.
     def dirty_change_names(cwd: str) -> set[str]:
         return set()
+try:
+    from groundwork_shared import TEST_CMD  # shared with groundwork_telemetry.py
+except Exception:
+    # A TEST_CMD that matches nothing just means "validation re-run" evidence is not
+    # detected (degraded, not broken) — never a crash.
     TEST_CMD = re.compile(r"(?!x)x")
 
 # (?<![a-z]) so "preview"/"previewer" never count; "reviewer", "code-review", "orch-review" still do.

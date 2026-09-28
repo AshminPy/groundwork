@@ -5,6 +5,7 @@ Run: python3 tests/test_setup.py   (or: python3 -m pytest tests -q)
 Every run uses a temporary CLAUDE_CONFIG_DIR, a temporary backup root, stubbed claude/openspec/npm
 binaries on PATH, launchctl stubbed out, and the wrapper's own test run skipped.
 """
+import atexit
 import json
 import os
 import shutil
@@ -33,8 +34,12 @@ PASS = FAIL = 0
 _FILTERED_SYSBIN: Path | None = None
 # Node/npm (see above) plus every package manager setup.sh detects — this sandbox's own base
 # image is Debian-based and ships a real apt-get, which the same leak class made detect_pm()
-# find ahead of a test box's intended (or intentionally absent) package-manager stub.
-_EXCLUDED_FROM_SYSBIN = {"node", "npm", "npx", "corepack", "nodejs", "apt-get", "apt", "dnf", "apk", "brew"}
+# find ahead of a test box's intended (or intentionally absent) package-manager stub. `claude`
+# and `openspec` are excluded too, defense-in-depth: every test already places its own stub
+# earlier on PATH, so a real one here would normally stay shadowed, but a host that happens to
+# ship either at /usr/local/bin should never be able to leak in silently.
+_EXCLUDED_FROM_SYSBIN = {"node", "npm", "npx", "corepack", "nodejs", "apt-get", "apt", "dnf", "apk", "brew",
+                          "claude", "openspec"}
 
 
 def filtered_sysbin() -> Path:
@@ -42,6 +47,7 @@ def filtered_sysbin() -> Path:
     if _FILTERED_SYSBIN is not None:
         return _FILTERED_SYSBIN
     d = Path(tempfile.mkdtemp(prefix="groundwork-test-sysbin-"))
+    atexit.register(shutil.rmtree, d, ignore_errors=True)  # test-only scratch dir; never leak it across runs
     for real_dir in ("/usr/bin", "/bin", "/usr/local/bin"):
         p = Path(real_dir)
         if not p.is_dir():
