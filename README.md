@@ -1,10 +1,30 @@
 # Groundwork
 
-**A small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.**
+**Version 2.0.0** — a small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.
 
 Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: five rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and four small deterministic hooks — a push guard, an enforced independent review for material changes, a session-start snapshot of the repository so a fresh session can continue an existing project, and a usage-telemetry recorder. That's the whole product: rule files, hooks, an installer. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
 
 Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) — see [CREDITS.md](CREDITS.md) for exactly what's original here versus what's installed from upstream.
+
+## Groundwork 2.0 — What's new
+
+Groundwork 2.0 moves from a lightweight engineering harness to a more complete evidence-first SRE/CloudOps workflow, on the same small-footprint model: rule text and composition first, new files only when nothing existing can satisfy the requirement. Full detail, live-validation evidence and exact test/task status: [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE-REPORT-2.0.md](docs/RELEASE-REPORT-2.0.md).
+
+- **Repository-aware engineering** — before proposing infrastructure/platform/delivery work, Groundwork inspects the existing module/pipeline structure, naming and label conventions, environment organization, IAM/networking and state/backend patterns, CI/CD conventions, and the closest existing analogous implementation, and follows them unless they're demonstrably unsafe or broken.
+- **Dynamic engineering roles** — automatically reasons from an Infrastructure, Platform, Delivery, or Application Engineer perspective when the task calls for it, as a rule-text persona selected per task — never a permanent agent file, so there's no agent sprawl to maintain.
+- **Stronger evidence model** — adds `CONFLICTING EVIDENCE` and `UNKNOWN` to the existing VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / RUNTIME VALIDATION REQUIRED labels, so Claude can say evidence is insufficient or contradictory instead of forcing a conclusion.
+- **Stronger independent review** — a MATERIAL change with a MUST FIX finding now requires fix → re-run the affected validation → a **fresh** independent re-review confirming the finding is resolved, not just an edit and a test run, before the change can be called complete.
+- **Investigation continuity** — for work not tracked by an OpenSpec change, a small, capped per-repository file (objective, proven facts, evidence, decisions, active/rejected hypotheses with reasons, files changed, validation results, blockers, next action) survives context compaction and fresh sessions — never chain-of-thought, and current repository/runtime evidence always outranks what was saved.
+- **Rejected hypotheses stay rejected** — unless new evidence is presented that actually contradicts the original reason, stated explicitly, not silently re-proposed as still-open.
+- **SRE/CloudOps workflow composition** — troubleshooting, RCA, deployment, validation, audit, and documentation compose the existing playbooks, curated ECC agents/skills, repository-understanding, and MCP/CLI tool access; this shipped zero new agent or skill files.
+- **Clearer execution boundaries** — read-only discovery stays always allowed; nonprod mutation explicitly authorized by the task proceeds under existing permissions; production, IAM, data-destructive, or paid-resource changes require explicit authorization, separated from a merely-reversible file edit. (A further tier of deterministic, naming-pattern-based guards for production/IAM operations was designed but deliberately not built this release — heuristic production-detection by name risks false confidence; see [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).)
+- **Completion truth extended to builder work** — the existing Code / Tests / Reviewed / Merged / Deployed / Live-validated facts now explicitly cover infrastructure/platform/delivery work too, with a closed loop: a failed runtime validation routes to root-cause analysis, a fix, and a re-validation before any completion claim.
+- **Presentation support** — technical work can be turned into a Markdown/Mermaid presentation by default (portable, no plan/tool gate), or handed to an installed document-generation plugin for a bundled `.pptx`/`.docx` when the user wants one and it's actually present — the underlying technical truth is the same regardless of how it's presented; a native Claude Code output style may change tone, never that truth.
+- **Teach/Learn mode** — Groundwork can explain what was fixed, why it failed, and what evidence proved it, using only the actual evidence this session (or a recoverable investigation file) established — and says plainly when that evidence trail isn't available, rather than inventing a plausible-sounding story.
+- **Improved install/upgrade lifecycle** — clean install, upgrade from a real prior version, rollback, and uninstall were each tested live end-to-end in an isolated environment; a real bug in version reporting after an upgrade was found and fixed in the process.
+- **Harness telemetry/dashboard retained** — the existing local evaluation dashboard is unchanged and still available for understanding harness activity and effectiveness.
+- **OpenSpec integration remains risk-based** — material architecture/security/infrastructure changes get a structured spec; small changes don't get unnecessary process.
+- **Automatic orchestration remains simple** — main session, a focused subagent, or Claude Code's native Agent Teams is still selected by the work, now including which builder-role perspective applies, without you ever having to manage the AI architecture yourself.
 
 ## Why this exists
 
