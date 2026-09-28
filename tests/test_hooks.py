@@ -104,6 +104,46 @@ def write_transcript(tmp: Path, name: str, tool_uses: list[dict] | None) -> Path
     return path
 
 
+def write_review_events(tmp: Path, name: str, events: list[dict]) -> Path:
+    """Build a transcript from ordered events for the Groundwork 2.0 D3 (review-evidence
+    strengthening) tests. Each event is one of:
+      {"kind": "review", "id": "r1", "review_name": "Task", "input": {...}, "result": "<text>"|None}
+        -> a tool_use (with id) followed by its tool_result carrying `result` (unless None,
+           which simulates a review-shaped call whose result never made it into the transcript).
+      {"kind": "edit"}  -> an Edit tool_use (no result needed)
+      {"kind": "test"}  -> a Bash tool_use running a pytest-shaped command (no result needed)
+      {"kind": "bash", "command": "..."}  -> an arbitrary non-test Bash call
+    """
+    path = tmp / name
+    lines = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+              "input": {"command": "echo hi"}}]}}]
+    for i, ev in enumerate(events):
+        kind = ev["kind"]
+        if kind == "review":
+            tid = ev.get("id", f"r{i}")
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tid, "name": ev.get("review_name", "Task"), "input": ev.get("input", {"subagent_type": "code-reviewer"})}
+            ]}})
+            if ev.get("result") is not None:
+                lines.append({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": tid, "content": ev["result"]}
+                ]}})
+        elif kind == "edit":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "x.py", "old_string": "a", "new_string": "b"}}
+            ]}})
+        elif kind == "test":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "python3 -m pytest tests -q"}}
+            ]}})
+        elif kind == "bash":
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": ev.get("command", "ls")}}
+            ]}})
+    path.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+    return path
+
+
 # --------------------------------------------------------------------------- review gate
 
 def test_review_gate() -> None:
@@ -217,6 +257,125 @@ def test_review_gate() -> None:
         write_tasks(collide, done=True, change="add-thing")  # untracked, complete
         out = run_hook(REVIEW_HOOK, {"cwd": str(collide), "transcript_path": str(empty_transcript)})
         check("substring collision: only add-thing is flagged", "[add-thing]" in out and "thing]" in out and "[add-thing, thing]" not in out, out)
+    finish()
+
+
+# ------------------------------------------------- review gate, strengthened (2.0, Decision D3)
+
+def test_review_gate_must_fix_strengthening() -> None:
+    print("require_material_review.py — MUST FIX -> fresh re-review (2.0)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        def fresh_repo():
+            repo = make_repo(tmp, f"repo-{fresh_repo.n}")
+            fresh_repo.n += 1
+            write_tasks(repo, done=True)
+            return repo
+        fresh_repo.n = 0
+
+        clean_result = "Looks good.\n\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\n"
+        problem_result = "Found issues.\n\nREVIEW RESULT\nVerdict: changes-required\nMust-fix: 2\nFindings: null check, timeout\n"
+
+        # 1. Single review, structured block, Must-fix: 0 -> allow (explicit structured case,
+        #    distinct from the legacy no-block cases already covered in test_review_gate).
+        repo = fresh_repo()
+        t = write_review_events(tmp, "clean.jsonl", [
+            {"kind": "review", "id": "r1", "result": clean_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("structured Must-fix: 0 -> allow", out == "", out)
+
+        # 2. MUST FIX found, nothing at all afterward -> BLOCK, message says so plainly.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-nothing.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, no follow-up at all -> block", '"decision": "block"' in out and "2 unresolved MUST FIX" in out
+              and "no follow-up edit has been observed yet" in out and "validation has not been re-run yet" in out, out)
+
+        # 3. MUST FIX found, edit made, but no validation re-run and NO fresh review -> still BLOCK
+        #    (this is the exact first-pass weakness the owner flagged: edit alone is not enough).
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-edit-only.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit only, no re-review -> block", '"decision": "block"' in out
+              and "a follow-up edit was observed" in out and "validation has not been re-run yet" in out, out)
+
+        # 4. MUST FIX found, edit + validation re-run, but still NO fresh independent review ->
+        #    still BLOCK. This is the core strengthening: "Edit -> Test alone is NOT sufficient
+        #    evidence of resolution" (owner's exact wording) — the most recent review call in the
+        #    transcript is still the one that reported 2 unresolved findings.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-edit-test-no-rereview.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit + validation re-run, no fresh review -> still block", '"decision": "block"' in out
+              and "the affected validation was re-run" in out
+              and "a follow-up edit was observed" in out, out)
+
+        # 5. MUST FIX found, edit + test + a FRESH independent review whose own result shows
+        #    Must-fix: 0 -> allow. This is the full strengthened contract satisfied end to end.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-then-clean-rereview.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+            {"kind": "review", "id": "r2", "result": clean_result},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX -> edit -> test -> fresh clean review -> allow", out == "", out)
+
+        # 6. MUST FIX found, then a SECOND review that ALSO reports Must-fix > 0 -> still block,
+        #    with the updated (smaller) count, proving the gate always looks at the *most recent*
+        #    review's own verdict, not just "a second review happened at all".
+        repo = fresh_repo()
+        second_problem = "REVIEW RESULT\nVerdict: changes-required\nMust-fix: 1\nFindings: one remains\n"
+        t = write_review_events(tmp, "mf-then-still-mf.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "test"},
+            {"kind": "review", "id": "r2", "result": second_problem},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX -> fresh review still finds 1 -> block with updated count", '"decision": "block"' in out and "1 unresolved MUST FIX" in out, out)
+
+        # 7. Reviewer does not emit a REVIEW RESULT block at all (most reviewers don't know this
+        #    format yet) -> degrades to legacy presence-only behavior -> allow, never stricter
+        #    than the pre-2.0 gate.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "no-block-at-all.jsonl", [
+            {"kind": "review", "id": "r1", "result": "Looks fine to me, no notes."},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("reviewer emits no REVIEW RESULT block -> legacy allow", out == "", out)
+
+        # 8. Reviewer's tool_result never appears in the transcript at all (e.g. truncated/lag) ->
+        #    same graceful legacy fallback, not a crash or an incorrect block.
+        repo = fresh_repo()
+        t = write_review_events(tmp, "no-result-at-all.jsonl", [
+            {"kind": "review", "id": "r1", "result": None},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("review call with no tool_result at all -> legacy allow, no crash", out == "", out)
+
+        # 9. A non-test Bash command after a MUST FIX finding must NOT count as "validation re-run".
+        repo = fresh_repo()
+        t = write_review_events(tmp, "mf-irrelevant-bash.jsonl", [
+            {"kind": "review", "id": "r1", "result": problem_result},
+            {"kind": "edit"},
+            {"kind": "bash", "command": "git status"},
+        ])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("MUST FIX, edit + unrelated bash (not a test) -> still says validation not re-run", '"decision": "block"' in out
+              and "validation has not been re-run yet" in out, out)
     finish()
 
 
@@ -540,7 +699,7 @@ if __name__ == "__main__":
     if shutil.which("git") is None:
         print("git not found on PATH — cannot run these tests")
         sys.exit(1)
-    for test in (test_review_gate, test_push_guard, test_session_snapshot, test_settings_merge, test_legacy_migration):
+    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_settings_merge, test_legacy_migration):
         try:
             test()
         except AssertionError:

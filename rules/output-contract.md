@@ -38,6 +38,15 @@ Validation:  verified | partial | not verified
 ```
 Add `Profile:`, `Environment:`, `Agents:` (roles) or `Tools:` (MCPs) only when materially relevant, and never repeat information shown elsewhere in the response. Execution and Agents must agree and come from what you actually launched this turn: `<N> subagents` means N Agent calls, and an `Agents:` line lists exactly those N roles (`1 subagent` → one role; `single agent` → no Agents line). Only known values — never invented, "unknown" when unsure; no reasoning. This block is what the telemetry hook records as *declared* metadata (with the Status sentence for the outcome); tools, files, tests, agent calls, version and profile it *observes* itself — so state the declared fields accurately.
 
+## Review result (independent reviewers only, Groundwork 2.0)
+```
+REVIEW RESULT
+Verdict:   approve | changes-required
+Must-fix:  <N>
+Findings:  <short labels, only when N > 0>
+```
+When reviewing a MATERIAL change (`engineering-workflow.md` §2.6) as the independent fresh-context reviewer, end with this block so `hooks/require_material_review.py` reads the verdict deterministically. Optional but load-bearing: without it the gate only detects a review happened; with it, the gate always evaluates the *most recent* review's own verdict — an edit plus revalidation after a MUST FIX finding is not enough by itself; a fresh review reporting `Must-fix: 0` is required.
+
 ## Always
 - Priority order never changes: accuracy · security · evidence · correct execution · validation · easy to understand · concise · traceability. Clean output never hides a security risk, a failed test, a failed validation, a blocker, important uncertainty, a destructive consequence, or material evidence.
 - Formatting: consistent Markdown, one heading level for sections, minimal bolding, no decorative noise; code formatting for commands, paths, error codes, resource names, commit hashes and configuration keys.

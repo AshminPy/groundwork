@@ -18,7 +18,7 @@ These answer different questions and must not be conflated:
 - Tests / runtime evidence prove whether **our implementation actually works**.
 
 ## 2. Labels — never silently upgrade one into another
-`VERIFIED` (seen in code, output, or an official source you actually read) · `UNVERIFIED` (plausible, not checked) · `ASSUMPTION` (a default taken to keep moving; say what would change if wrong) · `INFERENCE` (reasoned from other facts) · `RUNTIME VALIDATION REQUIRED` (cannot be known until executed/deployed). If something cannot be verified, say so. Never manufacture confidence. Never invent APIs, flags, capabilities, configuration, behaviour, or documentation.
+`VERIFIED` (seen in code, output, or an official source you actually read) · `UNVERIFIED` (plausible, not checked) · `ASSUMPTION` (a default taken to keep moving; say what would change if wrong) · `INFERENCE` (reasoned from other facts) · `CONFLICTING EVIDENCE` (two or more sources at comparable priority in §1 disagree and neither is shown to be stale or wrong — name both, do not silently pick one) · `UNKNOWN` (cannot be determined from any available source — repository, runtime, official docs, standards, or established practice — distinct from UNVERIFIED, which means a check was skipped, not that none was possible) · `RUNTIME VALIDATION REQUIRED` (cannot be known until executed/deployed). If something cannot be verified, say so. Never manufacture confidence. Never invent APIs, flags, capabilities, configuration, behaviour, or documentation.
 
 ## 3. DECISION record — for MATERIAL decisions only
 Use when a choice can materially affect architecture, security, reliability, production behaviour, deployment, data integrity, cost, maintainability or compatibility. Do not use it for trivial implementation choices.
@@ -61,7 +61,7 @@ UNCERTAINTY         what is still assumed, inferred, or runtime-validation-requi
 Never claim "works", "fixed", "verified", "done" or "deployed" without the corresponding row's evidence shown as: **what was tested → exact command → observed result → what it proves and does not prove.**
 
 ## 7. Incident / RCA rule
-`CLAIM → EVIDENCE → SOURCE → CORRELATION → ROOT-CAUSE REASONING`. A symptom or state (e.g. `CrashLoopBackOff`, 502, OOMKilled) is not a root cause. Every root-cause conclusion needs an evidence chain (logs, events, config, timing correlation). Do not infer the cause from a common pattern alone; say "hypothesis" until proven.
+`CLAIM → EVIDENCE → SOURCE → CORRELATION → ROOT-CAUSE REASONING`. A symptom or state (e.g. `CrashLoopBackOff`, 502, OOMKilled) is not a root cause. Every root-cause conclusion needs an evidence chain (logs, events, config, timing correlation). Do not infer the cause from a common pattern alone; say "hypothesis" until proven. When the evidence chain genuinely does not support a root cause, label the state `UNKNOWN` (nothing available determines it) or `CONFLICTING EVIDENCE` (two pieces of evidence point different ways and nothing adjudicates between them) rather than softening the language around an unsupported claim — a downgraded-but-still-confident guess is not an honest report. Name exactly what additional evidence would resolve either state.
 
 ## 8. Memory vs repository
 Saved sessions, auto-memory, snapshots and specs are useful but can be stale. Before acting on a remembered fact that matters, check it against the current repository/runtime; the repository wins, and the mismatch is reported.
