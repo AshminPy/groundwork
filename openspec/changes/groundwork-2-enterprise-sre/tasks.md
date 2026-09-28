@@ -106,11 +106,11 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 7.9 docs/VALIDATION.md entry; docs/TROUBLESHOOTING.md's `skillOverrides` claim upgraded from asserted to confirmed-with-evidence; README/ARCHITECTURE already corrected in Phase 1 (task 1.4)
 
 ### Phase 8 — Repository understanding (new this pass)
-- [ ] 8.1 Extend `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` with the domain-specific discovery checklist (§E.2), referencing `architecture-quality.md` §5 rather than restating it
-- [ ] 8.2 Model-behavior validation: the "repository pattern vs. generic knowledge" and "rejected unsafe pattern" scenarios from design.md §L.2, run live against fixture repositories
-- [ ] 8.3 Non-regression check (playbooks stay within their existing size discipline; no new always-loaded file)
+- [x] 8.1 Extend `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` with the domain-specific discovery checklist (§E.2), referencing `architecture-quality.md` §5 rather than restating it
+- [x] 8.2 Model-behavior validation: the "repository pattern vs. generic knowledge" and "rejected unsafe pattern" scenarios from design.md §L.2, run live against fixture repositories — both passed; see docs/VALIDATION.md
+- [x] 8.3 Non-regression check (playbooks stay within their existing size discipline; no new always-loaded file) — all three playbooks remain within `MAX_PLAYBOOK_BYTES` (4000); no rule file touched
 - [ ] 8.4 Independent fresh-context review
-- [ ] 8.5 docs/VALIDATION.md entry with the fixture-repository transcripts
+- [x] 8.5 docs/VALIDATION.md entry with the fixture-repository transcripts
 
 ### Phase 9 — Builder execution roles (new this pass)
 - [ ] 9.1 Add the four role personas and the automatic orchestration extension to `rules/engineering-workflow.md` §6

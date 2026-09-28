@@ -5,7 +5,7 @@ Change a running system (cloud, Kubernetes, Docker, local) safely, prove it is h
 
 ## Workflow
 1. Identify the target precisely: environment, project/account, cluster, namespace, service, version. Never guess a target.
-2. Inspect the current state of the target and the deployment mechanism the project already uses (CI/CD, Terraform, Helm, kubectl, scripts). Use that mechanism; do not improvise a parallel one.
+2. Inspect the current state of the target and the deployment mechanism the project already uses (CI/CD, Terraform, Helm, kubectl, scripts). Use that mechanism; do not improvise a parallel one. For a new environment, cluster, or pattern also inspect: existing module/chart/pipeline structure; naming/variable/label conventions; environment/workspace organization (how nonprod vs. prod is distinguished); IAM/networking and state/backend patterns already in use; and the closest existing analogous deployment. Repository convention wins over generic knowledge (`architecture-quality.md` §5) unless demonstrably unsafe, broken, deprecated or incompatible with the requirement — then deviate and say why.
 3. Classify: any production, IAM, data or paid-resource change is MATERIAL (`engineering-workflow.md` §1) and, being irreversible or production-facing, requires explicit authorization (§4) — ask before applying. Non-production, reversible changes proceed.
 4. Preview before applying wherever the tooling allows (`terraform plan`, dry-run, diff). Read the preview; a replace or destroy of a stateful resource is a stop-and-confirm.
 5. Apply. Watch the rollout to completion.
