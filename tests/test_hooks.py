@@ -721,9 +721,11 @@ def test_investigation_continuity() -> None:
         # 10. Control characters in the investigation file are stripped, same as every other
         #     field quoted into this hook's output (the file persists and replays into every
         #     future session for the repo — a stronger vector than one-off commit metadata).
-        computed_path.write_bytes(b"# Investigation\n\x00\x1b[31m## Rejected hypotheses\n- x \x00REJECTED: y\n")
+        computed_path.write_bytes(b"# Investigation\n\x00\x1b[31m## Rejected hypotheses\n- x \x00REJECTED: y\r\n")
         text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
         check("control characters in investigation file are stripped", "\x00" not in text and "\x1b" not in text, repr(text[-400:]))
+        check("carriage return is stripped too (found by independent review: an earlier fix stripped \\x00-\\x08/\\x0b-\\x1f minus \\x0e-\\x1f, accidentally skipping \\r=0x0D)",
+              "\r" not in text, repr(text[-400:]))
         check("content is still surfaced after stripping", "Rejected hypotheses" in text, text)
     finish()
 
