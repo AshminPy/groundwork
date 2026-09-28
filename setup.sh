@@ -11,6 +11,10 @@
 #   ./setup.sh --verify             read-only check of the current installation (changes nothing)
 #   ./setup.sh --rollback [DIR]     restore the latest backup made by setup.sh (or the given backup DIR)
 #   ./setup.sh --uninstall          delegates to uninstall.sh (telemetry and reports are kept)
+#   ./setup.sh --doctor             read-only: Groundwork/ECC/OpenSpec plus configured capabilities and Routines
+#   ./setup.sh --configure          re-run the optional capability/Routines selection only (no backup/reinstall)
+#   ./setup.sh --routines           list configured Routines and their last-run status
+#   ./setup.sh --routines NAME      print the most recent stored result for one routine
 #
 # setup.sh never installs anything itself: install.sh installs, uninstall.sh removes,
 # scripts/groundwork_report.py schedules. This file only backs up, asks, delegates and verifies.
@@ -36,20 +40,29 @@ NONINT=0
 INSTALL_PREREQS=""   # yes | no | "" (ask)
 INSTALLED_PREREQS="no"
 PROFILE=""
+CAP_PROFILE=""    # sre-cloudops | platform-engineering | devops | software-engineering |
+                  # cloud-architecture | security-engineering | minimal | custom | "" (ask)
 TEAMS=""          # yes | no | ""
 SCHEDULE=""       # weekly | daily | monthly | yearly | disabled | ""
 ROLLBACK_DIR=""
+ROUTINE_NAME=""
 BACKUP_PATH=""
+CONFIG_PY="$CLAUDE_DIR/groundwork/bin/groundwork_config.py"
+ROUTINES_PY="$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --verify) [ "$MODE" = setup ] || die "cannot combine --$MODE with --verify"; MODE=verify ;;
     --rollback) [ "$MODE" = setup ] || die "cannot combine --$MODE with --rollback"; MODE=rollback; if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then ROLLBACK_DIR="$2"; shift; fi ;;
     --uninstall) [ "$MODE" = setup ] || die "cannot combine --$MODE with --uninstall"; MODE=uninstall ;;
+    --doctor) [ "$MODE" = setup ] || die "cannot combine --$MODE with --doctor"; MODE=doctor ;;
+    --configure) [ "$MODE" = setup ] || die "cannot combine --$MODE with --configure"; MODE=configure ;;
+    --routines) [ "$MODE" = setup ] || die "cannot combine --$MODE with --routines"; MODE=routines; if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then ROUTINE_NAME="$2"; shift; fi ;;
     --non-interactive) NONINT=1 ;;
     --install-prereqs) INSTALL_PREREQS=yes ;;
     --no-install-prereqs) INSTALL_PREREQS=no ;;
     --profile) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--profile requires a value (e.g. --profile work)"; PROFILE="$2"; shift ;;
+    --capability-profile) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--capability-profile requires a value (e.g. --capability-profile sre-cloudops)"; CAP_PROFILE="$2"; shift ;;
     --agent-teams) TEAMS=yes ;;
     --no-agent-teams) TEAMS=no ;;
     --schedule) [ $# -gt 1 ] && [ "${2#--}" = "$2" ] || die "--schedule requires a value: weekly|daily|monthly|yearly|disabled"; SCHEDULE="$2"; shift ;;
@@ -69,7 +82,7 @@ MISSING=()
 NODE_MIN_MAJOR=20; NODE_MIN_MINOR=19   # matches OpenSpec's actual engines.node (>=20.19.0), not ECC's lower floor
 PY_MIN_MAJOR=3; PY_MIN_MINOR=10
 LAST_VERIFIED_OPENSPEC="1.13.2"   # OpenSpec is npm-pinned by version; a mismatch here means real upstream drift
-LAST_VERIFIED_ECC="2.2.2"   # ECC installs unpinned from GitHub main (see docs/ARCHITECTURE.md) — this is only the version Groundwork's docs were last checked against, not a pin; a mismatch is expected over time, not an error
+ECC_REF="${GROUNDWORK_ECC_REF:-v2.2.1}"   # Groundwork 2.1: install.sh pins ECC to this ref (see install.sh); kept in sync with it, not independently drifting
 
 detect_pm() {
   case "$OS_KIND" in
@@ -301,6 +314,280 @@ choose_schedule() {
   case "$c" in 1) SCHEDULE=weekly ;; 2) SCHEDULE=daily ;; 3) SCHEDULE=monthly ;; 4) SCHEDULE=yearly ;; 5) SCHEDULE=disabled ;; *) die "invalid choice: $c" ;; esac
 }
 
+pick_cap_profile() {  # just the profile menu — shared by first-time setup and --configure option 1
+  say ""
+  say "Profile (a starting point, not a forced install — every capability and Routine stays"
+  say "individually toggleable afterward with ./setup.sh --configure):"
+  say "  1. SRE / CloudOps          5. Cloud Architecture"
+  say "  2. Platform Engineering    6. Security Engineering"
+  say "  3. DevOps                  7. Minimal"
+  say "  4. Software Engineering    8. Custom (blank — configure entirely by hand)"
+  local p=""; ask p "Choice" "1"
+  case "$p" in
+    1) CAP_PROFILE=sre-cloudops ;; 2) CAP_PROFILE=platform-engineering ;; 3) CAP_PROFILE=devops ;;
+    4) CAP_PROFILE=software-engineering ;; 5) CAP_PROFILE=cloud-architecture ;;
+    6) CAP_PROFILE=security-engineering ;; 7) CAP_PROFILE=minimal ;; 8) CAP_PROFILE=custom ;;
+    *) die "invalid choice: $p" ;;
+  esac
+}
+
+choose_capabilities() {  # Groundwork 2.1: optional profile-driven capability/Routines selection
+  if [ -n "$CAP_PROFILE" ]; then return; fi
+  if [ "$NONINT" = 1 ]; then return; fi   # non-interactive: config.json stays absent, minimal profile, everything disabled
+  say ""
+  say "Configure optional capabilities and Routines (cloud/platform/integrations/skills/scheduled"
+  say "automation like a Jira end-of-day update or a daily news digest)? This is entirely optional —"
+  say "Groundwork's core governance works identically either way."
+  say "  1. No — skip (recommended if you're not sure; revisit any time with ./setup.sh --configure)"
+  say "  2. Yes — pick a profile"
+  local c=""; ask c "Choice" "1"
+  case "$c" in
+    1) return ;;
+    2) pick_cap_profile ;;
+    *) die "invalid choice: $c" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- routine configuration contract
+# Configure once, run automatically (owner requirement, added after the first release candidate):
+# a routine's identity/scope/access/mutation-permission/schedule are collected ONCE here and saved
+# to config.json — a scheduled run (scripts/groundwork_routines.py) never re-asks any of it. Only
+# routines the user actually enabled are ever asked about (§14: no dumping every question on
+# every user). All helpers below shell out to groundwork_config.py so the schema/validation logic
+# lives in exactly one place (Python), never duplicated in bash.
+cfg_get() { python3 "$CONFIG_PY" get "$1" "$2" --path "$CLAUDE_DIR/groundwork/config.json" 2>/dev/null || true; }
+cfg_get_bool() {  # a boolean field, normalized to bash-comparable "true"/"false" regardless of the
+                   # underlying tool's case convention (groundwork_config.py's `get` prints JSON's
+                   # lowercase "true"/"false" for a Python bool, never Python's own "True"/"False")
+  case "$(cfg_get "$1" "$2")" in
+    [Tt][Rr][Uu][Ee]) echo true ;;
+    *) echo false ;;
+  esac
+}
+cfg_get_csv() {  # a list-typed field (e.g. news.topics) as a comma-joined string, for pre-filling `ask`
+  python3 -c "
+import json, sys
+raw = sys.argv[1]
+try:
+    val = json.loads(raw) if raw else []
+except Exception:
+    val = []
+print(', '.join(val) if isinstance(val, list) else '')
+" "$(cfg_get "$1" "$2")" 2>/dev/null || true
+}
+csv_to_json() {  # comma-separated free text -> a JSON array of trimmed, non-empty strings
+  python3 -c "
+import json, sys
+items = [s.strip() for s in sys.argv[1].split(',') if s.strip()]
+print(json.dumps(items))
+" "$1" 2>/dev/null || echo "[]"
+}
+cfg_set() {  # cfg_set ROUTINE KEY=VALUE [KEY=VALUE...] — validates before writing; a rejected
+             # assignment (invalid enum value, bad JSON) leaves the previously-saved file untouched.
+  local routine="$1"; shift
+  if ! python3 "$CONFIG_PY" set "$routine" "$@" --path "$CLAUDE_DIR/groundwork/config.json" >/dev/null; then
+    say "  (could not save that — kept the previous value)"
+  fi
+}
+
+configure_routine_jira_eod() {
+  say ""
+  say "Jira end-of-day update — reviews today's evidenced work, drafts (and optionally posts) a Jira comment."
+  local en=""; say "Enable? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool jira_eod enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set jira_eod enabled=false; return; fi
+  local site="" identity="" acc="" mcp_server="" scope_choice="" projects="" jql="" posting_choice="" time=""
+  ask site "Jira URL / site" "$(cfg_get jira_eod site)"
+  ask identity "Jira identity (your email/username)" "$(cfg_get jira_eod identity)"
+  say "Access:"
+  say "  1. Existing Atlassian/Jira MCP"
+  say "  2. CLI/API if supported"
+  say "  3. Browser/Chrome"
+  say "  4. Configure later"
+  ask acc "Choice" "4"
+  case "$acc" in
+    1) acc=jira_mcp; ask mcp_server "MCP server name (as configured in Claude Code)" "$(cfg_get jira_eod mcp_server)"
+       [ -n "$mcp_server" ] || mcp_server=atlassian ;;
+    2) acc=cli ;;
+    3) acc=browser ;;
+    4) acc=unconfigured ;;
+    *) die "invalid choice: $acc" ;;
+  esac
+  say "Ticket scope:"
+  say "  1. Assigned to me"
+  say "  2. Created by me"
+  say "  3. Selected projects"
+  say "  4. Custom JQL"
+  ask scope_choice "Choice" "1"
+  say "Posting:"
+  say "  1. Dry-run only — recommended until you've reviewed a few drafts"
+  say "  2. Post comments automatically"
+  ask posting_choice "Choice" "1"
+  local posting=dry_run; [ "$posting_choice" = "2" ] && posting=automatic
+  local cur_time; cur_time="$(cfg_get jira_eod schedule.time)"
+  ask time "Schedule time (HH:MM, 24h)" "${cur_time:-17:00}"
+  [ -n "$time" ] || time="17:00"
+  if [ "$acc" = "jira_mcp" ]; then
+    cfg_set jira_eod enabled=true site="$site" identity="$identity" access="$acc" mcp_server="$mcp_server" \
+      posting="$posting" schedule.frequency=daily "schedule.time=$time"
+  else
+    cfg_set jira_eod enabled=true site="$site" identity="$identity" access="$acc" \
+      posting="$posting" schedule.frequency=daily "schedule.time=$time"
+  fi
+  case "$scope_choice" in
+    1) cfg_set jira_eod scope.type=assigned_to_me ;;
+    2) cfg_set jira_eod scope.type=created_by_me ;;
+    3) ask projects "Comma-separated project keys" ""
+       cfg_set jira_eod scope.type=projects "scope.projects=$(csv_to_json "$projects")" ;;
+    4) ask jql "JQL" ""
+       cfg_set jira_eod scope.type=custom_jql "scope.jql=$jql" ;;
+    *) die "invalid choice: $scope_choice" ;;
+  esac
+}
+
+configure_routine_pr_followup() {
+  say ""
+  say "GitHub PR follow-up — the configured identity's OWN pull requests needing attention (never"
+  say "an unfiltered scan of every PR the account can see)."
+  local en=""; say "Enable? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool pr_followup enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set pr_followup enabled=false; return; fi
+  local suggested=""
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    suggested="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  local identity=""
+  ask identity "GitHub identity (username) — confirm this is right" "${suggested:-$(cfg_get pr_followup identity)}"
+  say "Access:"
+  say "  1. gh CLI"
+  say "  2. GitHub MCP"
+  say "  3. Configure later"
+  local acc=""; ask acc "Choice" "$([ -n "$suggested" ] && echo 1 || echo 3)"
+  case "$acc" in 1) acc=gh_cli ;; 2) acc=github_mcp ;; 3) acc=unconfigured ;; *) die "invalid choice: $acc" ;; esac
+  say "Repository scope:"
+  say "  1. Current repository"
+  say "  2. Selected repositories"
+  local repo_choice=""; ask repo_choice "Choice" "1"
+  local repos_json='["current"]'
+  if [ "$repo_choice" = "2" ]; then
+    local repos=""; ask repos "Comma-separated owner/repo list" ""
+    repos_json="$(csv_to_json "$repos")"
+  fi
+  local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get pr_followup schedule.time)"
+  [ -n "$time" ] || time="08:00"
+  cfg_set pr_followup enabled=true identity="$identity" access="$acc" "scope.repositories=$repos_json" \
+    schedule.frequency=daily "schedule.time=$time"
+}
+
+configure_routine_news() {
+  say ""
+  local en=""; say "Enable daily technical news digest? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool news enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set news enabled=false; return; fi
+  say "Suggested topics: AI, Claude, Agentic AI, PKI, Cybersecurity, GCP, AWS, Kubernetes, Terraform, SRE"
+  local topics=""
+  ask topics "Topics (comma-separated; edit freely, arbitrary custom topics allowed)" \
+    "$(cfg_get_csv news topics || echo 'AI, Claude, Kubernetes, AWS, GCP')"
+  local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get news schedule.time)"
+  [ -n "$time" ] || time="08:00"
+  cfg_set news enabled=true "topics=$(csv_to_json "$topics")" schedule.frequency=daily "schedule.time=$time"
+}
+
+configure_routine_weekly_status() {
+  say ""
+  local en=""; say "Enable weekly status summary? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool weekly_status enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set weekly_status enabled=false; return; fi
+  local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get weekly_status schedule.time)"
+  [ -n "$time" ] || time="08:00"
+  cfg_set weekly_status enabled=true schedule.frequency=weekly "schedule.time=$time"
+  say "  (repository scope defaults to the current repository — edit $CLAUDE_DIR/groundwork/config.json directly for a multi-repo scope)"
+}
+
+configure_routine_work_digest() {
+  say ""
+  local en=""; say "Enable daily work/TODO digest? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool work_digest enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set work_digest enabled=false; return; fi
+  local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get work_digest schedule.time)"
+  [ -n "$time" ] || time="08:00"
+  # Reuses whichever GitHub/Jira access pr_followup/jira_eod already have configured — never asks
+  # for a third, separate identity/access mechanism for the same external systems (§4 of the brief).
+  local use_github=false use_jira=false
+  [ "$(cfg_get pr_followup access)" != "unconfigured" ] && [ -n "$(cfg_get pr_followup access)" ] && use_github=true
+  [ "$(cfg_get jira_eod access)" != "unconfigured" ] && [ -n "$(cfg_get jira_eod access)" ] && use_jira=true
+  cfg_set work_digest enabled=true "use_github=$use_github" "use_jira=$use_jira" schedule.frequency=daily "schedule.time=$time"
+}
+
+configure_routine_doc_drift() {
+  say ""
+  local en=""; say "Enable documentation-drift check? 1. No  2. Yes"
+  ask en "Choice" "$([ "$(cfg_get_bool doc_drift enabled)" = "true" ] && echo 2 || echo 1)"
+  if [ "$en" != "2" ]; then cfg_set doc_drift enabled=false; return; fi
+  local time=""; ask time "Schedule time (HH:MM, 24h)" "$(cfg_get doc_drift schedule.time)"
+  [ -n "$time" ] || time="08:00"
+  cfg_set doc_drift enabled=true schedule.frequency=weekly "schedule.time=$time"
+  say "  (documentation/implementation paths default to README.md, docs/ — edit $CLAUDE_DIR/groundwork/config.json directly to narrow them)"
+}
+
+configure_routines_interactive() {  # per-routine follow-up, only for routines actually enabled (§14)
+  if [ "$NONINT" = 1 ]; then return; fi
+  [ -f "$CONFIG_PY" ] || return
+  [ -f "$CLAUDE_DIR/groundwork/config.json" ] || return
+  say ""
+  say "-- Routine configuration (only for what you enabled; press Enter to accept each default) --"
+  if [ "$(cfg_get_bool jira_eod enabled)" = "true" ]; then configure_routine_jira_eod; fi
+  if [ "$(cfg_get_bool pr_followup enabled)" = "true" ]; then configure_routine_pr_followup; fi
+  if [ "$(cfg_get_bool news enabled)" = "true" ]; then configure_routine_news; fi
+  if [ "$(cfg_get_bool weekly_status enabled)" = "true" ]; then configure_routine_weekly_status; fi
+  if [ "$(cfg_get_bool work_digest enabled)" = "true" ]; then configure_routine_work_digest; fi
+  if [ "$(cfg_get_bool doc_drift enabled)" = "true" ]; then configure_routine_doc_drift; fi
+}
+
+schedule_all_enabled_routines() {
+  [ -f "$ROUTINES_PY" ] || return 0
+  [ -f "$CLAUDE_DIR/groundwork/config.json" ] || return 0
+  local cfgfile="$CLAUDE_DIR/groundwork/config.json"
+  local enabled_routines
+  enabled_routines="$(python3 -c "
+import json
+cfg = json.load(open('$cfgfile'))
+names = [n for n, r in cfg.get('routines', {}).items() if r.get('enabled')]
+print(', '.join(sorted(names)) or 'none')
+" 2>/dev/null || echo "none")"
+  say "  routines enabled: $enabled_routines"
+  if [ "$enabled_routines" != "none" ]; then
+    # `|| true` on the whole pipe, not just the loop body: under set -e/pipefail, a failure in the
+    # inline Python here would otherwise abort setup entirely right after telling the user their
+    # profile was applied — this step is best-effort scheduling, not a reason to fail an
+    # already-successful capability-config write.
+    python3 -c "
+import json
+cfg = json.load(open('$cfgfile'))
+for name, r in cfg.get('routines', {}).items():
+    if r.get('enabled'):
+        sched = r.get('schedule', {})
+        freq = sched.get('frequency', 'daily')
+        time_ = sched.get('time', '08:00') or '08:00'
+        hour, _, minute = time_.partition(':')
+        print(name, freq, hour or '8', minute or '0')
+" 2>/dev/null | while read -r rname rfreq rhour rminute; do
+      python3 "$ROUTINES_PY" schedule "$rname" "$rfreq" --hour "$rhour" --minute "$rminute" >/dev/null 2>&1 || true
+    done || true
+    say "  (each enabled routine's schedule was applied the same way the dashboard's is — macOS launchd,"
+    say "   cron elsewhere; verify any time with ./setup.sh --routines)"
+  fi
+}
+
+apply_capabilities() {  # writes config.json from CAP_PROFILE, if one was chosen; safe to call when absent
+  [ -n "$CAP_PROFILE" ] || return 0
+  [ -f "$CONFIG_PY" ] || { say "  (capability configurator not installed — skipping)"; return 0; }
+  python3 "$CONFIG_PY" init "$CAP_PROFILE" --force >/dev/null
+  say "  capability profile: $CAP_PROFILE (edit $CLAUDE_DIR/groundwork/config.json to fine-tune, or run ./setup.sh --configure again)"
+  configure_routines_interactive
+  schedule_all_enabled_routines
+}
+
 validate_choices() {
   if [ -n "$PROFILE" ] && ! printf '%s' "$PROFILE" | grep -Eq '^[A-Za-z0-9_-]{1,32}$'; then
     die "profile must be 1-32 letters, digits, - or _ (got: $PROFILE)"
@@ -360,11 +647,14 @@ verify_install() {
       ecc_v="$(printf '%s\n' "$ecc_list" | grep -A1 'ecc@ecc' | grep 'Version:' | head -1 | awk '{print $2}')" || true
       if [ -z "$ecc_v" ]; then
         line "ECC" PASS "plugin ecc@ecc installed (version not parsed from 'claude plugin list' output — run 'claude plugin details ecc@ecc' to see it)"
-      elif [ "$ecc_v" != "$LAST_VERIFIED_ECC" ]; then
-        # Expected over time, not an error: ECC installs unpinned from GitHub main (docs/ARCHITECTURE.md).
-        line "ECC" PASS "plugin ecc@ecc $ecc_v (Groundwork's docs were last checked against $LAST_VERIFIED_ECC — ECC has no version pin, so this drifting is normal, not a bug)"
+      elif [ "v$ecc_v" != "$ECC_REF" ] && [ "$ecc_v" != "$ECC_REF" ]; then
+        # Groundwork 2.1 pins ECC to $ECC_REF (install.sh) rather than floating main — a mismatch
+        # here usually means `claude plugin update ecc@ecc` was run manually outside that pin, or
+        # GROUNDWORK_ECC_REF was overridden at install time; still PASS (not a broken install),
+        # but surfaced distinctly from the expected, pinned-match case below.
+        line "ECC" PASS "plugin ecc@ecc $ecc_v (pinned to $ECC_REF — this differs, likely from a manual 'claude plugin update' outside the pin)"
       else
-        line "ECC" PASS "plugin ecc@ecc $ecc_v"
+        line "ECC" PASS "plugin ecc@ecc $ecc_v (pinned to $ECC_REF)"
       fi
     else line "ECC" "NOT CONFIGURED" "plugin ecc@ecc not listed by 'claude plugin list'"; VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
   else line "ECC" FAIL "'claude' not on PATH"; fi
@@ -396,6 +686,51 @@ verify_install() {
   [ "$VERIFY_FAILS" -eq 0 ]
 }
 
+verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to verify_install()
+  if [ ! -f "$CLAUDE_DIR/groundwork/config.json" ]; then
+    line "Capabilities" "NOT CONFIGURED" "no config.json — nothing selected (./setup.sh --configure to set one up)"
+    return
+  fi
+  local cfg="$CLAUDE_DIR/groundwork/config.json"
+  # Declared separately from the assignment (matches verify_install()'s own ecc_v pattern above):
+  # `local x=$(cmd)` always returns `local`'s own exit status, masking a real command failure —
+  # the exact class of bug independent-review finding M1 already fixed once in this file. A
+  # malformed hand-edit of config.json (it's explicitly documented as hand-editable) must degrade
+  # to one INVALID row, not silently abort the rest of --doctor under set -e.
+  local cap_rows=""
+  cap_rows="$(python3 -c "
+import json
+cfg = json.load(open('$cfg'))
+print('PROFILE\t' + cfg.get('profile', 'unknown'))
+for k in ('cloud', 'platform', 'integrations'):
+    vals = cfg.get(k, [])
+    print(k.upper() + '\t' + (', '.join(vals) if vals else '(none selected)'))
+for name, s in cfg.get('skills', {}).items():
+    print('SKILL\t' + name + '\t' + ('enabled' if s else 'disabled'))
+" 2>/dev/null)" || cap_rows=""
+  if [ -z "$cap_rows" ]; then
+    line "Capabilities" "INVALID" "$cfg is not valid JSON (or is empty) — fix by hand or re-run ./setup.sh --configure"
+  else
+    printf '%s\n' "$cap_rows" | while IFS="$(printf '\t')" read -r kind a b; do
+      case "$kind" in
+        PROFILE) line "Capability profile" CONFIGURED "$a" ;;
+        CLOUD) line "Cloud" CONFIGURED "$a — availability not connectivity-checked here; wire your own MCP/CLI per docs/INTEGRATIONS.md" ;;
+        PLATFORM) line "Platform" CONFIGURED "$a" ;;
+        INTEGRATIONS) line "Integrations" CONFIGURED "$a" ;;
+        SKILL) line "Skill: $a" "$([ "$b" = enabled ] && echo AVAILABLE || echo DISABLED)" "" ;;
+      esac
+    done
+  fi
+  if [ -f "$ROUTINES_PY" ]; then
+    say ""
+    say "  -- Routines --"
+    # Formatting lives entirely in groundwork_routines.py (format_doctor_text) so it's testable in
+    # one place; this just indents and prints it. `|| true` — a routine-status failure must not
+    # abort the rest of --doctor (same discipline as the Capabilities section above).
+    python3 "$ROUTINES_PY" doctor 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+  fi
+}
+
 # ---------------------------------------------------------------- modes
 run_setup() {
   say "== Groundwork setup =="
@@ -407,7 +742,7 @@ run_setup() {
   make_backup
   say "Backup: $BACKUP_PATH"
   trap on_setup_failure ERR
-  choose_profile; choose_teams; choose_schedule; validate_choices
+  choose_profile; choose_teams; choose_schedule; choose_capabilities; validate_choices
   say ""
   say "-- Running install.sh (the actual installer) --"
   local install_args=()
@@ -415,6 +750,11 @@ run_setup() {
   bash "$INSTALLER" "${install_args[@]+"${install_args[@]}"}"
   if [ -n "$PROFILE" ]; then
     python3 "$HERE/scripts/merge_settings.py" --profile "$PROFILE" "$CLAUDE_DIR/settings.json" >/dev/null
+  fi
+  if [ -n "$CAP_PROFILE" ]; then
+    say ""
+    say "-- Capabilities and Routines --"
+    apply_capabilities
   fi
   say ""
   say "-- Reporting schedule: $SCHEDULE --"
@@ -521,9 +861,92 @@ run_uninstall() {
   bash "$UNINSTALLER"
 }
 
+run_doctor() {  # Groundwork 2.1: verify_install() plus capability/Routines status, still read-only
+  say "== Groundwork doctor (read-only) =="
+  say "Target: $CLAUDE_DIR"
+  # verify_install's own failing checks must not short-circuit this function under `set -e` —
+  # capability/Routines status is exactly what you need to see when core checks are already
+  # failing, not something to silently drop. Exit code still reflects core health, same as --verify.
+  local core_ok=0
+  verify_install || core_ok=1
+  say ""
+  verify_capabilities
+  [ "$core_ok" -eq 0 ]
+}
+
+run_configure() {  # Groundwork 2.1: re-run capability/Routines selection — no backup, no reinstall.
+                    # Never requires reinstalling Groundwork (owner requirement §15).
+  say "== Groundwork configure =="
+  [ -d "$CLAUDE_DIR/groundwork" ] || die "Groundwork is not installed at $CLAUDE_DIR — run ./setup.sh first"
+  if [ -n "$CAP_PROFILE" ]; then
+    # --capability-profile passed explicitly: unchanged behavior, re-applies that profile then
+    # runs the per-routine wizard for whatever it enables.
+    apply_capabilities
+    say ""
+    say "Done. Check anytime with ./setup.sh --doctor or ./setup.sh --routines."
+    return 0
+  fi
+  if [ "$NONINT" = 1 ]; then
+    say "No change made (--non-interactive with no --capability-profile)."
+    return 0
+  fi
+  say ""
+  say "What would you like to change?"
+  say "  1. Change capability profile (re-applies a profile's defaults, then asks about its routines)"
+  say "  2. Reconfigure one routine (Jira URL, GitHub identity, scope, schedule, ...)"
+  say "  3. Cancel — no change"
+  local c=""; ask c "Choice" "3"
+  case "$c" in
+    1)
+      [ -f "$CLAUDE_DIR/groundwork/config.json" ] || { say ""; say "No capability profile is configured yet."; }
+      pick_cap_profile
+      apply_capabilities
+      say ""
+      say "Done. Check anytime with ./setup.sh --doctor or ./setup.sh --routines."
+      ;;
+    2)
+      [ -f "$CLAUDE_DIR/groundwork/config.json" ] || die "No capability profile is configured yet — choose option 1 first (or ./setup.sh --capability-profile NAME)."
+      say ""
+      say "Which routine?"
+      say "  1. Jira EOD          4. PR Follow-up"
+      say "  2. News              5. Work Digest"
+      say "  3. Weekly Status     6. Doc Drift"
+      local r=""; ask r "Choice" ""
+      case "$r" in
+        1) configure_routine_jira_eod ;;
+        2) configure_routine_news ;;
+        3) configure_routine_weekly_status ;;
+        4) configure_routine_pr_followup ;;
+        5) configure_routine_work_digest ;;
+        6) configure_routine_doc_drift ;;
+        *) die "invalid choice: $r" ;;
+      esac
+      schedule_all_enabled_routines
+      say ""
+      say "Done. Check anytime with ./setup.sh --doctor or ./setup.sh --routines."
+      ;;
+    3) say "No change made." ;;
+    *) die "invalid choice: $c" ;;
+  esac
+}
+
+run_routines() {  # Groundwork 2.1: list configured Routines and last-run status, read-only.
+                   # A routine name shows its latest stored result instead (owner requirement §12).
+  say "== Groundwork Routines =="
+  [ -f "$ROUTINES_PY" ] || die "Routines are not installed at $ROUTINES_PY — run ./setup.sh first"
+  if [ -n "${ROUTINE_NAME:-}" ]; then
+    python3 "$ROUTINES_PY" latest "$ROUTINE_NAME"
+    return
+  fi
+  python3 "$ROUTINES_PY" list
+}
+
 case "$MODE" in
   setup) run_setup ;;
   verify) run_verify ;;
   rollback) run_rollback ;;
   uninstall) run_uninstall ;;
+  doctor) run_doctor ;;
+  configure) run_configure ;;
+  routines) run_routines ;;
 esac

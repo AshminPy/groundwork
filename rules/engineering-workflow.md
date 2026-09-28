@@ -68,6 +68,18 @@ Pick the simplest model that produces the result. The user never has to say "cre
 These are **dynamic personas only** — the `name`/prompt of an `Agent` call or team teammate, never a permanent `.claude/agents/*.md` file; Agent-Team formation still requires the existing team-justification criteria above (2+ genuinely independent workstreams), never automatically just because roles exist.
 Builders never install or configure cloud/Kubernetes/CI MCP servers themselves — only what the task's environment already provides (`FUTURE-SCOPE.md` §9). Read-only discovery (`plan`/`get`/`describe`/`list`) is safe by default; mutating operations follow §4's existing authorization rule. Groundwork never stores or requires static cloud credentials.
 
+## 6a. Capability resolution (Groundwork 2.1)
+
+The user states the outcome; you resolve which capability serves it. Judgment guidance, not a decision tree — apply the order proportionally to the task, the same way §5's speed rule scales research depth:
+1. **Existing repository/project tooling** — the Makefile target, the script, the CLI the project already has; using it beats introducing anything new.
+2. **Claude Code native capability** — a builtin tool, a skill already installed, a subagent, Agent Teams.
+3. **A trusted, already-installed skill** relevant to the task (ECC, or another configured one) — never install one mid-task to satisfy a request; that is a supply-chain decision made at setup time (`docs/INTEGRATIONS.md`, `docs/FUTURE-SCOPE.md`), not a runtime one.
+4. **A trusted, already-configured MCP server or official CLI/API** for the specific external system — read-only discovery is safe by default; a mutation follows §4's existing authorization rule regardless of mechanism.
+5. **Browser/Chrome**, governed identically to MCP/CLI (§4's authorization rule applies the same way), used only when no structured integration exists for the system, or UI interaction is genuinely required, or a structured integration exists but is not configured and the task doesn't warrant configuring one just for this. After any browser-driven mutation, read the result back before reporting it verified — a successful click or submit is not evidence the underlying system actually changed; only re-reading the ticket/page/resource state is.
+6. **The user** — only for a genuine decision, missing credentials, or an irreversible/destructive/security-sensitive action, exactly as §4 already defines it. Capability *availability* never implies mutation *permission* — configuring GCP access does not authorize a production change; the same authorization rule that already gates Bash/MCP/CLI mutations gates browser mutations too.
+
+This resolves *which* capability, not *whether* to do the task — tier (§1), evidence (`evidence-policy.md`) and authorization (§4) are unchanged and still apply after a capability is chosen.
+
 ## 7. Continuation — "continue this project" (fresh session, no prior chat)
 Reconstruct the current state from the repository, in this order, before changing anything:
 1. The Groundwork session snapshot injected at session start (branch, HEAD, dirty/untracked counts, OpenSpec progress, discovered verification commands, and — Groundwork 2.0 — the saved investigation-continuity file for this repo, if one exists; see below).

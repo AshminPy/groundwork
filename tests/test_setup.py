@@ -382,12 +382,13 @@ def test_verify_reports_ecc_version() -> None:
 
         # Realistic multi-line `claude plugin list` output (unlike Box's default one-line stub) —
         # matches the real Claude Code CLI's actual format, confirmed by direct reproduction against
-        # a live install (design.md §A.6). Same version as LAST_VERIFIED_ECC: no drift note expected.
+        # a live install (design.md §A.6). Version exactly matches ECC_REF's pin (v2.2.1, see
+        # setup.sh): the expected, pinned-match case — no "differs" note.
         (a.root / "bin" / "claude").write_text(
             '#!/usr/bin/env bash\n'
             'case "$1" in\n'
             '  --version) echo "2.1.258 (Claude Code)";;\n'
-            '  plugin) printf "Installed plugins:\\n\\n  > ecc@ecc\\n    Version: 2.2.2\\n    Scope: user\\n    Status: enabled\\n";;\n'
+            '  plugin) printf "Installed plugins:\\n\\n  > ecc@ecc\\n    Version: 2.2.1\\n    Scope: user\\n    Status: enabled\\n";;\n'
             '  *) exit 0;;\n'
             'esac\n'
         )
@@ -395,10 +396,13 @@ def test_verify_reports_ecc_version() -> None:
         r = a.run("--verify")
         check("verify: exit 0 with a realistic multi-line claude plugin list stub", r.returncode == 0, r.stdout + r.stderr)
         check("verify: parses the real installed ECC version from 'claude plugin list'",
-              "ECC" in r.stdout and "2.2.2" in r.stdout and "version not parsed" not in r.stdout, r.stdout)
+              "ECC" in r.stdout and "2.2.1" in r.stdout and "version not parsed" not in r.stdout, r.stdout)
+        check("verify: version matching the ECC_REF pin reports pinned, no drift note",
+              "(pinned to v2.2.1)" in r.stdout and "differs" not in r.stdout, r.stdout)
 
-        # Same shape, but an older version than LAST_VERIFIED_ECC — must PASS (ECC has no version
-        # pin; drift is expected, not an error) and name the drift, not fail the row.
+        # Same shape, but a version other than the ECC_REF pin (e.g. from a manual 'claude plugin
+        # update' run outside install.sh's pin) — must still PASS (not a broken install) and name
+        # the mismatch distinctly, not fail the row.
         (a.root / "bin" / "claude").write_text(
             '#!/usr/bin/env bash\n'
             'case "$1" in\n'
@@ -409,13 +413,255 @@ def test_verify_reports_ecc_version() -> None:
         )
         os.chmod(a.root / "bin" / "claude", 0o755)
         r = a.run("--verify")
-        check("verify: version drift from LAST_VERIFIED_ECC is a PASS with a note, not a FAIL",
+        check("verify: version differing from the ECC_REF pin is a PASS with a note, not a FAIL",
               r.returncode == 0 and "ECC                 PASS" in r.stdout and "2.1.9" in r.stdout, r.stdout)
+        check("verify: pin-mismatch note names the pin and the likely cause",
+              "(pinned to v2.2.1 — this differs, likely from a manual 'claude plugin update' outside the pin)" in r.stdout, r.stdout)
+    finish()
+
+
+def test_capabilities_and_routines() -> None:
+    print("setup.sh --capability-profile / --doctor / --configure / --routines (Groundwork 2.1)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # ---- fresh install with a capability profile: config.json lands under CLAUDE_CONFIG_DIR,
+        # not the real home dir, and routines from that profile actually show as enabled — the
+        # exact regression a fixed CLAUDE_CONFIG_DIR-blind DEFAULT_PATH bug in groundwork_config.py
+        # would reintroduce (setup.sh's own "routines enabled: ..." summary silently read back
+        # 'none' before the fix, because init() wrote to ~/.claude while the summary read from
+        # CLAUDE_CONFIG_DIR).
+        b = Box(tmp / "b")
+        r = b.run("--non-interactive", "--profile", "work", "--capability-profile", "sre-cloudops", "--schedule", "daily")
+        check("setup with --capability-profile sre-cloudops exits 0", r.returncode == 0, r.stdout[-800:] + r.stderr[-400:])
+        cfgfile = b.cfg / "groundwork" / "config.json"
+        check("config.json written under CLAUDE_CONFIG_DIR", cfgfile.is_file())
+        cfg = json.loads(cfgfile.read_text())
+        check("config.json profile is sre-cloudops", cfg["profile"] == "sre-cloudops", cfg)
+        check("sre-cloudops routines actually enabled in the written config", cfg["routines"]["jira_eod"]["enabled"] is True, cfg["routines"])
+        check("setup output names the enabled routines, not 'none'", "routines enabled: none" not in r.stdout and "jira_eod" in r.stdout, r.stdout)
+
+        # ---- --doctor shows Capabilities/Routines status
+        r = b.run("--doctor")
+        check("--doctor exits 0 on a healthy install", r.returncode == 0, r.stdout + r.stderr)
+        check("--doctor shows the configured capability profile", "Capability profile  CONFIGURED   sre-cloudops" in r.stdout.replace("\t", " ") or "sre-cloudops" in r.stdout, r.stdout)
+        check("--doctor shows the -- Routines -- section with real per-routine detail",
+              "-- Routines --" in r.stdout and "Jira EOD" in r.stdout and "Configuration ........ PASS" in r.stdout, r.stdout)
+
+        # ---- regression: --doctor must still show Capabilities/Routines even when core checks
+        # fail (previously: verify_install()'s non-zero return under `set -e` short-circuited
+        # run_doctor() before verify_capabilities() ever ran, silently dropping the whole section).
+        shutil.rmtree(b.cfg / "groundwork" / "playbooks")
+        r = b.run("--doctor")
+        check("--doctor with a broken core install still exits non-zero (core health reflected)", r.returncode == 1, r.stdout + r.stderr)
+        check("--doctor with a broken core install still shows the Capabilities section (regression)",
+              "Capability profile" in r.stdout and "sre-cloudops" in r.stdout, r.stdout)
+        check("--doctor with a broken core install still shows the Routines section (regression)",
+              "-- Routines --" in r.stdout and "Jira EOD" in r.stdout, r.stdout)
+        (b.cfg / "groundwork" / "playbooks").mkdir(parents=True, exist_ok=True)
+        for src in (REPO_ROOT / "playbooks").glob("*.md"):
+            shutil.copy(src, b.cfg / "groundwork" / "playbooks" / src.name)
+
+        # ---- regression (independent-review MUST FIX): a hand-corrupted config.json must not
+        # crash --doctor outright (worse than the bug above — the whole script aborted silently,
+        # not just the Capabilities section, because verify_capabilities()'s own inline-Python
+        # pipeline had no fail-open guard under set -euo pipefail). config.json is explicitly
+        # documented as hand-editable, so a malformed edit or an interrupted write is realistic.
+        good_config = cfgfile.read_text()
+        cfgfile.write_text("{ not valid json ][")
+        r = b.run("--doctor")
+        check("--doctor against a corrupt config.json exits 0 (core checks all still pass)", r.returncode == 0, r.stdout + r.stderr)
+        check("--doctor against a corrupt config.json reports Capabilities INVALID, not a crash",
+              "Capabilities" in r.stdout and "INVALID" in r.stdout, r.stdout)
+        check("--doctor against a corrupt config.json still reaches the Routines section (fail-open, like groundwork_config.load_config())",
+              "-- Routines --" in r.stdout, r.stdout)
+        cfgfile.write_text(good_config)
+
+        # ---- --configure re-profiles explicitly, no backup/reinstall
+        r = b.run("--configure", "--capability-profile", "minimal")
+        check("--configure --capability-profile minimal exits 0", r.returncode == 0, r.stdout + r.stderr)
+        cfg2 = json.loads(cfgfile.read_text())
+        check("--configure actually rewrote config.json to the new profile", cfg2["profile"] == "minimal", cfg2)
+        check("--configure did not add a new backup (no reinstall)", len(b.backup_dirs()) == 1, b.backup_dirs())
+
+        # ---- --configure: top-level menu is "1. change profile / 2. reconfigure one routine /
+        # 3. cancel" (Groundwork 2.1 routine-configuration contract) — choosing 3 (cancel) makes no change
+        r = b.run("--configure", stdin="3\n")
+        check("--configure choosing 3 (cancel) makes no change, exit 0", r.returncode == 0 and "No change made" in r.stdout, r.stdout)
+        cfg3 = json.loads(cfgfile.read_text())
+        check("cancelled --configure left the profile as minimal", cfg3["profile"] == "minimal", cfg3)
+
+        # ---- --routines lists configured routines and their status
+        r = b.run("--routines")
+        check("--routines exits 0 and lists all six routines, all disabled under minimal", r.returncode == 0 and r.stdout.count("enabled=False") == 6, r.stdout)
+
+        # ---- a fresh install with no --capability-profile and non-interactive: config.json never
+        # written at all, doctor reports NOT CONFIGURED rather than fabricating a profile
+        c = Box(tmp / "c")
+        r = c.run("--non-interactive", "--profile", "work")
+        check("setup with no capability profile exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("no config.json written when no profile was chosen", not (c.cfg / "groundwork" / "config.json").exists())
+        r = c.run("--doctor")
+        check("--doctor with no config.json reports Capabilities NOT CONFIGURED, not a guess",
+              "Capabilities" in r.stdout and "NOT CONFIGURED" in r.stdout, r.stdout)
+
+        # ---- uninstall removes config.json and unschedules every routine's plist, cleanly
+        d = Box(tmp / "d")
+        r = d.run("--non-interactive", "--profile", "work", "--capability-profile", "sre-cloudops", "--schedule", "daily")
+        check("Box d: setup with sre-cloudops exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("Box d: sre-cloudops scheduled at least one routine's plist (jira_eod)",
+              (d.agents / "com.groundwork.routine.jira_eod.plist").is_file(), list(d.agents.glob("*")) if d.agents.exists() else "no agents dir")
+        r = d.run("--uninstall")
+        check("uninstall after capability setup exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("uninstall removed config.json", not (d.cfg / "groundwork" / "config.json").exists())
+        check("uninstall unscheduled every routine plist", not any(d.agents.glob("com.groundwork.routine.*.plist")) if d.agents.exists() else True,
+              list(d.agents.glob("*")) if d.agents.exists() else "no agents dir")
+    finish()
+
+
+def test_routine_configuration_wizard() -> None:
+    print("setup.sh --configure: interactive routine wizard (Groundwork 2.1 routine configuration contract)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        b = Box(tmp / "b")
+        r = b.run("--non-interactive", "--profile", "work", "--capability-profile", "sre-cloudops", "--schedule", "daily")
+        check("base sre-cloudops install exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfgfile = b.cfg / "groundwork" / "config.json"
+
+        # ---- Jira EOD: "1"=reconfigure-one-routine menu, "1"=Jira EOD, "2"=enable yes, then its
+        # own fields in order (site, identity, access=1/jira_mcp, mcp_server, scope=1, posting=1, time)
+        r = b.run("--configure", stdin="2\n1\n2\nhttps://acme.atlassian.net\njane@acme.com\n1\natlassian\n1\n1\n17:00\n")
+        check("interactive Jira EOD configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        jira = cfg["routines"]["jira_eod"]
+        check("Jira URL persisted exactly as entered", jira["site"] == "https://acme.atlassian.net", jira)
+        check("Jira identity persisted exactly as entered", jira["identity"] == "jane@acme.com", jira)
+        check("Jira access mechanism persisted (jira_mcp)", jira["access"] == "jira_mcp", jira)
+        check("Jira MCP server name persisted", jira["mcp_server"] == "atlassian", jira)
+        check("Jira ticket scope persisted (assigned_to_me)", jira["scope"]["type"] == "assigned_to_me", jira)
+        check("Jira schedule time persisted exactly", jira["schedule"]["time"] == "17:00", jira)
+        check("no credential-shaped key anywhere in the saved file", "token" not in cfgfile.read_text().lower() and "password" not in cfgfile.read_text().lower())
+
+        # ---- PR follow-up: identity + access + repository scope (selected repos)
+        r = b.run("--configure", stdin="2\n4\n2\noctocat\n1\n2\nowner/repo1, owner/repo2\n08:30\n")
+        check("interactive PR follow-up configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        pr = cfg["routines"]["pr_followup"]
+        check("GitHub identity persisted", pr["identity"] == "octocat", pr)
+        check("GitHub access mechanism persisted (gh_cli)", pr["access"] == "gh_cli", pr)
+        check("selected repository scope persisted as a real list, not the ['current'] default",
+              pr["scope"]["repositories"] == ["owner/repo1", "owner/repo2"], pr)
+        check("default PR scope filter (authored_by_me) still true — never silently cleared by reconfiguring other fields",
+              pr["scope"]["authored_by_me"] is True, pr)
+
+        # ---- News: arbitrary custom topics, not just the suggested list
+        r = b.run("--configure", stdin="2\n2\n2\nAI, PKI, Identity Security\n07:00\n")
+        check("interactive News configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        news = cfg["routines"]["news"]
+        check("arbitrary custom topics persisted, not just the suggested defaults",
+              news["topics"] == ["AI", "PKI", "Identity Security"], news)
+
+        # ---- Disabling a routine requires no other fields (§17: disabling Jira does not require configuration)
+        r = b.run("--configure", stdin="2\n3\n1\n")
+        check("interactive Weekly Status disable exits 0 with just one answer", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        check("disabling weekly_status needed no other fields, still schema-valid", cfg["routines"]["weekly_status"]["enabled"] is False, cfg["routines"]["weekly_status"])
+
+        # ---- --doctor reflects everything configured, with real values, not fabricated ones
+        r = b.run("--doctor")
+        check("--doctor exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("--doctor shows the real configured Jira site and identity", "acme.atlassian.net" in r.stdout and "jane@acme.com" not in r.stdout, r.stdout)
+        check("--doctor shows Jira identity as 'configured' (not the literal PII value — doctor shows presence, not the value, for identity)",
+              "Identity ............. configured" in r.stdout, r.stdout)
+        check("--doctor shows the real configured GitHub identity", "octocat" in r.stdout, r.stdout)
+        check("--doctor shows the real configured news topics", "PKI" in r.stdout and "Identity Security" in r.stdout, r.stdout)
+        check("--doctor shows Weekly Status as DISABLED after reconfiguring it off", "Weekly Status" in r.stdout, r.stdout)
+    finish()
+
+
+def test_profile_driven_wizard_fires_on_both_entry_points() -> None:
+    """Regression test for a MUST FIX found by a fresh adversarial reviewer: `cfg_get`'s CLI prints
+    a boolean as JSON's lowercase true/false, but every `configure_routines_interactive()` dispatch
+    guard and every `configure_routine_*` "Enable?" default used to compare against the capitalized
+    string "True" — a comparison that was always false, making the profile-driven wizard trigger a
+    silent no-op. `test_routine_configuration_wizard` above never caught this because it drives the
+    wizard exclusively through --configure's "2" (reconfigure one routine) menu, which dispatches a
+    `configure_routine_*` function directly and never goes through the buggy guard at all. This test
+    drives the OTHER two entry points instead: (a) a fresh, fully interactive first-time install
+    (choose_capabilities -> pick_cap_profile -> configure_routines_interactive), and (b) --configure's
+    "1" (change capability profile) branch on an already-installed box with no profile configured yet
+    — the exact scenario the reviewer live-reproduced against."""
+    print("setup.sh: the profile-driven routine wizard actually asks its questions (not just the reconfigure-one-routine menu)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    jira_eod_answers = "2\nhttps://acme.atlassian.net\nalice@acme.com\n1\natlassian\n1\n1\n17:30\n"
+    pr_followup_answers = "2\nalice-gh\n1\n1\n08:15\n"
+    news_answers = "2\nAI, Kubernetes, PKI\n08:00\n"
+    weekly_status_answers = "2\n09:00\n"
+    work_digest_answers = "2\n08:30\n"
+    routine_answers = jira_eod_answers + pr_followup_answers + news_answers + weekly_status_answers + work_digest_answers
+
+    def check_config(cfg: dict) -> None:
+        jira = cfg["routines"]["jira_eod"]
+        check("(a/b) Jira site persisted from the profile-driven wizard, not left blank",
+              jira["site"] == "https://acme.atlassian.net", jira)
+        check("(a/b) Jira identity persisted from the profile-driven wizard", jira["identity"] == "alice@acme.com", jira)
+        check("(a/b) Jira access mechanism persisted (jira_mcp), not stuck at unconfigured",
+              jira["access"] == "jira_mcp", jira)
+        check("(a/b) Jira MCP server name persisted", jira["mcp_server"] == "atlassian", jira)
+        check("(a/b) Jira schedule time persisted exactly", jira["schedule"]["time"] == "17:30", jira)
+        pr = cfg["routines"]["pr_followup"]
+        check("(a/b) PR follow-up identity persisted, not stuck at unconfigured", pr["identity"] == "alice-gh", pr)
+        check("(a/b) PR follow-up access mechanism persisted (gh_cli)", pr["access"] == "gh_cli", pr)
+        news = cfg["routines"]["news"]
+        check("(a/b) News topics persisted from the profile-driven wizard", news["topics"] == ["AI", "Kubernetes", "PKI"], news)
+        check("(a/b) Weekly Status schedule time persisted", cfg["routines"]["weekly_status"]["schedule"]["time"] == "09:00", cfg["routines"]["weekly_status"])
+        wd = cfg["routines"]["work_digest"]
+        check("(a/b) Work Digest schedule time persisted", wd["schedule"]["time"] == "08:30", wd)
+        check("(a/b) Work Digest auto-detected use_github/use_jira from the now-configured pr_followup/jira_eod",
+              wd["use_github"] is True and wd["use_jira"] is True, wd)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # ---- (a) fresh, fully interactive first-time install: profile/teams/schedule prompts,
+        # then "2" (yes, pick a profile) -> "1" (sre-cloudops) -> every enabled routine's own wizard
+        a = Box(tmp / "a")
+        stdin_a = "1\n1\n1\n2\n1\n" + routine_answers
+        r = a.run(stdin=stdin_a)
+        check("(a) fresh interactive install with capability selection exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-400:])
+        cfgfile_a = a.cfg / "groundwork" / "config.json"
+        check("(a) config.json was written by the first-time interactive wizard", cfgfile_a.is_file(), r.stdout[-800:])
+        if cfgfile_a.is_file():
+            check_config(json.loads(cfgfile_a.read_text()))
+
+        # ---- (b) --configure's "1" (change capability profile) branch, on an already-installed box
+        # with no capability profile configured yet — the exact scenario the reviewer reproduced
+        b = Box(tmp / "b")
+        r = b.run("--non-interactive", "--profile", "work")
+        check("(b) base install (no capability profile yet) exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfgfile_b = b.cfg / "groundwork" / "config.json"
+        check("(b) no config.json yet before --configure", not cfgfile_b.exists())
+        stdin_b = "1\n1\n" + routine_answers
+        r = b.run("--configure", stdin=stdin_b)
+        check("(b) --configure 'change profile' exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-400:])
+        check("(b) config.json was written by --configure's profile-driven wizard", cfgfile_b.is_file(), r.stdout[-800:])
+        if cfgfile_b.is_file():
+            check_config(json.loads(cfgfile_b.read_text()))
     finish()
 
 
 if __name__ == "__main__":
-    for t in (test_setup, test_verify_reports_ecc_version):
+    for t in (test_setup, test_verify_reports_ecc_version, test_capabilities_and_routines, test_routine_configuration_wizard,
+              test_profile_driven_wizard_fires_on_both_entry_points):
         try:
             t()
         except AssertionError:

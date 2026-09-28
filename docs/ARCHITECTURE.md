@@ -10,13 +10,14 @@ OpenSpec   → WHAT / WHY. Delta specs with acceptance criteria as scenarios,
 
 ECC        → HOW. Dozens of agents (planner, code-explorer, tdd-guide, code-reviewer,
              language-specific reviewers, security-reviewer, …) and hundreds of
-             skills and command shims — installs unpinned from ECC's own GitHub
-             `main`, so the exact count moves independently of Groundwork releases;
-             `claude plugin details ecc@ecc` shows the current one (see "Upstream
-             versions" below). Installed once, user-scoped, as a single Claude
-             Code plugin. Its own hooks: GateGuard (investigate-before-edit,
-             destructive-Bash fact gate), block-no-verify, session persistence,
-             pre-compact save, continuous learning.
+             skills and command shims — installed pinned to a tested ref (2.1;
+             see "Upstream versions" below), so the exact agent/skill count only
+             moves when Groundwork itself re-pins it, not on every fresh install;
+             `claude plugin details ecc@ecc` shows the current one. Installed
+             once, user-scoped, as a single Claude Code plugin. Its own hooks:
+             GateGuard (investigate-before-edit, destructive-Bash fact gate),
+             block-no-verify, session persistence, pre-compact save, continuous
+             learning.
 
 Claude Code → the runtime. Subagents (Agent tool), experimental Agent Teams
              (named Agent calls when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1),
@@ -32,7 +33,7 @@ Groundwork → the governance layer. Rule files loaded into every session's
 
 Groundwork does not replace any upstream project's job. It exists because, tested plainly, neither ECC nor OpenSpec on its own reliably makes an agent plan, design for change, test against the real runtime, review, and honestly report completion for a request that doesn't spell every step out. See [VALIDATION.md](VALIDATION.md) for the actual tests that established this.
 
-**Upstream versions, verified 2026-09-28**: ECC installs via `claude plugin marketplace add affaan-m/ECC` + `claude plugin install ecc@ecc` (`install.sh`) — a plain `git clone` of ECC's GitHub `main` branch through Claude Code's own plugin mechanism, **not npm**, and **not version-pinned**: each fresh install or `claude plugin update ecc@ecc` resolves to whatever commit is HEAD on `main` at that moment. At verification time this resolved to `2.2.2` (68 agents, 386 skills per `claude plugin details ecc@ecc`). A published npm package `ecc-universal@2.2.1` (286 skills) also exists, but Groundwork does not install it or depend on it in any way — an earlier draft of this document conflated the two; see `openspec/changes/groundwork-2-enterprise-sre/design.md` §A.6 for the correction and evidence. OpenSpec, by contrast, genuinely installs from npm (`npm install -g @fission-ai/openspec@latest`) and was `1.13.2` as of the same date (Groundwork's own compatibility testing was last done against `1.12.0`); `openspec list --json`/`openspec status --all --json`, which Groundwork's continuation design depends on, are confirmed present and current through `1.13.2`. `setup.sh --verify` reports the installed OpenSpec version next to the version last verified here (no live network call, so drift is visible without adding a network dependency to every install run) and the installed ECC plugin version from `claude plugin list`.
+**Upstream versions, verified 2026-09-28**: ECC installs via `claude plugin marketplace add affaan-m/ECC#$ECC_REF` + `claude plugin install ecc@ecc` (`install.sh`) — a `git clone` of ECC's GitHub repository through Claude Code's own plugin mechanism, **not npm**. Through Groundwork 2.0, this floated ECC's `main` branch unpinned: each fresh install or `claude plugin update ecc@ecc` resolved to whatever commit was HEAD on `main` at that moment, which at 2.0's verification time resolved to `2.2.2` (68 agents, 386 skills per `claude plugin details ecc@ecc`). **As of Groundwork 2.1, ECC installs pinned to a specific, previously-tested ref** (`v2.2.1` by default; override per-machine with `GROUNDWORK_ECC_REF`) — see the `dependency-pinning` OpenSpec capability and `docs/VALIDATION.md`'s 2.1.0 entry for the live-verification evidence. A published npm package `ecc-universal@2.2.1` (286 skills) also exists, but Groundwork does not install it or depend on it in any way — an earlier draft of this document conflated the two; see `openspec/changes/groundwork-2-enterprise-sre/design.md` §A.6 for that correction and evidence. OpenSpec, by contrast, genuinely installs from npm (`npm install -g @fission-ai/openspec@latest`) and was `1.13.2` as of the same date (Groundwork's own compatibility testing was last done against `1.12.0`); `openspec list --json`/`openspec status --all --json`, which Groundwork's continuation design depends on, are confirmed present and current through `1.13.2`. `setup.sh --verify`/`--doctor` reports the installed OpenSpec version next to the version last verified here, and the installed ECC plugin version against the `#ref` pin (no live network call in either case, so drift is visible without adding a network dependency to every install run).
 
 ## The three rules
 
@@ -155,10 +156,14 @@ Every Groundwork capability has exactly one owner. No two components define the 
 | Health dashboard | Groundwork (`scripts/groundwork_report.py`) | Unchanged |
 | Installer/upgrade/rollback | Groundwork (`install.sh`/`setup.sh`) | Strengthened 2.0: corrected Node floor, enforced in `install.sh` itself |
 | ECC's specialist agents/skills | ECC | Installed, not forked or vendored |
-| MCP/external tool access | The task's own environment | Groundwork installs nothing by default |
+| MCP/external tool access | The task's own environment | Groundwork installs nothing by default; `docs/INTEGRATIONS.md` (2.1) documents, never wires |
 | Credential handling | The user's own MCP/CLI configuration | Never Groundwork |
+| Capability resolution (which tool for a task) | Groundwork (`rules/engineering-workflow.md` §6a, 2.1) | Judgment guidance over repo tooling → native → skill → MCP/CLI → browser → user; never overrides tier/evidence/authorization |
+| Scheduled/recurring automation (Routines) | Groundwork (`scripts/groundwork_routines.py`, 2.1) | New in 2.1; reuses `groundwork_report.py`'s launchd/cron scheduling pattern, not a new scheduler |
+| Capability/Routines configuration | Groundwork (`scripts/groundwork_config.py`, `setup.sh --configure`, 2.1) | New in 2.1; one human-readable `config.json`; shipped profiles never contain secrets, `validate` checks a hand-edited file on request |
+| Dependency version pinning (ECC) | Groundwork (`install.sh`, 2.1) | Pinned via `#ref`; unchanged for OpenSpec (already npm-version-pinned) |
 
-This table is extended, not rewritten, as later 2.0 phases ship (ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
+This table is extended, not rewritten, as later phases ship (2.0: ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn; 2.1: capability resolution, Routines, capability configuration, ECC pinning) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
 
 ## Autonomy — when Groundwork asks versus proceeds
 
