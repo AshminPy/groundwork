@@ -621,4 +621,6 @@ First pass → this pass: A→A, B→B, C→C (updated), D→D (extended with D.
 
 ## Next step
 
+**SUPERSEDED (2026-09-28) — kept verbatim for the audit trail, do not follow.** The paragraph below describes this document's state at the end of the audit/design pass, before the owner's task 0.25 sign-off authorized implementation. All 13 phases have since been implemented, tested, independently reviewed, and merged to `main` via PR #20 on 2026-09-28. See `tasks.md` for exact per-task status and `docs/RELEASE-REPORT-2.0.md` for the full release report.
+
 Per the requesting brief's explicit instruction, repeated in this pass (§28, STOP POINT again): **implementation does not begin from this document.** Task 0.13 (owner sign-off) remains unchecked. PR #20 remains a draft, not merged. No implementation file, hook, rule, script, or user-global Claude configuration has been touched by this pass — only this OpenSpec change's own design artifacts.

@@ -237,11 +237,10 @@ Task 0.25 (owner sign-off) records the exact authorization this implementation p
 ## 26. Commit and PR state
 
 - **PR**: #20, merged into `main` on 2026-09-28.
-- **Release branch**: `main`.
-- **Commits this branch**: 22 (2 audit/design, 20 implementation/fix/docs), none force-pushed, none rewriting history.
-- **Diff vs. `main`**: 44 files changed, 2766 insertions(+), 156 deletions(-) (`git diff --shortstat origin/main...HEAD`).
-- **Head commit**: `ed8db0b` at the time of this report.
+- **Release branch**: `main`. Working branch `claude/groundwork-2-enterprise-upgrade-zx62y6` carried 22 commits (2 audit/design, 20 implementation/fix/docs) up to the merge, none force-pushed, none rewriting history.
+- **Diff merged**: 44 files changed, 2766 insertions(+), 156 deletions(-) (measured pre-merge as `git diff --shortstat origin/main...HEAD`).
 - **Merge commit**: `ddeb432d584dde920770ca646888355588cd7aa5`.
+- **Post-merge follow-up**: two small documentation-only passes landed directly on `main` after the merge — `73d5d13` (release-report finalization) and this session's own CHANGELOG-completion and stale-marker-correction commit (see the git history for its hash).
 - PR #20's description contains the final implementation/test summary and is retained as release history.
 
 ## 27. Installation instructions — exact commands

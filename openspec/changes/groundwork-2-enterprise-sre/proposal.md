@@ -83,4 +83,6 @@ None of these gaps require new agents, skills, daemons, databases, or a rewrite.
 
 ## Status of this document
 
+**SUPERSEDED (2026-09-28) — kept verbatim for the audit trail, do not follow.** The paragraph below describes this document's state at the end of the audit/design pass. The owner has since signed off (task 0.25), all 13 phases have been implemented, tested, independently reviewed, and merged to `main` via PR #20. See `tasks.md` for exact per-task status and `docs/RELEASE-REPORT-2.0.md` for the full release report.
+
 Audit and design complete (both passes). **STOP — do not implement.** This proposal, `design.md`, and `tasks.md` are presented for owner review and phase-by-phase approval before any code, rule, hook, or doc file is changed. Task 0.13 remains unchecked; PR #20 remains a draft.
