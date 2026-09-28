@@ -36,11 +36,30 @@ if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" ]; then
   python3 "$CLAUDE_DIR/groundwork/bin/groundwork_report.py" schedule disabled >/dev/null 2>&1 || true
 fi
 # Same for any scheduled Routines (Groundwork 2.1) — unschedule every known one before deleting
-# the script; idempotent and safe even for a routine that was never actually scheduled.
+# the script; idempotent and safe even for a routine that was never actually scheduled. Routine
+# names are read from groundwork_routines.py's own ROUTINES registry (single owner for that list —
+# independent-review nice-to-have: a hardcoded name list here would silently stop unscheduling a
+# future routine the registry adds), falling back to the known 2.1 set only if that read fails.
 if [ -f "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" ]; then
-  for r in jira_eod news weekly_status pr_followup work_digest doc_drift; do
-    python3 "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" schedule "$r" disabled >/dev/null 2>&1 || true
-  done
+  routine_names="$(python3 -c "
+import sys
+sys.path.insert(0, '$CLAUDE_DIR/groundwork/bin')
+import groundwork_routines as m
+print('\n'.join(sorted(m.ROUTINES)))
+" 2>/dev/null || true)"
+  if [ -z "$routine_names" ]; then
+    routine_names="jira_eod
+news
+weekly_status
+pr_followup
+work_digest
+doc_drift"
+  fi
+  while IFS= read -r r; do
+    if [ -n "$r" ]; then
+      python3 "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py" schedule "$r" disabled >/dev/null 2>&1 || true
+    fi
+  done <<< "$routine_names"
 fi
 rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
 rm -f "$CLAUDE_DIR/groundwork/config.json" \

@@ -43,7 +43,7 @@ Each Routine is a name, a prompt-template function, a `mutates` boolean, and a d
 
 Routines are enabled per the capability profile chosen during `./setup.sh`'s optional capability-selection stage, or via `./setup.sh --configure` afterward (see `README.md`/`docs/ARCHITECTURE.md` for the full profile list). The result lands in one plain, human-readable, pretty-printed JSON file, `~/.claude/groundwork/config.json` (never YAML — see `openspec/changes/groundwork-2.1-context-routines-ux/design.md` §G for why), written and validated by `scripts/groundwork_config.py`. It is never overwritten by a re-run unless you explicitly reconfigure, and `uninstall.sh` removes it (it's Groundwork's own configuration, not your data — unlike telemetry, reports, or investigation files, which uninstall always keeps).
 
-`config.json` never contains credentials — `groundwork_config.py validate` actively scans for token/password/secret/api_key/credential-shaped keys and flags them as a problem, not a warning.
+None of the 8 shipped profiles ever write a credential into `config.json` — every field is a capability name, boolean, or schedule/topic string. If you hand-edit the file, `groundwork_config.py validate` actively scans for token/password/secret/api_key/credential-shaped keys and flags them as a problem, not a warning — but that check runs on request (`--configure`/`validate`), not automatically on every write or read, so it's a check you can run, not a guarantee enforced on every edit.
 
 ## Commands
 

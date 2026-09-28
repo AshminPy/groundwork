@@ -117,6 +117,13 @@ def test_module_level() -> None:
         check("is_macos(): GROUNDWORK_OS=linux -> False", mod.is_macos() is False)
     finally:
         del os.environ["GROUNDWORK_OS"]
+
+    # ---- JIRA_LIVE_TOOLS must never widen past READ_ONLY_TOOLS (design.md §D's explicit safety
+    # claim: "Routines never widen it"). Pinned directly, not just inferred from build_command()'s
+    # generic checks above — independent-review nice-to-have: a future edit adding a Jira-specific
+    # write tool here would defeat that claim with nothing else catching it.
+    check("JIRA_LIVE_TOOLS is exactly READ_ONLY_TOOLS (never a wider allowlist)",
+          mod.JIRA_LIVE_TOOLS == mod.READ_ONLY_TOOLS, (mod.JIRA_LIVE_TOOLS, mod.READ_ONLY_TOOLS))
     finish()
 
 

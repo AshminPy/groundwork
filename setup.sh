@@ -357,6 +357,10 @@ print(', '.join(sorted(names)) or 'none')
 " 2>/dev/null || echo "none")"
   say "  routines enabled: $enabled_routines"
   if [ "$enabled_routines" != "none" ] && [ -f "$ROUTINES_PY" ]; then
+    # `|| true` on the whole pipe, not just the loop body: under set -e/pipefail, a failure in the
+    # inline Python here (same class as verify_capabilities()'s own fix above) would otherwise abort
+    # setup entirely right after telling the user their profile was applied — this step is best-effort
+    # scheduling, not a reason to fail an already-successful capability-config write.
     python3 -c "
 import json
 cfg = json.load(open('$CLAUDE_DIR/groundwork/config.json'))
@@ -365,7 +369,7 @@ for name, r in cfg.get('routines', {}).items():
         print(name, r.get('schedule', 'daily'))
 " 2>/dev/null | while read -r rname rfreq; do
       python3 "$ROUTINES_PY" schedule "$rname" "$rfreq" >/dev/null 2>&1 || true
-    done
+    done || true
     say "  (each enabled routine's schedule was applied the same way the dashboard's is — macOS launchd,"
     say "   cron elsewhere; verify any time with ./setup.sh --routines)"
   fi
@@ -475,7 +479,13 @@ verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to
     return
   fi
   local cfg="$CLAUDE_DIR/groundwork/config.json"
-  python3 -c "
+  # Declared separately from the assignment (matches verify_install()'s own ecc_v pattern above):
+  # `local x=$(cmd)` always returns `local`'s own exit status, masking a real command failure —
+  # the exact class of bug independent-review finding M1 already fixed once in this file. A
+  # malformed hand-edit of config.json (it's explicitly documented as hand-editable) must degrade
+  # to one INVALID row, not silently abort the rest of --doctor under set -e.
+  local cap_rows=""
+  cap_rows="$(python3 -c "
 import json
 cfg = json.load(open('$cfg'))
 print('PROFILE\t' + cfg.get('profile', 'unknown'))
@@ -484,15 +494,20 @@ for k in ('cloud', 'platform', 'integrations'):
     print(k.upper() + '\t' + (', '.join(vals) if vals else '(none selected)'))
 for name, s in cfg.get('skills', {}).items():
     print('SKILL\t' + name + '\t' + ('enabled' if s else 'disabled'))
-" 2>/dev/null | while IFS="$(printf '\t')" read -r kind a b; do
-    case "$kind" in
-      PROFILE) line "Capability profile" CONFIGURED "$a" ;;
-      CLOUD) line "Cloud" CONFIGURED "$a — availability not connectivity-checked here; wire your own MCP/CLI per docs/INTEGRATIONS.md" ;;
-      PLATFORM) line "Platform" CONFIGURED "$a" ;;
-      INTEGRATIONS) line "Integrations" CONFIGURED "$a" ;;
-      SKILL) line "Skill: $a" "$([ "$b" = enabled ] && echo AVAILABLE || echo DISABLED)" "" ;;
-    esac
-  done
+" 2>/dev/null)" || cap_rows=""
+  if [ -z "$cap_rows" ]; then
+    line "Capabilities" "INVALID" "$cfg is not valid JSON (or is empty) — fix by hand or re-run ./setup.sh --configure"
+  else
+    printf '%s\n' "$cap_rows" | while IFS="$(printf '\t')" read -r kind a b; do
+      case "$kind" in
+        PROFILE) line "Capability profile" CONFIGURED "$a" ;;
+        CLOUD) line "Cloud" CONFIGURED "$a — availability not connectivity-checked here; wire your own MCP/CLI per docs/INTEGRATIONS.md" ;;
+        PLATFORM) line "Platform" CONFIGURED "$a" ;;
+        INTEGRATIONS) line "Integrations" CONFIGURED "$a" ;;
+        SKILL) line "Skill: $a" "$([ "$b" = enabled ] && echo AVAILABLE || echo DISABLED)" "" ;;
+      esac
+    done
+  fi
   if [ -f "$ROUTINES_PY" ]; then
     say ""
     say "  -- Routines --"

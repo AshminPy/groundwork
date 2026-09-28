@@ -460,6 +460,24 @@ def test_capabilities_and_routines() -> None:
               "Capability profile" in r.stdout and "sre-cloudops" in r.stdout, r.stdout)
         check("--doctor with a broken core install still shows the Routines section (regression)",
               "-- Routines --" in r.stdout and "jira_eod" in r.stdout, r.stdout)
+        (b.cfg / "groundwork" / "playbooks").mkdir(parents=True, exist_ok=True)
+        for src in (REPO_ROOT / "playbooks").glob("*.md"):
+            shutil.copy(src, b.cfg / "groundwork" / "playbooks" / src.name)
+
+        # ---- regression (independent-review MUST FIX): a hand-corrupted config.json must not
+        # crash --doctor outright (worse than the bug above — the whole script aborted silently,
+        # not just the Capabilities section, because verify_capabilities()'s own inline-Python
+        # pipeline had no fail-open guard under set -euo pipefail). config.json is explicitly
+        # documented as hand-editable, so a malformed edit or an interrupted write is realistic.
+        good_config = cfgfile.read_text()
+        cfgfile.write_text("{ not valid json ][")
+        r = b.run("--doctor")
+        check("--doctor against a corrupt config.json exits 0 (core checks all still pass)", r.returncode == 0, r.stdout + r.stderr)
+        check("--doctor against a corrupt config.json reports Capabilities INVALID, not a crash",
+              "Capabilities" in r.stdout and "INVALID" in r.stdout, r.stdout)
+        check("--doctor against a corrupt config.json still reaches the Routines section (fail-open, like groundwork_config.load_config())",
+              "-- Routines --" in r.stdout, r.stdout)
+        cfgfile.write_text(good_config)
 
         # ---- --configure re-profiles explicitly, no backup/reinstall
         r = b.run("--configure", "--capability-profile", "minimal")
