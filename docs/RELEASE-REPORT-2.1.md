@@ -2,25 +2,25 @@
 
 Prepared at the end of the autonomous implementation authorized by the "Groundwork 2.1 — Context, Capabilities, Routines & UX" brief. This is the single consolidated report for owner review before any merge decision. It duplicates nothing from `docs/VALIDATION.md`, `openspec/changes/groundwork-2.1-context-routines-ux/design.md`, or that change's `tasks.md` — it points at them — except where a number needed to be re-verified fresh for this report (each such number is marked with the exact command run). Structure follows the brief's own required sections.
 
-**Release status: NOT merged, NOT tagged, NOT published.** Open as draft PR [#22](https://github.com/AshminPy/groundwork/pull/22) against `main`, for owner review. This is an explicit, hard constraint the brief itself sets — nothing in this report should be read as recommending an autonomous merge.
+**Release status: NOT merged, NOT tagged, NOT published.** Open as PR [#22](https://github.com/AshminPy/groundwork/pull/22) against `main`, for owner review. This is an explicit, hard constraint the brief itself sets — nothing in this report should be read as recommending an autonomous merge.
 
 ---
 
 ## 1. Release identity
 
 - **Branch**: `claude/groundwork-2.1-context-routines-ux`
-- **HEAD**: `b7a80a3fa45b1c61726b479b021c05510c02cf19`
+- **HEAD**: `14f53adcc02d28e197d3b1f91806b2d8454d10c8`
 - **Base**: `origin/main` at `73d5d13ffaa0c5a5755b77f88f7f2cb0b07e798c` (the already-merged Groundwork 2.0.0)
-- **Commits on top of base**: 2 — `6913008` (the full 2.1 implementation) and `b7a80a3` (independent-review fixes)
-- **Files changed vs `origin/main`**: 27 (`git diff --name-only origin/main..HEAD | wc -l`), 14 newly added
-- **Diff summary**: `git diff --stat origin/main..HEAD` → 27 files changed, 2010 insertions(+), 42 deletions(-)
-- **PR**: [#22](https://github.com/AshminPy/groundwork/pull/22), draft, subscribed for CI/review activity
-- **OpenSpec change**: `openspec/changes/groundwork-2.1-context-routines-ux/` — `proposal.md`, `design.md` (§A–§L), `tasks.md` (67 tasks, 63 checked `[x]`, 4 explained deferrals — see §12 below), 4 capability spec deltas (`routines`, `dependency-pinning`, plus `ADDED` requirements folded into the existing `onboarding` and `task-routing` baseline capabilities)
-- PR #21 (a separate, unrelated documentation-only change) was never touched by any of this work, per the owner's standing instruction.
+- **Commits on top of base**: 5 — `6913008` (the full 2.1 implementation), `b7a80a3` (round-1 independent-review fixes), `cae2553` (release-candidate report + tasks.md close-out), `83295b7` (Phase 13: the Routine Configuration Contract, an owner requirement raised during PR #22 review — see §7a below), `14f53ad` (round-3 independent-review fixes for Phase 13)
+- **Files changed vs `origin/main`**: 28 (`git diff --name-only origin/main..HEAD | wc -l`), 15 newly added
+- **Diff summary**: `git diff --stat origin/main..HEAD` → 28 files changed, 4179 insertions(+), 42 deletions(-)
+- **PR**: [#22](https://github.com/AshminPy/groundwork/pull/22), open, not draft, subscribed for CI/review activity — **not merged, not tagged, not published**, per the owner's explicit hard constraint (unchanged since draft)
+- **OpenSpec change**: `openspec/changes/groundwork-2.1-context-routines-ux/` — `proposal.md`, `design.md` (§A–§L plus §D.2, added for Phase 13), `tasks.md` (78 tasks, 77 checked `[x]`; the 1 remaining is this report's own update, closed by this commit), 4 capability spec deltas (`routines`, `dependency-pinning`, plus `ADDED` requirements folded into the existing `onboarding` and `task-routing` baseline capabilities)
+- PR #21 (a separate, unrelated documentation-only change, on a different branch) was never touched by any of this work, per the owner's standing instruction.
 
 ## 2. Scope and status
 
-All 12 phases in `tasks.md` are complete or explicitly, honestly deferred:
+All 13 phases in `tasks.md` are complete or explicitly, honestly deferred:
 
 | Phase | What | Status |
 |---|---|---|
@@ -37,6 +37,7 @@ All 12 phases in `tasks.md` are complete or explicitly, honestly deferred:
 | 10 | Testing | Complete |
 | 11 | Live validation | Complete |
 | 12 | Independent review + docs + this report | Complete |
+| 13 | Routine configuration contract (owner requirement, raised during PR #22 review) | Complete — 2 real MUST FIX bugs found and fixed across two further independent-review rounds, see §7a and §11 |
 
 ## 3. Architecture — what changed, what didn't
 
@@ -64,7 +65,7 @@ Full detail: `docs/CONTEXT-ENGINEERING.md` (new). Summary of the classification 
 | Reconstructed | Git/OpenSpec state at session start, re-derived every session | Unchanged |
 | Unnecessary/duplicated | None found (§ of `CONTEXT-ENGINEERING.md` states this explicitly, not silently omitted) | |
 
-**Conclusion, unchanged from the audit**: every 2.1 capability composes native Claude Code mechanisms (Tool Search, progressive-disclosure skills, subagent isolation, headless `claude -p`) rather than building custom context infrastructure. No token-usage number in this report or its linked docs is fabricated — where the platform doesn't expose reliable measurement (e.g., a live activity view), that's stated as a limitation (§13), not worked around with an invented number.
+**Conclusion, unchanged from the audit**: every 2.1 capability composes native Claude Code mechanisms (Tool Search, progressive-disclosure skills, subagent isolation, headless `claude -p`) rather than building custom context infrastructure. No token-usage number in this report or its linked docs is fabricated — where the platform doesn't expose reliable measurement (e.g., a live activity view), that's stated as a limitation (§12), not worked around with an invented number.
 
 ## 5. Skills
 
@@ -96,6 +97,16 @@ Full detail: `docs/ROUTINES.md` (new). Framework: `scripts/groundwork_routines.p
 
 Every routine shares the same safety contract (`build_command()`, tested for all 6 × both dry-run states): never `--dangerously-skip-permissions`, never `--bare`, always `--permission-mode dontAsk --permission-prompts none` plus an explicit `--allowedTools` allowlist. Scheduling reuses `groundwork_report.py`'s existing launchd/cron pattern — confirmed by direct code reading, not a new scheduler. Off-switches (`GROUNDWORK_ROUTINES[_<NAME>]=off`) confirmed to prevent any subprocess spawn, even with `claude` unreachable on `PATH`.
 
+## 7a. Routine configuration contract — an owner requirement raised during PR #22 review
+
+After the table above shipped as the initial release candidate (commit `6913008`, reviewed and fixed at `b7a80a3`), the owner reviewed the PR again and found it did not actually satisfy "configure once, run automatically": the framework ran, but `READ_ONLY_TOOLS`/`JIRA_LIVE_TOOLS` were byte-identical (so `pr_followup` could never reach `gh`/GitHub MCP and a "live" `jira_eod` could never actually post), and no identity/scope/access was ever collected or persisted, so a routine would have had to re-derive "which Jira," "whose PRs," "which repositories" from nothing on every run. This was incorporated into the *same* OpenSpec change (`tasks.md` Phase 13), not a separate one, per the owner's explicit instruction not to create another one.
+
+**What shipped** (full detail: `design.md` §D.2, `docs/ROUTINES.md`, `docs/VALIDATION.md`'s "Routine configuration contract" entry): `config.json`'s `routines` entries grew from `{enabled, schedule}` to a full per-routine schema (site/identity/access/scope/posting for `jira_eod`; identity/access/scope-filters for `pr_followup`; topics for `news`; repository/integration scope for `weekly_status`/`work_digest`/`doc_drift`), collected once by a progressive `setup.sh` wizard that only asks about routines actually enabled. `_capabilities_for()` now builds each routine's real `--allowedTools` list from routine + configured access mechanism + configured scope + configured mutation permission — never a flat global set. A routine with unconfigured required access is `BLOCKED` before any `claude` subprocess is spawned. Every routine prompt now ends with a required, semantic `ROUTINE RESULT` block (`COMPLETE|PARTIAL|BLOCKED|FAILED|SKIPPED`) — a clean exit code is never alone treated as success. The routine's actual useful output (digest/report/status) is now stored separately from telemetry, under `~/.claude/groundwork/routines/results/<name>/`, retrievable via `groundwork_routines.py latest <name>` / `setup.sh --routines <name>`, bounded to the 10 most recent runs.
+
+**Two real MUST FIX bugs found and fixed across this sub-phase's own two further independent-review rounds** (full detail: §11 below, and `docs/VALIDATION.md`): (1) a `"True"` vs `"true"` string-comparison mismatch silently defeated the profile-driven wizard trigger on both places it's actually invoked from, so a freshly profile-configured install left every routine unconfigured despite being marked enabled; (2) `weekly_status`/`work_digest`'s Jira cross-reference path could inherit `jira_eod`'s own write-capable Jira wildcard despite being declared `mutates: False`, violating this same phase's own least-privilege requirement. Both fixed at the code (not papered over in docs), covered by new regression tests independently confirmed to fail against the pre-fix code, and independently re-confirmed fixed by a fourth review round. **Final verdict for this sub-phase: `approve`, `Must-fix: 0`.**
+
+**Known, honestly disclosed simplifications** (not fixed this pass, no security impact): `pr_followup`'s five scope filters default to all-true and are hand-editable in `config.json` but not individually toggleable in the wizard; `weekly_status.jira_projects` is a real, coded, documented field that the wizard never actually collects — reachable only by hand-editing `config.json` (found by the fourth review round, disclosed in `design.md` §D.2 immediately rather than left for a future reader to rediscover).
+
 ## 8. UX — setup, profiles, config, doctor
 
 `setup.sh` gained one optional fourth question (capability/Routines selection, default **skip** — the unmodified `./setup.sh` one-command path installs exactly the same core as before) and three new read-only/low-risk modes:
@@ -103,22 +114,22 @@ Every routine shares the same safety contract (`build_command()`, tested for all
 - `--configure` — revisit selection only, no backup, no reinstall.
 - `--routines` — list configured Routines and last-run status.
 
-8 profiles (SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, Custom) — a starting point, never a forced install; every capability and Routine stays individually toggleable in `config.json`. **No new terminal-UI dependency**: Groundwork stays stdlib-only; the existing HTML dashboard is unchanged and remains the presentation layer. A live activity view was researched and deferred (§13) rather than faked.
+8 profiles (SRE/CloudOps, Platform Engineering, DevOps, Software Engineering, Cloud Architecture, Security Engineering, Minimal, Custom) — a starting point, never a forced install; every capability and Routine stays individually toggleable in `config.json`. **No new terminal-UI dependency**: Groundwork stays stdlib-only; the existing HTML dashboard is unchanged and remains the presentation layer. A live activity view was researched and deferred (§12) rather than faked.
 
 ## 9. Tests — exact commands and results
 
 ```
 $ python3 -m pytest tests -q
-............................                                             [100%]
-28 passed in 34.12s
+.............................................                            [100%]
+45 passed in 47.96s
 
 $ python3 tests/test_hooks.py               → 131 passed, 0 failed
 $ python3 tests/test_playbooks.py           → 143 passed, 0 failed
 $ python3 tests/test_report.py              → 67 passed, 0 failed
-$ python3 tests/test_setup.py               → 94 passed, 0 failed
+$ python3 tests/test_setup.py               → 146 passed, 0 failed
 $ python3 tests/test_telemetry.py           → 81 passed, 0 failed
-$ python3 tests/test_groundwork_config.py   → 112 passed, 0 failed   (new)
-$ python3 tests/test_groundwork_routines.py → 115 passed, 0 failed   (new)
+$ python3 tests/test_groundwork_config.py   → 147 passed, 0 failed   (new in this pass)
+$ python3 tests/test_groundwork_routines.py → 98 passed, 0 failed    (new in this pass)
 
 $ openspec validate groundwork-2.1-context-routines-ux --strict
 Change 'groundwork-2.1-context-routines-ux' is valid
@@ -133,7 +144,7 @@ $ bash -n setup.sh && bash -n install.sh && bash -n uninstall.sh
 (all clean)
 ```
 
-743 total deterministic checks across 7 files (131+143+67+94+81+112+115), 0 failed. Two new test files added this pass (`test_groundwork_config.py`, `test_groundwork_routines.py`); every existing file extended, not rewritten; the full pre-2.1 suite (16 test functions, 485+ checks) still passes unmodified in kind.
+813 total deterministic checks across 7 files (131+143+67+146+81+147+98), 0 failed, 45 test functions. Two new test files added this pass (`test_groundwork_config.py`, `test_groundwork_routines.py`); every existing file extended, not rewritten; the full pre-2.1 suite (16 test functions, 485+ checks) still passes unmodified in kind. `test_setup.py` and `test_groundwork_routines.py` each grew again during the Routine Configuration Contract sub-phase (§7a): two new regression tests (`test_profile_driven_wizard_fires_on_both_entry_points`, `test_non_mutating_routines_never_inherit_jiras_write_capable_wildcard`) target exactly the blind spots that let those two bugs ship, and both were independently confirmed — by temporarily reverting the fix and re-running — to actually fail against the pre-fix code, not just pass trivially against the fix.
 
 ## 10. Runtime validation — exact scenarios and results
 
@@ -146,6 +157,8 @@ All performed live in this sandbox against the real, installed Claude Code CLI (
 5. **ECC pinning**: `--doctor` reports `plugin ecc@ecc 2.2.1 (pinned to v2.2.1)` on a matching stub, and the differs-from-pin message on a mismatched one.
 6. **Uninstall after a pinned, capability-configured install**: `config.json` removed, every scheduled routine plist unscheduled — confirmed via a real launchd-plist write/read cycle in a test-scoped `LaunchAgents` directory.
 7. **Version-bump sanity check**: fresh install after the CHANGELOG 2.1.0 entry stamps `VERSION` as `2.1.0` (was `2.0.0` through earlier tests in this same session, confirming `install.sh`'s CHANGELOG-derived version stamping works end-to-end).
+8. **Profile-driven routine wizard, live, both entry points** (Routine Configuration Contract sub-phase, §7a): a fresh, fully interactive first-time install piping profile/teams/schedule answers plus "yes, pick a profile" → sre-cloudops → full wizard answers for `jira_eod`/`pr_followup`/`news`/`weekly_status`/`work_digest`, and separately `--configure` → "Change capability profile" on an already-installed box with no profile yet — both inspected via the actual `config.json` file contents afterward (not the non-echoing piped-stdin transcript): every field (Jira site/identity/access/MCP server/schedule, GitHub identity/access, news topics, schedule times, `work_digest`'s auto-derived `use_github`/`use_jira`) landed exactly as entered on both paths.
+9. **Non-mutating routines' capability set, live, against a real live-posting `jira_eod` configuration**: with `jira_eod` configured `access=jira_mcp, posting=automatic` (the routine legitimately entitled to the Jira wildcard), `_capabilities_for()` was invoked directly for `weekly_status`/`work_digest` with Jira cross-referencing enabled — the returned tool list contained no Jira-shaped tool at all (no `mcp__atlassian__*`, no `Bash(jira *)`, no browser tool) across all three Jira access mechanisms, while `jira_eod` itself, same config, correctly still received `mcp__atlassian__*`.
 
 ## 11. Independent review — full history
 
@@ -161,9 +174,15 @@ Both MUST FIX findings were fixed at the root (not worked around) and committed 
 
 **Round 2** — narrowly-scoped confirmation review, per the same project convention already used once in 2.0 (Phase 4/5: "a second, narrowly-scoped independent review verified both MUST FIX fixes by direct old-vs-new reproduction"). Extracted the actual pre-fix `setup.sh` via `git show HEAD^:setup.sh`, ran both old and new against the identical corrupted-`config.json` scenario side by side, confirmed the old script dies silently while the new one degrades correctly; grepped both doc files for every remaining "unpinned" occurrence and confirmed each is inside a clearly-dated historical clause, not a live claim. Independently re-ran the full test suite and `openspec validate --strict`.
 
-**Final verdict: `approve`, `Must-fix: 0`.**
+**Verdict after round 2: `approve`, `Must-fix: 0`.** This closed out the initial release candidate (commit `b7a80a3`) — the Routine Configuration Contract sub-phase below (§7a) was raised in a *separate*, later owner review of that already-approved candidate, not a continuation of rounds 1-2.
 
-Full transcripts of both rounds' findings: `docs/VALIDATION.md`'s "Independent review" subsection.
+**Round 3** — a fresh adversarial reviewer dispatched specifically against the Routine Configuration Contract sub-phase (§7a, commit `83295b7`), with instructions to live-reproduce rather than infer from reading. Returned `changes-required`, 3 MUST FIX (one a direct documentation consequence of the other two, so two underlying bugs): (1) `setup.sh` compared `cfg_get`'s lowercase JSON boolean output against the capitalized string `"True"` in 12 places, silently defeating the profile-driven per-routine wizard trigger on both paths that call it — live-reproduced by piping a full profile-selection-plus-answers sequence into `--configure` and finding zero questions actually took effect; (2) `_capabilities_for()`'s `weekly_status`/`work_digest` branch could grant the same unrestricted Jira MCP wildcard `jira_eod` gets for live posting to routines declared `mutates: False`, violating this sub-phase's own least-privilege SHALL requirement; (3) `docs/ROUTINES.md`/`design.md` claims falsified by (1) and (2). Both underlying bugs were fixed at the code (a new `cfg_get_bool()` helper; removing the Jira-tool grant from the non-mutating reuse path entirely, in favor of reading `jira_eod`'s own stored result file), backed by two new regression tests, and committed as `14f53ad`.
+
+**Round 4** — a second fresh reviewer, with no access to the fixing session's own reasoning, dispatched specifically to confirm the round-3 fixes rather than trust the commit's own claims. Independently re-derived the root cause of bug (1) by reading `groundwork_config.py`'s `get` CLI directly; live-reproduced both fixed entry points itself in an independently-built sandbox; ran a differential test (checked out the pre-fix commit into a worktree, copied over only the two new test files, confirmed both fail hard and specifically against the old code — not vacuous tests); independently invoked `_capabilities_for()` across all three Jira access mechanisms for both non-mutating routines and confirmed no Jira-shaped tool is ever granted; grepped the whole repository for any stale reference to the old grant pattern (none found); independently re-ran the full suite (45 passed) and `openspec validate --strict` (valid). **Verdict: `approve`, `Must-fix: 0`.** 3 NICE TO HAVE findings, all closed in the same pass (not deferred): an undisclosed `weekly_status.jira_projects` wizard gap (now disclosed in `design.md` §D.2), a dead `indent` parameter on `_jira_evidence_note()` (removed), and a cosmetic stray blank line in two routine prompts when no Jira cross-reference is configured (fixed).
+
+**Overall final verdict across all four rounds: `approve`, `Must-fix: 0`.**
+
+Full transcripts of all four rounds' findings: `docs/VALIDATION.md`'s "Independent review" and "Fresh confirmation review of the Bug 3/Bug 4 fixes" subsections.
 
 ## 12. Known limitations and deferred items (honestly carried forward, not fixed)
 
@@ -172,6 +191,7 @@ Full transcripts of both rounds' findings: `docs/VALIDATION.md`'s "Independent r
 - **No live activity view** (§13 of `design.md`) — no reliable Claude Code lifecycle-event source was found to build one on honestly; not faked.
 - **Prompt-content quality for `news`/`weekly_status`/`pr_followup`/`doc_drift`** was mechanism-verified (same `build_command()`/`run_routine()` path as the live-run `work_digest`) but not independently live-run per routine this pass — a model-behavior property of the prompt text, not the framework, and each shares the identical, already-tested invocation mechanism.
 - **MCP/CLI integrations are documentation only** — `docs/INTEGRATIONS.md` is researched guidance, not a wired, credentialed, validated connection to any of the systems it covers.
+- **`weekly_status.jira_projects` is not collected by the interactive wizard** (found by round 4, §11) — the field is real, coded, and documented, but only reachable by hand-editing `config.json`; `work_digest.use_jira` (the analogous field on the other routine) *is* auto-derived by the wizard. No security impact — the gap only means the routine's prompt never mentions Jira project scoping, never a broader capability grant.
 
 **Deferred items, with reasons** (all in `docs/FUTURE-SCOPE.md` §13 and `design.md`):
 - Task Observer — privacy-requirement conflict (near-always-on implementations vs. the brief's own strict no-raw-capture rule).

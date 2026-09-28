@@ -196,7 +196,19 @@ erased — this phase's own independent review is separate and additional.
   pre-fix code. Full suite after fixes: 45 test functions, 0 failed. `openspec validate --strict`:
   valid. Full detail: `docs/VALIDATION.md`'s "Two more bugs found by a fresh adversarial reviewer"
   entry.
-- [ ] 13.12b A fresh confirmation reviewer re-reviews the 13.12a fixes specifically, Must-fix: 0
-  required before this phase is considered complete.
-- [ ] 13.13 PR #22 updated (commit + push to the existing branch) and its description refreshed to
-  reflect this phase, still draft/unmerged/untagged/unpublished.
+- [x] 13.12b A fresh confirmation reviewer (no access to the fixing session's own reasoning)
+  independently re-reproduced both 13.12a fixes live — a differential test against the pre-fix
+  commit confirmed the two new regression tests genuinely fail on the old code, not vacuously; a
+  repo-wide grep confirmed no stale reference to the old wildcard-granting pattern remains;
+  `_jira_evidence_note()`'s referenced path was confirmed to match exactly where `_store_result()`
+  writes. **Verdict: approve, Must-fix: 0.** 3 NICE TO HAVE findings, all closed in the same pass:
+  `weekly_status.jira_projects` was reachable only by hand-editing `config.json` (undisclosed,
+  unlike the analogous `pr_followup` gap) — now disclosed in `design.md` §D.2; `_jira_evidence_note()`'s
+  dead `indent` parameter removed; the cosmetic stray blank line in `_weekly_status_prompt()`/
+  `_work_digest_prompt()` when no Jira cross-reference is configured fixed by building each
+  prompt's body from filtered non-empty parts instead of an always-present template slot. Full
+  detail: `docs/VALIDATION.md`'s "Fresh confirmation review of the Bug 3/Bug 4 fixes" entry.
+- [x] 13.13 PR #22 updated (commit + push to the existing branch, commit `14f53ad`) and its
+  description refreshed to reflect this phase (§7a of `docs/RELEASE-REPORT-2.1.md`, updated with
+  the real HEAD/commit-list/file-count/test-count and both new independent-review rounds).
+  Still unmerged/untagged/unpublished, per the owner's hard constraint.

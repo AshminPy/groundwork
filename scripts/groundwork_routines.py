@@ -302,14 +302,14 @@ If nothing material happened across these topics since the last run, say so plai
 {RESULT_CONTRACT}"""
 
 
-def _jira_evidence_note(indent: str = "") -> str:
+def _jira_evidence_note() -> str:
     """weekly_status/work_digest never get a live Jira tool (they're mutates: False — see
     _capabilities_for()'s comment). Instead they're pointed at jira_eod's own already-stored,
     already-evidenced result file: zero additional capability, since Read/Glob are already granted
     to every routine via BASE_REPO_READ."""
     d = _results_dir("jira_eod")
     return (
-        f"{indent}For Jira status, do NOT call any live Jira tool — none is granted to this "
+        f"For Jira status, do NOT call any live Jira tool — none is granted to this "
         f"routine. Instead, use Read/Glob to check {d}/run-*.json for the most recent file "
         f"(sort by filename/timestamp) — it holds jira_eod's own last stored result (status, "
         f"summary, content) as JSON. If no such file exists, say plainly that no Jira EOD run "
@@ -327,17 +327,16 @@ def _weekly_status_prompt(rc: dict) -> str:
     jira_projects = rc.get("jira_projects") or []
     if jira_projects:
         parts.append(f"Jira project(s) {', '.join(jira_projects)}")
-    jira_block = f"\n\n{_jira_evidence_note()} Only the ticket(s)/project(s) {', '.join(jira_projects)} are in scope — ignore anything else in that file." if jira_projects else ""
-    return f"""You are running Groundwork's weekly status routine, a scheduled Routine (not an interactive session).
-
-Configured scope (set once during setup, not re-asked here): {'; '.join(parts)}. Do not pull in unrelated projects or repositories simply because they happen to be accessible.
-
-Using engineering-workflow.md §3's own completion-facts model (code written, tests run, independent review, merged, deployed, live validated — plus completed/in-progress/blocked), summarize the in-scope repository's status from real evidence: git history, PR state, OpenSpec task progress, test results, review outcomes, deployment/runtime validation actually observed.
-
-Cover: completed, in progress, blocked, decisions made, next actions. Do not invent status for anything you lack evidence for — state it as unknown rather than guessing. Merged is not deployed; deployed is not runtime-validated; keep those distinctions exact.
-{jira_block}
-
-{RESULT_CONTRACT}"""
+    body = [
+        "You are running Groundwork's weekly status routine, a scheduled Routine (not an interactive session).",
+        f"Configured scope (set once during setup, not re-asked here): {'; '.join(parts)}. Do not pull in unrelated projects or repositories simply because they happen to be accessible.",
+        "Using engineering-workflow.md §3's own completion-facts model (code written, tests run, independent review, merged, deployed, live validated — plus completed/in-progress/blocked), summarize the in-scope repository's status from real evidence: git history, PR state, OpenSpec task progress, test results, review outcomes, deployment/runtime validation actually observed.",
+        "Cover: completed, in progress, blocked, decisions made, next actions. Do not invent status for anything you lack evidence for — state it as unknown rather than guessing. Merged is not deployed; deployed is not runtime-validated; keep those distinctions exact.",
+    ]
+    if jira_projects:
+        body.append(f"{_jira_evidence_note()} Only the ticket(s)/project(s) {', '.join(jira_projects)} are in scope — ignore anything else in that file.")
+    body.append(RESULT_CONTRACT)
+    return "\n\n".join(body)
 
 
 def _pr_followup_prompt(rc: dict) -> str:
@@ -364,17 +363,16 @@ def _work_digest_prompt(rc: dict) -> str:
                "the investigation-continuity file if one exists", "failed validation", "pending review",
                "blocked deployments"]
     sources = [s for s in sources if s]
-    jira_block = f"\n\n{_jira_evidence_note()}" if wants_jira else ""
-    return f"""You are running Groundwork's daily work/TODO digest routine, a scheduled Routine (not an interactive session).
-
-Configured scope (set once during setup, not re-asked here): {repo_desc}. Do not search repositories outside this scope.
-
-From real evidence only — {', '.join(sources)} — produce three short sections: TODAY (concrete next actions with real evidence behind them), BLOCKED (what's blocking, and on what), FOLLOW-UP (loose ends worth revisiting).
-
-Do not create a task from a weak or ambiguous signal — a real task needs real evidence, not a guess dressed up as one.
-{jira_block}
-
-{RESULT_CONTRACT}"""
+    body = [
+        "You are running Groundwork's daily work/TODO digest routine, a scheduled Routine (not an interactive session).",
+        f"Configured scope (set once during setup, not re-asked here): {repo_desc}. Do not search repositories outside this scope.",
+        f"From real evidence only — {', '.join(sources)} — produce three short sections: TODAY (concrete next actions with real evidence behind them), BLOCKED (what's blocking, and on what), FOLLOW-UP (loose ends worth revisiting).",
+        "Do not create a task from a weak or ambiguous signal — a real task needs real evidence, not a guess dressed up as one.",
+    ]
+    if wants_jira:
+        body.append(_jira_evidence_note())
+    body.append(RESULT_CONTRACT)
+    return "\n\n".join(body)
 
 
 def _doc_drift_prompt(rc: dict) -> str:
