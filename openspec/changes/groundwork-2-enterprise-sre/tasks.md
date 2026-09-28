@@ -100,10 +100,10 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [-] 7.3 Not applicable: there is no curated profile to opt out of. The existing `claude plugin disable ecc@ecc` (already documented) remains the one real, working full-ECC opt-out D4 requires — no new flag needed
 - [-] 7.4 Not applicable: 7.2 confirmed `skillOverrides` does NOT work on plugin skills; `scripts/merge_settings.py` needs no change
 - [-] 7.5 Not applicable: no curated-out capability exists to test; superseded by 7.6's honest cost measurement of the (unavoidable) full install
-- [ ] 7.6 Context-cost measurement: record the full ECC install's measured session-start token cost (from `claude plugin details ecc@ecc`'s "Always-on" total) in `docs/VALIDATION.md` — no before/after comparison is possible, state that plainly
+- [x] 7.6 Context-cost measurement: recorded the full ECC install's measured session-start token cost (`claude plugin details ecc@ecc`'s "Always-on" total, ~43,577 tok) in `docs/VALIDATION.md` — no before/after comparison is possible, stated plainly, with the reason (unpinned install, no curation mechanism exists)
 - [x] 7.7 Cross-check against §D.5's builder-capability sourcing table — re-verified against the REAL installed content (not the stale npm-tarball catalog): no AWS/GCP/Azure/Terraform skill or agent found in the actual installed 386-skill/68-agent roster either; no builder role needs a capability outside what ECC actually provides
-- [ ] 7.8 Independent fresh-context review (MATERIAL — corrects a previously-approved mechanism and the OpenSpec that described it)
-- [ ] 7.9 docs/VALIDATION.md entry; docs/TROUBLESHOOTING.md's `skillOverrides` claim upgraded from asserted to confirmed-with-evidence; README/ARCHITECTURE already corrected in Phase 1 (task 1.4)
+- [x] 7.8 Independent fresh-context review (MATERIAL — corrects a previously-approved mechanism and the OpenSpec that described it) — satisfied by the Phase 1 second and third review rounds, which directly examined this exact correction (design.md §A.6/A.8/D.1, the rewritten `ecc-capability-policy` spec, `docs/ARCHITECTURE.md`) as their primary subject (finding "review-1" and its resolution) rather than needing a fourth, duplicate review of the same already-reviewed material
+- [x] 7.9 docs/VALIDATION.md entry; docs/TROUBLESHOOTING.md's `skillOverrides` claim upgraded from asserted to confirmed-with-evidence; README/ARCHITECTURE already corrected in Phase 1 (task 1.4)
 
 ### Phase 8 — Repository understanding (new this pass)
 - [ ] 8.1 Extend `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` with the domain-specific discovery checklist (§E.2), referencing `architecture-quality.md` §5 rather than restating it
