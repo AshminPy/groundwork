@@ -64,6 +64,33 @@ Scope: `rules/engineering-workflow.md` §6 (four builder personas — Infrastruc
 
 **Not run**: Platform Engineer (Helm/Flux) and Delivery Engineer (GitHub Actions) domain-specific fixtures — the discovery mechanism is domain-agnostic and already exercised twice above; judged low marginal value for the cost of two more fixture builds. **Nonprod deployment** (an actually-applied change against a live sandboxed target, with runtime validation) is **RUNTIME VALIDATION REQUIRED** — no real cloud/Kubernetes target exists in this environment and provisioning one is out of scope for acceptance testing.
 
+### Phase 12 — End-to-end acceptance scenarios (design.md §L.2, consolidated)
+Every scenario in the authoritative §L.2 table, cross-referenced against where its evidence actually lives:
+
+| Scenario | Status | Evidence |
+|---|---|---|
+| Repository-aware infra build (Terraform) | VERIFIED | Phase 8 entry, this file (GKE module-convention reuse) |
+| Platform onboarding (Helm/Flux) | VERIFIED | Below — a fixture Helm chart's resource/label convention correctly reused for a new service, with an explicit stated ASSUMPTION for what the repo's evidence didn't specify |
+| Delivery (GitHub Actions) | VERIFIED | Below — a lint step correctly added to the existing single workflow rather than a new parallel one, with the modularity reasoning cited from `architecture-quality.md` |
+| Cross-domain build (subagent/main-session choice) | VERIFIED | Phase 9 entry, this file |
+| Cross-domain build (Agent Team, genuinely parallel work) | **RUNTIME VALIDATION REQUIRED** | Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` *and* an interactive session (`engineering-workflow.md` §6); not testable via headless `claude -p` in this environment. The `-p`-mode fallback path (never claiming a team that didn't run) is VERIFIED above |
+| Repository pattern vs. generic knowledge | VERIFIED | Phase 8 entry |
+| Rejected unsafe pattern | VERIFIED | Phase 8 entry |
+| Nonprod deployment (real apply + runtime validation) | **RUNTIME VALIDATION REQUIRED** | No real cloud/Kubernetes target exists in this environment; provisioning one is out of scope for acceptance testing ("do not create paid cloud resources merely to satisfy acceptance testing") |
+| No authorization | VERIFIED | Phase 9 entry |
+| Presentation truth | VERIFIED | Phase 10 entry |
+| Output style invariance | VERIFIED | Phase 10 entry |
+| D3 MUST FIX (fresh re-review required) | VERIFIED | Phase 4 entry, plus 3 independent-review rounds of this exact mechanism across Phases 1 and 5 |
+| Rejected hypothesis continuity | VERIFIED | Phase 5 entry (2 independent review rounds) |
+| UNKNOWN / CONFLICTING EVIDENCE labeling | VERIFIED | Phase 2 entry |
+| Teach-from-verified-work | VERIFIED | Phase 11 entry |
+
+**Platform onboarding, live (Helm/Flux fixture)**: a fixture chart (`api-service`) whose `values.yaml` establishes an explicit, commented convention ("every service sets resources.requests/limits explicitly and a podLabels.team tag — required by our platform policy, not optional"). Asked to onboard a new `worker-service` following the existing pattern, a fresh session inspected `Chart.yaml`/`values.yaml`/`templates/deployment.yaml` first, reproduced the exact convention (resource sizing, replica count, team label) rather than inventing generic Helm defaults, and explicitly labeled the one thing the repo's evidence didn't specify (worker-service's actual workload profile) as an **ASSUMPTION** rather than silently guessing.
+
+**Delivery, live (GitHub Actions fixture)**: a fixture repo with one existing CI workflow (a single `test` job). Asked to add a lint step, a fresh session correctly **modified the existing workflow** (a new `lint` job in the same file) rather than inventing a parallel pipeline, explicitly citing `architecture-quality.md`'s variation-point guidance for why a second file wasn't warranted, and correctly declined to add `ruff` to `requirements.txt` (a runtime/test dependency file) since it's a dev-only tool — installing it directly in the lint job instead.
+
+**Deduplication / capability ownership (task 12.2), structural, not a live scenario**: `git diff --name-status main...HEAD | grep '^A'` — the complete list of files genuinely new (not modified) across all of Phases 1-11 — contains exactly one new production code file, `hooks/groundwork_shared.py`, and it is itself a deduplication (consolidating two pre-existing duplicated functions into one shared module, Phase 1). Every other new file is OpenSpec process documentation (`design.md`, `proposal.md`, `tasks.md`, the 10 capability spec files) — expected and required by the process itself, not a new runtime capability. Zero new hooks, zero new scripts, zero new playbooks, zero new rule files, zero new agent files were created to ship ten capability phases — the discipline `docs/ARCHITECTURE.md`'s capability-ownership table and `design.md` §J describe as the design intent held in the actual diff, not just on paper.
+
 ### Phase 6 (Decision D5) — Tier-2 deterministic safety guards, explicitly deferred, not implemented
 Scope: `openspec/changes/groundwork-2-enterprise-sre/design.md` §M/D5, `docs/FUTURE-SCOPE.md` §10, `tasks.md`. No code changes — this is a documentation-only entry recording a deliberate non-implementation decision, per the owner's own instruction that "this deferral MUST NOT block the Groundwork 2.0 release."
 

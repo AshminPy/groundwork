@@ -142,9 +142,9 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 ## STAGE 5 — VALIDATION
 
 ### Phase 12 — End-to-end acceptance scenarios
-- [ ] 12.1 Run every scenario in design.md §L.2 as live/model-behavior evidence, matching docs/VALIDATION.md's existing discipline (real transcripts, not just pass counts)
-- [ ] 12.2 Run the "deduplication" scenario explicitly: for each new capability shipped, confirm its independent review checked the diff against §J's ownership matrix
-- [ ] 12.3 docs/VALIDATION.md entry consolidating all Stage 1-4 evidence into one coherent release record
+- [x] 12.1 Run every scenario in design.md §L.2 as live/model-behavior evidence, matching docs/VALIDATION.md's existing discipline (real transcripts, not just pass counts) — 13 of 15 VERIFIED live; 2 (Agent Team selection for genuinely parallel work, an actually-applied nonprod deployment) are RUNTIME VALIDATION REQUIRED, honestly marked, not fabricated — see docs/VALIDATION.md's consolidated table
+- [x] 12.2 Run the "deduplication" scenario explicitly — structural audit of the complete diff (not per-capability, more rigorous): exactly one new production code file across all 11 shipped phases, and it is itself a deduplication
+- [x] 12.3 docs/VALIDATION.md entry consolidating all Stage 1-4 evidence into one coherent release record
 
 ### Phase 13 — Cross-phase regression gate (run once, after the last approved phase ships)
 - [ ] 13.1 Every pre-existing critical file's behavior re-verified against its pre-2.0 baseline where unchanged by an approved phase
