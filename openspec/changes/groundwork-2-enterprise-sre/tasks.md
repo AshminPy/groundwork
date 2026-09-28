@@ -39,7 +39,7 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 - [ ] 1.1 Correct the documented Node floor (README.md, install.sh error text, setup.sh, docs/ARCHITECTURE.md) from "≥18" to "≥20.19.0"
 - [ ] 1.2 Add an actual Node version-number check to `install.sh` (currently checks presence only)
 - [ ] 1.3 Extract `dirty_change_names()` from `hooks/require_material_review.py` and `hooks/groundwork_session_snapshot.py` into one shared helper
-- [ ] 1.4 Refresh ECC (2.2.1, npm-published) and OpenSpec (1.13.2) version references; note the ECC GitHub-main-vs-npm-publish drift risk
+- [x] 1.4 Refresh ECC and OpenSpec version references — CORRECTED SCOPE (finding M4): ECC is not npm-published to Groundwork at all; it installs unpinned from GitHub `main` via `claude plugin marketplace add`/`claude plugin install` (verified 2.2.2 at investigation time). `docs/ARCHITECTURE.md` and `setup.sh`'s `LAST_VERIFIED_ECC` corrected accordingly; OpenSpec refreshed to 1.13.2 (genuinely npm-published, verified)
 - [ ] 1.5 New/extended test: `install.sh` refuses on a stubbed Node <20.19.0 with a clear message
 - [ ] 1.6 Non-regression: full existing suite green plus new cases
 - [ ] 1.7 Independent fresh-context review (MATERIAL — touches install.sh)
@@ -93,16 +93,17 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 
 ## STAGE 3 — CAPABILITY
 
-### Phase 7 — ECC capability policy (Decision D4)
-- [ ] 7.1 Translate design.md §D.2/D.3's verified category data into the actual `--profile`/`--with capability:*` flag set for `install.sh`
-- [ ] 7.2 RUNTIME VALIDATION REQUIRED: live-test whether `skillOverrides` suppresses auto-invocation of a plugin-provided (ECC) skill; update `docs/TROUBLESHOOTING.md`'s existing claim either way
-- [ ] 7.3 Add `--ecc-profile full` opt-out flag to `install.sh`
-- [ ] 7.4 If 7.2 confirms plugin-skill scoping works: add `skillOverrides` entries via `scripts/merge_settings.py`
-- [ ] 7.5 New install-layout tests; live/runtime test confirming a curated-out capability is not auto-invoked and a CORE SRE capability still is
-- [ ] 7.6 Context-cost measurement: before/after token cost at session start
-- [ ] 7.7 Cross-check against §D.5's builder-capability sourcing table — confirm no builder role needs a capability outside the recommended default set
-- [ ] 7.8 Independent fresh-context review (MATERIAL — changes default installed capability set)
-- [ ] 7.9 docs/VALIDATION.md entry; README/ARCHITECTURE updated
+### Phase 7 — ECC capability policy (Decision D4) — CORRECTED SCOPE (finding M4, resolved during Phase 1 implementation)
+Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possible on Groundwork's install path. Investigated directly (design.md §A.6/A.8/D.1): `claude plugin install` (what `install.sh` actually runs) has no such flag — `--profile`/`--with capability:*` exist only on ECC's separate standalone installer, which must never be combined with the plugin path. Task 7.2's `skillOverrides` question is also resolved, not pending: source-level inspection of the installed Claude Code CLI shows `skillOverrides` is never consulted for plugin-sourced skills. Remaining tasks ship the corrected, evidence-backed scope: full ECC install retained, the two real levers documented, cost measured honestly.
+- [x] 7.1 CORRECTED: confirmed no install-time skill/agent selection flag exists for `claude plugin install`; `install.sh` keeps installing ECC's full catalog (unchanged from 1.5.1) plus its existing `--config hook_profile=standard`
+- [x] 7.2 RESOLVED (not RUNTIME VALIDATION REQUIRED): `skillOverrides` confirmed ineffective for plugin-provided skills by direct inspection of the installed Claude Code CLI's own source (v2.1.283) — the resolution path explicitly skips `source === "plugin"` entries; `docs/TROUBLESHOOTING.md`'s existing claim was already correct and is now labeled confirmed rather than asserted
+- [-] 7.3 Not applicable: there is no curated profile to opt out of. The existing `claude plugin disable ecc@ecc` (already documented) remains the one real, working full-ECC opt-out D4 requires — no new flag needed
+- [-] 7.4 Not applicable: 7.2 confirmed `skillOverrides` does NOT work on plugin skills; `scripts/merge_settings.py` needs no change
+- [-] 7.5 Not applicable: no curated-out capability exists to test; superseded by 7.6's honest cost measurement of the (unavoidable) full install
+- [ ] 7.6 Context-cost measurement: record the full ECC install's measured session-start token cost (from `claude plugin details ecc@ecc`'s "Always-on" total) in `docs/VALIDATION.md` — no before/after comparison is possible, state that plainly
+- [x] 7.7 Cross-check against §D.5's builder-capability sourcing table — re-verified against the REAL installed content (not the stale npm-tarball catalog): no AWS/GCP/Azure/Terraform skill or agent found in the actual installed 386-skill/68-agent roster either; no builder role needs a capability outside what ECC actually provides
+- [ ] 7.8 Independent fresh-context review (MATERIAL — corrects a previously-approved mechanism and the OpenSpec that described it)
+- [ ] 7.9 docs/VALIDATION.md entry; docs/TROUBLESHOOTING.md's `skillOverrides` claim upgraded from asserted to confirmed-with-evidence; README/ARCHITECTURE already corrected in Phase 1 (task 1.4)
 
 ### Phase 8 — Repository understanding (new this pass)
 - [ ] 8.1 Extend `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` with the domain-specific discovery checklist (§E.2), referencing `architecture-quality.md` §5 rather than restating it

@@ -2,7 +2,7 @@
 
 **A small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.**
 
-Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: three rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and three small deterministic hooks — a push guard, an enforced independent review for material changes, and a session-start snapshot of the repository so a fresh session can continue an existing project. That's the whole product: three rule files, three hooks, an installer. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
+Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: five rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and four small deterministic hooks — a push guard, an enforced independent review for material changes, a session-start snapshot of the repository so a fresh session can continue an existing project, and a usage-telemetry recorder. That's the whole product: rule files, hooks, an installer. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
 
 Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) — see [CREDITS.md](CREDITS.md) for exactly what's original here versus what's installed from upstream.
 
@@ -65,7 +65,7 @@ Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quick start
 
-Requirements: Claude Code ≥ 2.1, Node ≥ 18, npm, Python 3.10+, git.
+Requirements: Claude Code ≥ 2.1, Node ≥ 20.19.0, npm, Python 3.10+, git. (The floor is set by OpenSpec's own CLI requirement, verified against its `engines.node` field — ECC itself only needs Node ≥18.)
 
 ```bash
 git clone https://github.com/AshminPy/groundwork.git
@@ -75,7 +75,7 @@ cd groundwork
 
 `setup.sh` is a thin wrapper around the tested installer. It checks the prerequisites and offers to install any that are missing (see below), **backs up your complete `~/.claude` directory** to `~/.claude-backups/groundwork-YYYYMMDD-HHMMSS/` (owner-only; previous backups are never overwritten; a missing `~/.claude` is fine), asks three questions, runs `install.sh`, applies the reporting schedule, verifies the installation, generates the first dashboard and prints a summary. Backups stay local and are never transmitted; they can contain settings, MCP configuration, rules and hooks, so treat them as sensitive.
 
-Claude Code itself must already be installed and signed in (it is the product being configured; the script stops with the official install link otherwise). The other prerequisites are detected per operating system — git, Node 18+ with npm, Python 3.10+ — and anything missing is listed with the exact official command and installed only after you answer **y** (or pass `--install-prereqs`; `--no-install-prereqs` never installs):
+Claude Code itself must already be installed and signed in (it is the product being configured; the script stops with the official install link otherwise). The other prerequisites are detected per operating system — git, Node 20.19+ with npm, Python 3.10+ — and anything missing is listed with the exact official command and installed only after you answer **y** (or pass `--install-prereqs`; `--no-install-prereqs` never installs):
 
 | OS | Package manager | Commands used |
 |---|---|---|
@@ -84,7 +84,7 @@ Claude Code itself must already be installed and signed in (it is the product be
 | Fedora / RHEL | dnf | `sudo dnf install -y git` · `sudo dnf install -y nodejs npm` · `sudo dnf install -y python3` |
 | Alpine | apk | `sudo apk add git` · `sudo apk add nodejs npm` · `sudo apk add python3` |
 
-Deliberate limits: Homebrew itself is not installed for you (its official one-liner is printed instead, because it needs your password); a Node.js that exists but is older than 18 is left to your version manager (nvm, asdf, volta) with a clear message; `--non-interactive` never installs anything unless `--install-prereqs` is given. After installing, the check runs again.
+Deliberate limits: Homebrew itself is not installed for you (its official one-liner is printed instead, because it needs your password); a Node.js that exists but is older than 20.19.0 is left to your version manager (nvm, asdf, volta) with a clear message; `--non-interactive` never installs anything unless `--install-prereqs` is given. After installing, the check runs again.
 
 The three questions:
 

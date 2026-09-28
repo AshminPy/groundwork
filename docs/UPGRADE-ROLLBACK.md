@@ -22,7 +22,7 @@ cd groundwork && git pull
 ./install.sh --agent-teams   # same, plus opt in to Claude Code's experimental Agent Teams
 ```
 
-Every `./setup.sh` run leaves a new complete backup under `~/.claude-backups/groundwork-<timestamp>/` (owner-only, never overwritten). Check the result any time with `./setup.sh --verify`. Prerequisites that went missing (git, Node 18+, npm, Python 3.10+) are offered for installation by `setup.sh`; Claude Code itself is never installed by it.
+Every `./setup.sh` run leaves a new complete backup under `~/.claude-backups/groundwork-<timestamp>/` (owner-only, never overwritten). Check the result any time with `./setup.sh --verify`. Prerequisites that went missing (git, Node 20.19+, npm, Python 3.10+) are offered for installation by `setup.sh`; Claude Code itself is never installed by it.
 
 After upgrading ECC specifically, check `claude plugin details ecc@ecc` for changes to its hook list or context cost before assuming nothing else needs attention — see [docs/VALIDATION.md](VALIDATION.md) for what "normal" looks like.
 
@@ -61,6 +61,6 @@ None of this touches your projects' own `openspec/` directories or their committ
 
 ## If something's actually broken, not just unwanted
 
-1. Confirm which layer is responsible: `claude --debug` shows `Registered N hooks from M plugins` at startup — Groundwork's three hooks appear as plain `settings.json` entries (not attributed to a plugin), ECC's appear attributed to the `ecc` plugin.
+1. Confirm which layer is responsible: `claude --debug` shows `Registered N hooks from M plugins` at startup — Groundwork's four hooks appear as plain `settings.json` entries (not attributed to a plugin), ECC's appear attributed to the `ecc` plugin.
 2. Temporarily disable just one Groundwork hook without uninstalling: remove its entry from `hooks.PreToolUse` / `hooks.Stop` / `hooks.SessionStart` in `settings.json` by hand, or set `GROUNDWORK_SNAPSHOT=off` for the snapshot hook. If the issue is actually an ECC hook, use `ECC_DISABLED_HOOKS` (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — the two projects' hooks are easy to mistake for each other).
 3. File Groundwork-specific issues (rules/hooks/scripts/docs under this repo) against this repository. File ECC or OpenSpec issues against their own repositories — this project has no ability to fix bugs upstream.

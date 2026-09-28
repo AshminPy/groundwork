@@ -52,9 +52,15 @@ No hardcoded personal usernames, credentials, account IDs, or non-portable machi
 - ECC's own floor is genuinely 18 (VERIFIED by tarball inspection of `ecc-universal@2.2.1`). **The mismatch is asymmetric**: ECC is fine at Node 18; OpenSpec is not.
 - `install.sh` never checks the Node version number at all; only `setup.sh` does, with the wrong number.
 
-### A.6 ECC and OpenSpec version drift — VERIFIED (2026-09-28)
+### A.6 ECC and OpenSpec version drift — VERIFIED (2026-09-28), CORRECTED (2026-09-28, Phase 1 implementation, independent-review finding "M4")
 
-ECC's GitHub `main` (2.2.2, 292 skills) has not been published to npm; `registry.npmjs.org/ecc-universal` `dist-tags.latest` is still 2.2.1 (286 skills, 68 agents), which is what `install.sh` actually installs — checksum-confirmed by direct tarball download (SHA1 matched the registry's published `dist.shasum`). OpenSpec is at 1.13.2 upstream, three releases ahead of Groundwork's last-recorded 1.12.0.
+**Correction notice**: the paragraph originally here asserted that `install.sh` installs ECC from `registry.npmjs.org/ecc-universal` (checksum-confirmed against a tarball) and that this is "what installs." **That premise is false.** It was caught during Phase 1 implementation by independent review and re-investigated directly, evidence below. The audit's error was conflating "a real, published `ecc-universal@2.2.1` npm package exists" (true, and the original checksum work was accurate) with "that package is what Groundwork installs" (false — npm plays no part in installing ECC at all).
+
+- **VERIFIED (direct reproduction against a live, isolated `CLAUDE_CONFIG_DIR`, 2026-09-28)**: `install.sh:65-66` installs ECC with `claude plugin marketplace add affaan-m/ECC` then `claude plugin install ecc@ecc --scope user --config hook_profile=standard`. `claude plugin marketplace add` runs a plain `git clone https://github.com/affaan-m/ECC.git`, checked out on branch `main`. There is **no version pin**: a fresh install, or `claude plugin marketplace update` + `claude plugin update ecc@ecc`, always resolves to whatever commit is HEAD on GitHub `main` at that moment.
+- **VERIFIED**: at the moment of this re-investigation, that resolved to plugin version **2.2.2** (HEAD commit `d3b8a3e9`, "chore(deps): bump actions/stale…", 2026-09-27). `claude plugin list`/`claude plugin details ecc@ecc` report the actually-resolved installed inventory: **Skills (386), Agents (68), Hooks (7), MCP servers (1)** — not the npm `ecc-universal@2.2.1` / 286-skill figures §D.2/D.3 were built from.
+- **Impact on §D.2/D.3**: that catalog was verified against the wrong artifact and is now a stale, point-in-time snapshot with **no implementation authority**. Its central finding was independently re-checked against the real installed content and **still holds** (§D.4). Any Phase 7 mechanism must enumerate the real roster at build/verify time from the actual install (`claude plugin list` / `claude plugin details ecc@ecc`), never from a hard-coded list taken from this audit.
+
+OpenSpec's own facts are unaffected — OpenSpec genuinely installs from npm (`npm install -g @fission-ai/openspec@latest`, `install.sh:75`), version-pinned only by `@latest` at install time, correctly verified in §A.5. OpenSpec is at `1.13.2` upstream as of 2026-09-28, three releases ahead of Groundwork's last-recorded `1.12.0`.
 
 ### A.7 Component matrix — docs, tests, OpenSpec state
 
@@ -65,9 +71,13 @@ ECC's GitHub `main` (2.2.2, 292 skills) has not been published to npm; `registry
 | `openspec/specs/{task-routing,onboarding,usage-telemetry,health-dashboard}/spec.md` | **KEEP** | Accurate, archived, current baseline |
 | `openspec/changes/intelligent-engineering-harness/` | **See Open Question 1, §N** | Substantially shipped; deliberately unarchived pending one blocked task |
 
-### A.8 ECC integration posture
+### A.8 ECC integration posture — CORRECTED (2026-09-28, Phase 1 implementation, finding "M4")
 
-ECC install (`install.sh:52-60`) currently installs all 68 agents/286 skills unconditionally. **STRENGTHEN via new policy, not REPLACE** — ECC's own installer supports `--profile`, `--skills`, `--with capability:*` at install time; Claude Code has `skillOverrides`/`Skill()` permission rules. Groundwork does not fork or vendor ECC; it only chooses (§D).
+**Correction notice**: the paragraph originally here claimed ECC's own installer flags (`--profile`, `--skills`, `--with capability:*`) are usable to curate Groundwork's install. **False for the path Groundwork actually uses.** Those flags exist only on ECC's separate, standalone installer (`./install.sh` / `npx ecc-universal install`, confirmed present in the cloned `main` checkout) — which ECC's own README and Groundwork's `install.sh` comment both say must never be combined with the plugin-marketplace path ("pick one path only"). `claude plugin install --help` (Claude Code 2.1.283, the version in this environment) confirms the command Groundwork actually runs supports only `--config <key>=<value>` against the plugin manifest's declared `userConfig` schema — for ECC exactly two keys, `hooks_enabled` (bool) and `hook_profile` (`minimal`/`standard`/`strict`). No skill- or agent-subset selection flag exists on this path.
+
+Separately, **VERIFIED by direct inspection of the installed Claude Code CLI's own source** (`/opt/claude-code/bin/claude`, v2.1.283): the function resolving a `skillOverrides` entry short-circuits with `if (e.source === "plugin") return` before consulting the override table — `skillOverrides` is, by design, never consulted for plugin-sourced skills. This confirms, at the source level rather than by assertion, Groundwork's own pre-existing `docs/TROUBLESHOOTING.md`/`docs/VALIDATION.md` claim ("`skillOverrides` does not affect plugin skills").
+
+**Conclusion**: on Groundwork's actual install path there is currently no upstream-supported mechanism to install or restrict ECC to a skill/agent subset. The only real levers are the plugin's own `hook_profile`/`hooks_enabled` config (hook behavior only, already used by `install.sh`) and whole-plugin enable/disable (`claude plugin disable ecc@ecc`, already documented as the full opt-out). This does not violate Decision D4 ("use upstream-supported selection/scoping mechanisms only after validating them against the actually installed version; retain an explicit full-ECC opt-out/override") — it satisfies it: validation now conclusively shows no curation mechanism exists, so Groundwork 2.0 ships ECC's full install (matching 1.5.1's actual behavior), with the limitation documented rather than worked around by forking or vendoring ECC (explicitly forbidden by D4). The corrected `ecc-capability-policy` spec reflects this.
 
 ---
 
@@ -142,14 +152,16 @@ Updated capability-attachment table (full ownership matrix is §J; this is the a
 
 ## D. ECC capability matrix
 
-**Verification basis**: counts, install-time selection mechanisms, and the full real name-level listing are all VERIFIED against the actual published `ecc-universal@2.2.1` npm tarball, checksum-confirmed against the registry's published SHA1. Fetched/verified 2026-09-28.
+**Verification basis (ORIGINAL, first-pass audit)**: counts, install-time selection mechanisms, and the full real name-level listing were VERIFIED against the published `ecc-universal@2.2.1` npm tarball, checksum-confirmed against the registry's published SHA1. Fetched/verified 2026-09-28.
 
-### D.1 Selection mechanisms available today
+**CORRECTED (2026-09-28, Phase 1 implementation, finding "M4" — see §A.6/A.8 for full evidence)**: that npm tarball is not what Groundwork's `install.sh` installs. The real install is ECC's GitHub `main` via `claude plugin marketplace add`/`claude plugin install` — currently version 2.2.2, Skills (386)/Agents (68)/Hooks (7)/MCP servers (1) per `claude plugin details ecc@ecc`, with no version pin. §D.2/D.3 below are therefore a **stale snapshot of the wrong artifact** — kept for institutional record, not implementation authority. §D.1's "selection mechanisms" list is corrected below to match what is actually usable on Groundwork's install path; §D.4's central finding was independently re-checked against the real installed content and still holds.
 
-- **ECC's own install-time filters** (VERIFIED): `--profile minimal|core|full`, `--without baseline:hooks`, `--no-hooks`, `--skills a,b,c`, `--with capability:machine-learning`.
-- **Claude Code's `skillOverrides`** (VERIFIED, code.claude.com/docs/en/skills): four states, settable in `.claude/settings.json`. **RUNTIME VALIDATION REQUIRED**: whether it actually suppresses plugin-provided (ECC) skill auto-invocation — Groundwork's own docs currently assert it does not, unconfirmed against the current version.
-- **`Skill(name)` permission rules and `disableBundledSkills`** (VERIFIED) — coarser, permission-level.
-- **Whole-plugin disable** (`claude plugin disable ecc@ecc`) — too coarse for curation, an escape hatch only.
+### D.1 Selection mechanisms available today — CORRECTED
+
+- ~~ECC's own install-time filters (`--profile`, `--skills`, `--with capability:*`)~~ — **VERIFIED NOT APPLICABLE**: those flags belong to ECC's separate standalone installer, not the `claude plugin install` command Groundwork actually runs (which ECC's own README says must never be combined with the plugin path). `claude plugin install --help` confirms only `--config <key>=<value>` is available, against the plugin's own `userConfig` schema (`hooks_enabled`, `hook_profile` — hook behavior only).
+- ~~Claude Code's `skillOverrides` for plugin-skill curation~~ — **VERIFIED INEFFECTIVE**: direct inspection of the installed Claude Code CLI's own source shows the `skillOverrides` resolution path explicitly skips any entry whose skill `source === "plugin"`. Not usable for ECC.
+- **Whole-plugin disable** (`claude plugin disable ecc@ecc` / `enable`) — VERIFIED present and working (already documented in `docs/TROUBLESHOOTING.md`); coarse, but it is the genuine, working full opt-out D4 requires.
+- **The plugin's own `hook_profile`/`hooks_enabled` config** (VERIFIED, already used by `install.sh`) — the only real install-time customization on this path; governs ECC's *hook* automation only, not its skill/agent catalog.
 
 ### D.2 Skill matrix (286 total, real names — sums verified to equal 286)
 
@@ -177,7 +189,9 @@ Updated capability-attachment table (full ownership matrix is §J; this is the a
 
 ### D.4 The single most important finding in this matrix
 
-**VERIFIED**: there is no AWS, GCP, Azure, or Terraform skill or agent anywhere in ECC. Roughly a third of the entire 286-skill catalog (`agent_meta` + `business_ops`) is not a software-engineering capability at all. ECC curation is a correctness improvement, not only a cost optimization.
+**VERIFIED (original, against the npm tarball)**: there is no AWS, GCP, Azure, or Terraform skill or agent anywhere in ECC. Roughly a third of the entire 286-skill catalog (`agent_meta` + `business_ops`) is not a software-engineering capability at all.
+
+**RE-VERIFIED (2026-09-28, Phase 1 implementation, against the real installed content)**: searched the actual installed plugin's full component inventory (`claude plugin details ecc@ecc` — 386 skills, 68 agents) for `aws`/`gcp`/`azure`/`terraform`/`cloud` — **still zero matches**. The central finding holds against the real artifact, not only the stale one: ECC provides no cloud-provider or IaC-tool capability, on either catalog. §D.5's builder-capability-sourcing conclusion (Groundwork's builder roles, not ECC, must supply this) is unaffected by the M4 correction. The exact "roughly a third… agent_meta + business_ops" proportion is unverified against the real 386-skill catalog and should not be quoted as current without re-measuring it in Phase 7.
 
 ### D.5 Builder capability sourcing — where does each new builder role's actual capability come from? (new this pass)
 
@@ -376,7 +390,7 @@ New spec: `specs/teach-learn-capability/spec.md` (small — the one real contrac
 | Telemetry | Groundwork hook | Groundwork hook | Stop hook mechanism | None | None | None | KEEP | Thoroughly tested |
 | Health dashboard | Groundwork script | Groundwork script | None | None | None | None | KEEP | No gap found |
 | Installer / upgrade / rollback | Groundwork | Groundwork | None | Installs ECC | Installs OpenSpec CLI | None | STRENGTHEN | Node version bug |
-| ECC capability selection | — (wholesale install) | Groundwork policy, using ECC's own install-time flags | `skillOverrides`/`Skill()` rules (pending validation) | Owns the capabilities themselves | None | None | NEW policy | §D |
+| ECC capability selection | — (wholesale install) | Groundwork policy — CORRECTED (M4): no curation mechanism exists on the plugin-install path; `hook_profile` config + whole-plugin disable only | `skillOverrides` confirmed NOT applicable to plugin skills (source-verified) | Owns the capabilities themselves | None | None | Documented limitation, not a new policy | §D |
 | Repository understanding (discovery procedure) | Partially exists (generic UNDERSTAND step) | Groundwork policy, extended for builder domains | None | None | None | None | STRENGTHEN | §E — extends 3 existing playbooks, no new file |
 | Infrastructure/Platform/Delivery/Application builder roles | — (did not exist) | Groundwork policy (role personas) + native dynamic subagent/team instantiation | Owns the instantiation mechanism | Provides component skills (curated) | Governs MATERIAL builder changes | `terraform`/`kubectl`/cloud CLIs via MCP | NEW policy, no new files beyond rule text | §F |
 | Terraform/Ansible/cloud execution | — | Task-driven MCP/CLI | None | **Confirmed absent from ECC** | None | Owns it | Composed, not built | §D.5, §D.4 |
@@ -433,8 +447,8 @@ Grouped into the five stages the brief itself proposes, reordered only where rep
 |---|---|---|
 | `evidence-taxonomy` labels exist and are used correctly | §B #3, #4 | Model-behavior observation on constructed prompts |
 | Installer Node floor corrected and enforced in `install.sh` itself | §B #16 | Stubbed old-Node fixture test |
-| ECC curated default excludes NOT-RELEVANT categories | §B #12, #13 | Install-layout test + live fresh-session check |
-| `skillOverrides` only used if confirmed effective on plugin skills | §B #12, #13 | One live runtime test (RUNTIME VALIDATION REQUIRED) |
+| ECC curated default excludes NOT-RELEVANT categories | §B #12, #13 | **CORRECTED (M4): infeasible on the actual install path — no curation mechanism exists.** Full install retained; limitation documented (`ecc-capability-policy` spec) |
+| `skillOverrides` only used if confirmed effective on plugin skills | §B #12, #13 | **RESOLVED (M4)**: source-level inspection of the installed Claude Code CLI confirms it is never consulted for plugin-sourced skills — confirmed ineffective, not used |
 | Rejected hypothesis never resurfaces after recovery | §B #10 | The named compaction/fresh-session test |
 | Recovered state revalidated against current repo/runtime | §B #5 | Stale-vs-current test |
 | No chain-of-thought persisted (continuity) | brief §8 | Schema/field inspection |
@@ -494,8 +508,8 @@ VALIDATION METHOD: new `test_hooks.py` cases (§L.2).
 UNCERTAINTY: whether real ECC/subagent/teammate reviewers can be reliably prompted to emit the block consistently — RUNTIME VALIDATION REQUIRED, a small sample check before Phase 4 ships (same caution the first pass already flagged, now sharpened: the sample check should specifically verify the block appears, not just check MUST-FIX vocabulary generally).
 **Recommendation: approve this redesigned, two-part mechanism — it is the smallest deterministic representation found that actually satisfies the brief's stronger contract.**
 
-### D4 — ECC capability policy mechanism (unchanged, confirmed by builder-capability cross-check)
-No change to the mechanism. §D.5's builder-capability sourcing analysis confirms (does not expand) the recommended default CORE SRE set — no builder role needs a capability outside what §D.2/D.3 already recommends enabling by default. **Recommendation unchanged: approve the two-part approach.**
+### D4 — ECC capability policy mechanism — **CORRECTED during Phase 1 implementation (finding "M4"), see §A.6/A.8/D.1**
+The two-part mechanism this section originally described (ECC install-time flags + conditional `skillOverrides`) is **not implementable**: neither lever is available on the install path Groundwork actually uses (verified at the source/behavior level, not assumed). §D.5's builder-capability sourcing analysis still confirms no builder role needs a capability outside ECC's default install — that conclusion is unaffected. **Recommendation, corrected: ship ECC's full install (matching 1.5.1's actual behavior), governed only by the already-used `hook_profile` config and the already-documented whole-plugin disable; document the limitation plainly rather than building a curation mechanism that does not exist.** This still satisfies D4 as approved — D4 required validating the mechanism before relying on it, not that curation succeed.
 
 ### D5 — Deterministic safety expansion beyond Git — **REDESIGNED this pass**
 
@@ -527,8 +541,8 @@ UNCERTAINTY: none of the three candidates has been built or tested yet — this 
 ## N. Risks and unresolved questions (material items only, extended)
 
 1. **`openspec/changes/intelligent-engineering-harness` is unarchived with one blocked task.** *(Unchanged from the first pass.)*
-2. **§D.2/D.3's ECC category tables are real, checksum-verified data** — resolved in the first pass, still holds.
-3. **The `skillOverrides`-on-plugin-skills question (D4) is unresolved** and must be live-tested, not assumed.
+2. **§D.2/D.3's ECC category tables are checksum-verified data — against the wrong artifact.** **CORRECTED (M4, Phase 1 implementation)**: install.sh does not install the npm tarball these tables were built from; it installs ECC's GitHub `main` via the plugin marketplace, unpinned. The tables are a stale snapshot kept for institutional record; §D.4's central finding was independently re-checked against the real installed content and still holds. See §A.6.
+3. **The `skillOverrides`-on-plugin-skills question (D4) is resolved.** **CORRECTED (M4, Phase 1 implementation)**: source-level inspection of the installed Claude Code CLI confirms `skillOverrides` is never consulted for plugin-sourced skills — confirmed ineffective for ECC, not a pending question. See §A.8/D.1.
 4. **D5 is now a stronger case for approving at least the Terraform-prod-guard**, but is still fundamentally an owner risk-appetite call — see D5 above.
 5. **Node version fix (D1) is a breaking change for a currently-silent-failure population.** *(Unchanged.)*
 6. **This document itself should go through the same independent-review gate it describes** before any phase begins implementation.
@@ -577,8 +591,8 @@ groundwork/
 │   ├── block_terraform_prod_apply.py              NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 1)
 │   ├── block_kubectl_prod_mutation.py             NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 2)
 │   └── block_iam_mutation.py                      NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 3)
-├── scripts/                                      EXISTING, UNCHANGED except merge_settings.py (Phase 7, conditional
-│                                                  on D4 part 2's skillOverrides validation)
+├── scripts/                                      EXISTING, UNCHANGED — merge_settings.py needs no skillOverrides
+│                                                  change (M4: confirmed ineffective on plugin skills, not shipped)
 ├── tests/                                        EXISTING, MODIFIED across every phase that ships (new cases only,
 │                                                  no restructuring)
 ├── openspec/
