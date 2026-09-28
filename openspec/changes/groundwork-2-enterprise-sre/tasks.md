@@ -81,15 +81,15 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 - [x] 5.7 Independent fresh-context review (MATERIAL) — found 2 MUST FIX (truncation could silently drop the Rejected hypotheses section; a busy repo's git/OpenSpec facts could crowd the whole investigation section out of the snapshot cap) and 3 NICE TO HAVE; all fixed and verified, see docs/VALIDATION.md
 - [x] 5.8 docs/VALIDATION.md entry with actual constructed-scenario transcripts
 
-### Phase 6 — Deterministic safety expansion, redesigned and tiered (Decision D5)
-- [ ] 6.1 Owner explicitly names which Tier-2 candidate(s) to approve: none / Terraform-prod-guard / kubectl-prod-guard / IAM-mutation-guard / any combination — **do not proceed on an inferred scope**
-- [ ] 6.2 Per approved candidate: implement the narrowly-scoped hook, structurally mirroring `block_protected_push.py`
-- [ ] 6.3 Per approved candidate: adversarial bypass test pass
-- [ ] 6.4 Per approved candidate: false-positive test pass (legitimate commands that must NOT be blocked), reviewed by a security-reviewer for over-blocking risk
-- [ ] 6.5 Per approved candidate: `GROUNDWORK_<HOOK_NAME>=off` escape hatch
-- [ ] 6.6 Per approved candidate: document the production-naming-detection limitation plainly
-- [ ] 6.7 Independent fresh-context review per candidate — code, security, and an explicit false-positive check against this repo's own command history
-- [ ] 6.8 docs/VALIDATION.md entry per candidate with both bypass and false-positive evidence shown
+### Phase 6 — Deterministic safety expansion, redesigned and tiered (Decision D5) — **DEFERRED (owner decision, 2026-09-28)**
+- [x] 6.1 Owner explicitly named which Tier-2 candidate(s) to approve: **none — all three (Terraform-prod-guard, kubectl-prod-guard, IAM-mutation-guard) explicitly deferred**, not approved by inferred scope. Reason (owner's own words): production-vs-nonprod detection depending on heuristic naming risks false confidence; a Tier-2 guard should not be built merely to complete this checklist. This deferral does **not** block the Groundwork 2.0 release — 2.0 ships with: protected-Git deterministic safety (`block_protected_push.py`, unchanged), Groundwork's existing risk/autonomy rules (`engineering-workflow.md` §4, unchanged), native Claude Code permissions (unchanged), explicit-authorization-required for production/IAM/data-destructive/paid-resource operations (unchanged, and now explicitly extended to builder-role work in Phase 9's §F.5), and explicitly-authorized nonprod operations allowed under the existing risk model (unchanged). Live-tested in Phase 9 (the "no authorization" scenario): a destructive production operation was correctly stopped before mutation by the existing model, with no Tier-2 hook involved.
+- [-] 6.2 Per approved candidate: implement the narrowly-scoped hook — N/A, no candidate approved
+- [-] 6.3 Per approved candidate: adversarial bypass test pass — N/A
+- [-] 6.4 Per approved candidate: false-positive test pass — N/A
+- [-] 6.5 Per approved candidate: `GROUNDWORK_<HOOK_NAME>=off` escape hatch — N/A
+- [x] 6.6 Document the production-naming-detection limitation plainly — recorded here and in `design.md` §M/D5 as the reason for deferral, not silently dropped
+- [-] 6.7 Independent fresh-context review per candidate — N/A, nothing implemented to review
+- [x] 6.8 docs/VALIDATION.md entry — records the deferral decision and reasoning (not bypass/false-positive evidence, since nothing was built)
 
 ## STAGE 3 — CAPABILITY
 
