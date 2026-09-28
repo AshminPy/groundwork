@@ -34,7 +34,7 @@ Groundwork closes exactly those gaps, and nothing else:
 
 1. **Route by risk, not by ceremony.** A one-line fix shouldn't get a spec. A production-facing change should. `rules/engineering-workflow.md` defines three tiers and what each one requires.
 2. **Design for the change you can see, not the one you imagine.** `rules/architecture-quality.md` gives the governing principle — the smallest design that satisfies today's requirement while keeping low-cost paths for foreseeable change — plus the questions to answer before material work and the rule for variation points (environments, providers, clusters, models, regions, tenants belong behind configuration, not hard-coded).
-3. **Evidence beats intuition, always.** Every material technical decision cites a real source; every completion claim shows the command and the result; validation climbs a ladder derived from the project's own tooling and ends at the real runtime when runtime matters. `rules/evidence-policy.md` sets the rules and the labels (VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / RUNTIME VALIDATION REQUIRED).
+3. **Evidence beats intuition, always.** Every material technical decision cites a real source; every completion claim shows the command and the result; validation climbs a ladder derived from the project's own tooling and ends at the real runtime when runtime matters. `rules/evidence-policy.md` sets the rules and the labels (VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / CONFLICTING EVIDENCE / UNKNOWN / RUNTIME VALIDATION REQUIRED).
 4. **Delegation is Claude's decision, not the user's.** The workflow rule says when to stay in the main session, when to use a subagent, and when Claude Code's native Agent Teams are justified — you never have to say "create four agents".
 5. **Independent review is enforced, not requested.** `hooks/require_material_review.py` is a Stop hook that will not let a session end if a spec-driven change is fully implemented and nothing that looks like a reviewer — an ECC reviewer, a subagent, or an Agent Team reviewer teammate — ever ran against it. See [docs/VALIDATION.md](docs/VALIDATION.md).
 6. **Continuation comes from the repository.** `hooks/groundwork_session_snapshot.py` injects a deterministic snapshot at every session start — branch, dirty files, OpenSpec task progress, the verification commands the repo declares — and the workflow rule tells Claude how to rebuild a DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED picture from git, OpenSpec, docs, tests and code before touching anything.
@@ -218,9 +218,10 @@ groundwork/
 ├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
 ├── hooks/
 │   ├── block_protected_push.py        denies push to main/master/production + force-push
-│   ├── require_material_review.py     denies finishing a complete-but-unreviewed change (subagent, skill, or teammate reviewers)
-│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ harness version and profile) at session start
-│   └── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
+│   ├── require_material_review.py     denies finishing a MATERIAL change without a fresh independent review reporting Must-fix: 0
+│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ investigation continuity, harness version, profile) at session start
+│   ├── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
+│   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams)
@@ -236,6 +237,7 @@ groundwork/
 └── docs/
     ├── ARCHITECTURE.md
     ├── VALIDATION.md                  real test results and live runs, including the failures on the way
+    ├── RELEASE-REPORT-2.0.md          Groundwork 2.0 release-readiness report: per-capability evidence, test results, known limitations
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
     ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
