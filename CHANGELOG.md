@@ -14,6 +14,9 @@ Enterprise SRE/CloudOps upgrade. Tracked in `openspec/changes/groundwork-2-enter
 **Phase 2 — Evidence taxonomy (extends `evidence-policy.md`):**
 - `CONFLICTING EVIDENCE` and `UNKNOWN` added as first-class labels alongside VERIFIED/UNVERIFIED/ASSUMPTION/INFERENCE; the root-cause-analysis rule and the troubleshoot/research playbooks now require one of these labels rather than a softened guess when the evidence chain does not support a conclusion.
 
+**Phase 3 — Capability ownership documentation:**
+- `design.md` §J's capability-ownership matrix folded into a new `docs/ARCHITECTURE.md` "Capability ownership (2.0)" section — a pointer table, not a duplicate (full detail stays in `design.md` §J to avoid drift), cross-referenced against `architecture-quality.md` §4's existing "no abstraction without a concrete reason" rule as the anti-fragmentation principle. Documentation-only; no rule mechanism or code changed.
+
 **Phase 4 — Review-evidence strengthening (Decision D3):**
 - `hooks/require_material_review.py` rewritten: the gate previously only detected that *some* reviewer-shaped tool call happened after a MUST-FIX finding; an edit and a re-run of validation counted as resolution with no check that a fresh review actually confirmed it. Now parses a structured `REVIEW RESULT` block (documented in `output-contract.md`) and evaluates the *most recent* review's own verdict — MUST FIX → fix → revalidate → fresh independent re-review is enforced, not just any tool call. Falls back to the old presence-only check when a reviewer omits the block (never stricter without the reviewer's cooperation).
 - 9 new test cases, including the key strengthening case: edit + test alone, with no fresh review, still blocks.
