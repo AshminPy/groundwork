@@ -1,6 +1,8 @@
 # Groundwork 2.0 — Enterprise SRE Upgrade: Audit and Design
 
-**Status: AUDIT / DESIGN phase. Nothing in this document is implemented.** All findings below are labelled VERIFIED (with source and date), INFERENCE, ASSUMPTION, UNVERIFIED, CONFLICTING EVIDENCE, UNKNOWN, or RUNTIME VALIDATION REQUIRED per the evidence taxonomy this document itself proposes extending. Repository inspection was performed directly against this checkout (`/home/user/groundwork`, branch `claude/groundwork-2-enterprise-upgrade-zx62y6`, HEAD `d40523a`) on 2026-09-28. Upstream facts were verified live against OpenSpec, ECC, and Claude Code's own sources on 2026-09-28 (raw GitHub content, the npm registry, and code.claude.com docs — full source list in §A.5).
+**Status: AUDIT / DESIGN phase. Nothing in this document is implemented.** All findings below are labelled VERIFIED (with source and date), INFERENCE, ASSUMPTION, UNVERIFIED, CONFLICTING EVIDENCE, UNKNOWN, or RUNTIME VALIDATION REQUIRED per the evidence taxonomy this document itself proposes extending. Repository inspection was performed directly against this checkout (`/home/user/groundwork`) on 2026-09-28. Upstream facts were verified live against OpenSpec, ECC, and Claude Code's own sources on 2026-09-28 (raw GitHub content, the npm registry, and code.claude.com docs).
+
+**Revision note (this pass, 2026-09-28, later same day)**: this document is extended, not replaced, per an explicit instruction not to open a second OpenSpec change. §§A-D and the original migration/acceptance/decisions/risks sections (now K-N) are the first pass's audit, preserved. §§E-J are new: repository-aware builder roles, SRE capability consolidation, presentation/output-style architecture, teach/learn, and a comprehensive capability-ownership matrix. D3 (review evidence) and D5 (deterministic safety) are substantively redesigned in §M per specific critique that the first pass's proposals were too weak (D3) or needed builder-awareness (D5). Section letters after D have shifted; every cross-reference in this file, `proposal.md`, `tasks.md`, and the `specs/` deltas has been updated to match — see the end-of-document changelog for the exact letter mapping.
 
 ---
 
@@ -8,323 +10,597 @@
 
 ### A.1 Method
 
-Every rule file, playbook, hook, script, installer file, test file, and doc was read in full (not summarized from README claims). Hook and script behavior was independently verified by reading the actual Python/shell source, not inferred from `docs/ARCHITECTURE.md`'s own description of itself — in every case checked, the code matched the docs' claims (this is itself evidence of the repo's evidence-first discipline holding up under audit, not just being asserted). Upstream claims (Node version, ECC counts, Claude Code mechanisms) were independently re-verified against live sources rather than trusted from Groundwork's own (dated) VALIDATION.md entries — this caught one real, previously-undetected bug (§A.4, row on `installer-upstream-compatibility`).
+Every rule file, playbook, hook, script, installer file, test file, and doc was read in full (not summarized from README claims). Hook and script behavior was independently verified by reading the actual Python/shell source, not inferred from `docs/ARCHITECTURE.md`'s own description of itself — in every case checked, the code matched the docs' claims. Upstream claims (Node version, ECC counts, Claude Code mechanisms) were independently re-verified against live sources rather than trusted from Groundwork's own (dated) VALIDATION.md entries — this caught one real, previously-undetected bug (§A.5). This pass additionally verified Claude Code's native output-styles mechanism and presentation/document capability against current official docs (§H), since designing new capabilities without checking what the platform already provides would repeat the exact mistake this audit exists to catch.
 
 ### A.2 Component matrix — rules
 
 | Component | Responsibility | Evidence | Decision |
 |---|---|---|---|
-| `rules/engineering-workflow.md` | Tier classification, execution order, completion facts, autonomy, execution-model selection, continuation procedure | Read in full; cross-checked against `docs/VALIDATION.md` 1.0.0–1.5.1 live evidence | **KEEP + STRENGTHEN** — §7 continuation procedure is strong for OpenSpec-tracked MATERIAL work; gains the continuity decision outcome (D2) and a reference to the extended evidence labels (D1/evidence-taxonomy) |
-| `rules/architecture-quality.md` | Governing design principle, quality dimensions, pre-MATERIAL questions, variation-point rule | Read in full | **KEEP** — no material gap found against any Groundwork 2.0 acceptance criterion |
+| `rules/engineering-workflow.md` | Tier classification, execution order, completion facts, autonomy, execution-model selection, continuation procedure | Read in full; cross-checked against `docs/VALIDATION.md` 1.0.0–1.5.1 live evidence | **KEEP + STRENGTHEN** — §7 continuation procedure is strong for OpenSpec-tracked MATERIAL work; gains the continuity decision outcome (D2) and a reference to the extended evidence labels (D1/evidence-taxonomy); §6 gains the four builder-role personas (§F) |
+| `rules/architecture-quality.md` | Governing design principle, quality dimensions, pre-MATERIAL questions, variation-point rule | Read in full | **KEEP** — no material gap found; §5 ("follow the project's established conventions first, then vendor guidance") already states the exact "repository pattern wins over generic knowledge" principle this pass's builder roles need — confirmed by re-reading, not assumed |
 | `rules/evidence-policy.md` | Evidence priority, labels, DECISION record, validation ladder, completion-evidence table, RCA rule | Read in full; repo-wide grep confirmed `CONFLICTING EVIDENCE` and bare `UNKNOWN` do not appear anywhere in the repo | **KEEP + STRENGTHEN** — add the two missing labels (evidence-taxonomy); tighten §7 RCA rule to require one of them when applicable |
-| `rules/task-routing.md` | One category per task, material-ambiguity clarification rule | Read in full; validated live in `docs/VALIDATION.md` 1.2.0 (12/12 correct categorization) | **KEEP** |
-| `rules/output-contract.md` | Three-layer progressive-disclosure answer shape | Read in full; validated live across six categories in `docs/VALIDATION.md` 1.2.1–1.2.4 | **KEEP** |
+| `rules/task-routing.md` | One category per task, material-ambiguity clarification rule | Read in full; validated live in `docs/VALIDATION.md` 1.2.0 (12/12 correct categorization) | **KEEP** — confirmed in this pass that no new task-routing category is needed for builder work (routes to existing IMPLEMENT/DEPLOY/DESIGN/PLAN) or presentation (routes to existing DOCUMENT); see §F.1 and §H.1 |
+| `rules/output-contract.md` | Three-layer progressive-disclosure answer shape (the **truth** layer) | Read in full; validated live across six categories in `docs/VALIDATION.md` 1.2.1–1.2.4 | **KEEP + STRENGTHEN** — gains one new explicit invariant: native output styles (§H) may change tone/format but never override this file's evidence/validation/completion rules |
 
 ### A.3 Component matrix — hooks
 
-All four hooks were read in full by an independent code-audit pass (not just this document's author) that cross-checked every behavioral claim against actual line numbers.
-
 | Component | Trigger | Enforces or reports | Decision |
 |---|---|---|---|
-| `hooks/block_protected_push.py` | PreToolUse (Bash) | **Enforces** (`permissionDecision: deny`) | **KEEP** — fail-open by explicit design, no hardcoded machine-specific values, documented known limitations (non-exact branch names, unparsed wrapper commands), adversarially tested (VALIDATION.md 1.1.0 security-reviewer pass reproduced and fixed 4 real bypasses) |
-| `hooks/require_material_review.py` | Stop | **Enforces** presence of a reviewer-shaped call; does **not** enforce MUST FIX resolution | **KEEP + STRENGTHEN** — see Decision D3 |
-| `hooks/groundwork_session_snapshot.py` | SessionStart | Reports only (injects `additionalContext`) | **KEEP + STRENGTHEN** — gains the continuity decision outcome (D2) if extension is chosen; shares a byte-for-byte-duplicated `dirty_change_names()` helper with `require_material_review.py` (confirmed by direct code read) — **CONSOLIDATE** the helper regardless of any other decision (trivial, no behavior change, pure maintainability fix) |
-| `hooks/groundwork_telemetry.py` | Stop | Reports only, never blocks | **KEEP** — privacy filtering (token/path/secret redaction) is directly and explicitly tested (`tests/test_telemetry.py` lines 224-234, confirmed by direct code+test read); no material gap |
+| `hooks/block_protected_push.py` | PreToolUse (Bash) | **Enforces** (`permissionDecision: deny`) | **KEEP** — fail-open, no hardcoded machine-specific values, adversarially tested (VALIDATION.md 1.1.0) |
+| `hooks/require_material_review.py` | Stop | **Enforces** presence of a reviewer-shaped call; did **not** enforce MUST FIX resolution | **KEEP + REDESIGNED STRENGTHEN** — see Decision D3 (§M), substantively redesigned this pass |
+| `hooks/groundwork_session_snapshot.py` | SessionStart | Reports only | **KEEP + STRENGTHEN** — gains the continuity decision outcome (D2); shares a duplicated `dirty_change_names()` helper with `require_material_review.py` — **CONSOLIDATE** |
+| `hooks/groundwork_telemetry.py` | Stop | Reports only, never blocks | **KEEP** — its existing `TEST_CMD`/`DEPLOY_CMD` regex-based command classification and its transcript tail-reading mechanism are **reused, not duplicated**, by the redesigned D3 review-evidence check (§M) — this is a direct instance of "compose an existing primitive instead of building a new one" |
 
-No hardcoded personal usernames, credentials, account IDs, or non-portable machine identity were found in any hook (independently confirmed by a repo-wide search covering `rules/`, `hooks/`, `scripts/`, `install.sh`, `uninstall.sh`, `setup.sh` — every path reference resolves through `$HOME`/`os.path.expanduser`/`$CLAUDE_CONFIG_DIR`). The only literal machine-specific-looking content found anywhere is inside `docs/VALIDATION.md`, which is *evidence of real test runs on the maintainer's machine* (e.g. real backup timestamps, a real project path used as a live-test `cwd`) — correctly out of scope for portability, since none of it is copied to `~/.claude` by the installer. This satisfies acceptance criterion 17 (no personal credentials/hardcoded identity) **without any change needed.**
+No hardcoded personal usernames, credentials, account IDs, or non-portable machine identity were found in any hook (confirmed by a repo-wide search; every path reference resolves through `$HOME`/`os.path.expanduser`/`$CLAUDE_CONFIG_DIR`).
 
 ### A.4 Component matrix — scripts and installer
 
 | Component | Decision | Evidence |
 |---|---|---|
-| `scripts/merge_settings.py` / `scripts/unmerge_settings.py` | **KEEP** | Atomic writes (`write_atomic`: temp file + `os.replace`), idempotent (matched by exact command string), one documented and tested known limitation (a user value equal to a Groundwork default is indistinguishable on unmerge) — this is an accepted, honestly-documented tradeoff, not a gap |
+| `scripts/merge_settings.py` / `scripts/unmerge_settings.py` | **KEEP** | Atomic writes, idempotent, one documented and tested known limitation |
 | `scripts/migrate_legacy_rules.py` | **KEEP** | One-time, symlink-safe, silent no-op when nothing to migrate |
-| `scripts/groundwork_report.py` | **KEEP** | Python↔JS metric parity is directly tested under Node; atomic writes; privacy-safe (aggregated counters only, no session IDs/paths in output) |
-| `scripts/check_routing.py` | **KEEP** | Correctly and honestly self-labelled as non-deterministic, live, cost-real-money evidence — not a unit test, does not claim to be one |
-| `install.sh` | **STRENGTHEN** | VERIFIED (direct read, `install.sh:43`): checks only that `node` exists on `PATH`, performs **no version-number comparison at all** — the printed error text claims "Node >=18" but nothing enforces even that number, let alone the correct one |
-| `setup.sh` | **STRENGTHEN** | VERIFIED (direct read, `setup.sh:69`): `NODE_MIN=18`, hardcoded and — per §A.5 below — wrong |
-| `uninstall.sh` | **KEEP** | Symmetric with install.sh, correctly preserves user data (telemetry/reports), no backup needed because it is non-destructive of user-authored files by construction |
+| `scripts/groundwork_report.py` | **KEEP** | Python↔JS metric parity directly tested; atomic writes; privacy-safe |
+| `scripts/check_routing.py` | **KEEP** | Correctly self-labelled as non-deterministic, live evidence |
+| `install.sh` | **STRENGTHEN** | VERIFIED: checks only that `node` exists on `PATH`, no version-number comparison at all |
+| `setup.sh` | **STRENGTHEN** | VERIFIED: `NODE_MIN=18`, hardcoded and wrong (§A.5) |
+| `uninstall.sh` | **KEEP** | Symmetric with install.sh |
 
 ### A.5 The Node/OpenSpec version bug — VERIFIED with primary sources (2026-09-28)
 
-This is the one clear-cut defect found in this audit, not a design tradeoff:
-
 - `raw.githubusercontent.com/Fission-AI/OpenSpec/main/package.json` (fetched 2026-09-28): `"engines": {"node": ">=20.19.0"}`.
-- `raw.githubusercontent.com/Fission-AI/OpenSpec/main/README.md` (fetched 2026-09-28), line 125: "**Requires Node.js 20.19.0 or higher.**"
-- `registry.npmjs.org/@fission-ai/openspec` version metadata (fetched 2026-09-28) — `engines.node` is `>=20.19.0` for **every** version checked back to and including **1.12.0** (published 2026-09-03) — the exact version Groundwork's own `CHANGELOG.md` (line 138) recorded as "unchanged" at its 2026-09-20 audit. **This means the Node ≥18 claim in `README.md`, `install.sh`, and `setup.sh` has been wrong since before Groundwork 1.1.0 shipped — this predates the 2026-09-20 audit, it did not drift afterward.**
-- By contrast, ECC's own floor is genuinely 18: VERIFIED by downloading and inspecting the actual npm tarball `ecc-universal@2.2.1` (the version `install.sh` actually installs) — `package.json`: `"engines": {"node": ">=18"}`. **The mismatch is asymmetric**: ECC is fine at Node 18; OpenSpec is not, and Groundwork's current single combined floor silently favors the wrong (lower) requirement.
-- OpenSpec has also released three further versions since Groundwork's last audit (1.12.0 → 1.13.0 → 1.13.1 → 1.13.2, the current `latest` as of 2026-09-28, published 2026-09-23) — `openspec list --json` / `openspec status --all --json`, the two commands Groundwork's continuation design depends on, are VERIFIED still present and referenced as current in OpenSpec's own changelog through 1.13.2.
-
-**Consequence, VERIFIED by direct code read**: because `install.sh` never checks the Node version number and only `setup.sh` does (with the wrong number), an engineer who runs `install.sh` directly against Node 18 or 19 gets no warning at install time; the OpenSpec CLI call inside `openspec init`/`/opsx:*` fails downstream with whatever error Node itself produces, not a clear Groundwork message. Anyone who *did* successfully use OpenSpec through Groundwork today was, necessarily, already running Node ≥20.19 for unrelated reasons — so this is not a claim that OpenSpec use is currently broken for existing users, only that the stated and enforced floor cannot be trusted and the failure mode for a Node 18/19 user is currently silent-until-cryptic rather than fast and clear.
+- `registry.npmjs.org/@fission-ai/openspec` version metadata — `engines.node` is `>=20.19.0` for every version back to and including **1.12.0** (published 2026-09-03), the exact version `CHANGELOG.md` recorded as "unchanged" at Groundwork's 2026-09-20 audit. The Node ≥18 claim has been wrong since before Groundwork 1.1.0 shipped.
+- ECC's own floor is genuinely 18 (VERIFIED by tarball inspection of `ecc-universal@2.2.1`). **The mismatch is asymmetric**: ECC is fine at Node 18; OpenSpec is not.
+- `install.sh` never checks the Node version number at all; only `setup.sh` does, with the wrong number.
 
 ### A.6 ECC and OpenSpec version drift — VERIFIED (2026-09-28)
 
-- ECC's GitHub `main` branch (`affaan-m/ECC`) is at `2.2.2` (CHANGELOG dated 2026-09-15) with README-claimed "68 agents, 292 skills" — but **npm has not published 2.2.2**; `registry.npmjs.org/ecc-universal` `dist-tags.latest` is still `2.2.1` (published 2026-09-08), which is what `install.sh` actually installs (`claude plugin install ecc@ecc`, using whatever the marketplace resolves — VERIFIED to currently resolve to the npm-published 2.2.1 content by direct tarball inspection: `ls agents | wc -l` → 68, `ls skills | wc -l` → 286, matching Groundwork's own documented claim exactly).
-- **This is CONFLICTING EVIDENCE that resolves cleanly once the two sources are distinguished**: GitHub `main` is a preview of unreleased work; npm is the actual install source. Groundwork's "68 agents, 286 skills" claim is **VERIFIED accurate for what installs today**, but the design should note the claim is pinned to an npm dist-tag, not to GitHub — if ECC's 2.2.2 is ever published, or if a future install path switches to a GitHub checkout, the counts (and any capability matrix built on them, §D) go stale silently.
-- OpenSpec's version (§A.5) and ECC's version are both more current upstream than Groundwork's `CHANGELOG.md`/`docs/ARCHITECTURE.md` record. Recommended fix: a documentation refresh (Phase 1, §E) plus a **non-network** "last verified against" marker that `setup.sh --verify` can compare the *installed* version against, so drift is visible without adding a live network dependency to every install run (consistent with the existing no-network design of `groundwork_report.py` and the general "don't over-pin, verify lightly" guidance).
+ECC's GitHub `main` (2.2.2, 292 skills) has not been published to npm; `registry.npmjs.org/ecc-universal` `dist-tags.latest` is still 2.2.1 (286 skills, 68 agents), which is what `install.sh` actually installs — checksum-confirmed by direct tarball download (SHA1 matched the registry's published `dist.shasum`). OpenSpec is at 1.13.2 upstream, three releases ahead of Groundwork's last-recorded 1.12.0.
 
 ### A.7 Component matrix — docs, tests, OpenSpec state
 
 | Component | Decision | Notes |
 |---|---|---|
-| `README.md`, `docs/ARCHITECTURE.md`, `docs/VALIDATION.md`, `docs/TROUBLESHOOTING.md`, `docs/UPGRADE-ROLLBACK.md`, `docs/FUTURE-SCOPE.md`, `CHANGELOG.md`, `CREDITS.md` | **KEEP + STRENGTHEN** | Exceptionally well-maintained and evidence-backed already; needs the version-number refresh in §A.6 and a corrected Node floor in §A.5 |
-| `tests/test_hooks.py`, `test_playbooks.py`, `test_report.py`, `test_setup.py`, `test_telemetry.py` | **KEEP + STRENGTHEN** | Confirmed by independent code-audit read: zero compaction/fresh-session-recovery tests exist anywhere in the suite; zero "conflicting evidence" tests exist (the suite's "unknown" handling is tested only as *absent-or-unparseable-degrades-gracefully*, not as *genuinely conflicting sources reconciled*); zero tests enforce a Node version check in `install.sh` (because none exists to test) |
+| `README.md`, `docs/ARCHITECTURE.md`, `docs/VALIDATION.md`, `docs/TROUBLESHOOTING.md`, `docs/UPGRADE-ROLLBACK.md`, `docs/FUTURE-SCOPE.md`, `CHANGELOG.md`, `CREDITS.md` | **KEEP + STRENGTHEN** | Needs the version refresh (§A.6), corrected Node floor (§A.5), and the new capability-ownership matrix (§J) folded into `ARCHITECTURE.md` |
+| `tests/test_hooks.py`, `test_playbooks.py`, `test_report.py`, `test_setup.py`, `test_telemetry.py` | **KEEP + STRENGTHEN** | Zero compaction/fresh-session-recovery tests; zero conflicting-evidence tests; zero Node-version-check tests in `install.sh` |
 | `openspec/specs/{task-routing,onboarding,usage-telemetry,health-dashboard}/spec.md` | **KEEP** | Accurate, archived, current baseline |
-| `openspec/changes/intelligent-engineering-harness/` | **See Open Question 1, §H** | Substantially shipped (all rule/hook/installer/test tasks checked, code matches design); deliberately left unarchived because task 6.4 (a live fresh-session `claude -p` proof) is genuinely blocked on `claude auth login` on the machine it was built on — this is the repo's evidence discipline working correctly, not a defect. It is a real dependency for this change: `project-continuation`, `validation-and-review-evidence`, and `harness-installation` are capabilities this proposal modifies, and they currently exist only as *delta* specs inside this unarchived change, not yet in `openspec/specs/` |
+| `openspec/changes/intelligent-engineering-harness/` | **See Open Question 1, §N** | Substantially shipped; deliberately unarchived pending one blocked task |
 
 ### A.8 ECC integration posture
 
-| Component | Decision | Notes |
-|---|---|---|
-| ECC install (`install.sh:52-60`, `claude plugin marketplace add affaan-m/ECC` + `claude plugin install ecc@ecc --scope user --config hook_profile=standard`) | **STRENGTHEN via new policy, not REPLACE** | Currently installs all 68 agents/286 skills unconditionally. VERIFIED (§D): ECC's own installer supports `--profile`, `--skills`, `--with capability:*` at install time, and Claude Code itself now has `skillOverrides`/`Skill()` permission rules and a `paths` skill-scoping field that did not factor into the original 1.0.0 "nothing exists to curate this" conclusion recorded in `docs/TROUBLESHOOTING.md`. Groundwork does not fork or vendor ECC content either way — it only chooses which of ECC's own capabilities to select, which is squarely Groundwork's "policy" ownership role (§C) |
+ECC install (`install.sh:52-60`) currently installs all 68 agents/286 skills unconditionally. **STRENGTHEN via new policy, not REPLACE** — ECC's own installer supports `--profile`, `--skills`, `--with capability:*` at install time; Claude Code has `skillOverrides`/`Skill()` permission rules. Groundwork does not fork or vendor ECC; it only chooses (§D).
 
 ---
 
-## B. Gap analysis against the 22 non-negotiable acceptance criteria
-
-Each criterion below is the corresponding numbered item from the requesting brief §28, checked directly against repository evidence (not against what the docs claim about themselves).
+## B. Gap analysis against the 22 non-negotiable acceptance criteria (unchanged from the first pass)
 
 | # | Criterion | State | Evidence |
 |---|---|---|---|
-| 1 | Evidence-backed factual claims | **MET** | `evidence-policy.md` §1-2, 4; enforced structurally by `output-contract.md`; validated live repeatedly in VALIDATION.md |
-| 2 | Unsupported RCA conclusions prevented | **MOSTLY MET** | `evidence-policy.md` §7 + TROUBLESHOOT playbook steps 4-6 already refuse to promote a symptom to a root cause; strengthened by evidence-taxonomy (adds explicit labels for the "can't tell" case) |
-| 3 | UNKNOWN is a valid outcome | **PARTIAL** | Telemetry has an `unknown` outcome/validation bucket (tested); `evidence-policy.md`'s label set has no bare `UNKNOWN` — closest is `RUNTIME VALIDATION REQUIRED` (execution-gated) and `UNVERIFIED` (not-yet-checked), neither of which means "cannot be determined at all" |
-| 4 | Conflicting evidence surfaced | **NOT MET** | Confirmed absent repo-wide; no label, no rule text, no test |
-| 5 | Repository/runtime outranks saved memory | **MET** | `evidence-policy.md` §8, `engineering-workflow.md` §7 step 6 |
-| 6 | False completion claims prevented | **MET, strong** | `engineering-workflow.md` §3 hard rules, `evidence-policy.md` §6 completion-evidence table, telemetry's declared-vs-observed reconciliation (tested, `test_telemetry.py`) |
-| 7 | MATERIAL work receives meaningful independent review | **PARTIAL** | Presence is enforced deterministically (`require_material_review.py`); outcome/MUST-FIX-resolution is not — see Decision D3 |
-| 8 | Critical state survives context compaction | **PARTIAL, untested** | Strong for OpenSpec-tracked MATERIAL work; no mechanism or test exists for TRIVIAL/STANDARD/RCA work, which is most troubleshooting |
-| 9 | Fresh sessions accurately recover unfinished work | **MOSTLY MET for MATERIAL work** | `engineering-workflow.md` §7 + snapshot hook, live-validated in VALIDATION.md 1.1.0 (session-1 continuation proof); weaker for non-OpenSpec-tracked work (same gap as #8) |
-| 10 | Rejected hypotheses remain rejected after recovery | **NOT MET, NOT TESTED** | No mechanism; confirmed zero tests of this scenario anywhere |
-| 11 | Main/subagent/team execution selected automatically | **MET** | `engineering-workflow.md` §6, live-validated |
-| 12 | Unnecessary context minimized | **PARTIAL** | Playbook progressive disclosure works well; ECC's ~20K-token always-on cost (VALIDATION.md 1.0.0: roughly doubles trivial-task cost) is the largest unaddressed context cost and has no curation today |
-| 13 | ECC exposure curated for SRE/CloudOps | **NOT MET** | Confirmed: full, uncurated install; see §D |
-| 14 | OpenSpec used only when justified by materiality | **MET** | `engineering-workflow.md` §1 tier table, `FUTURE-SCOPE.md` §4 |
-| 15 | Safety-critical controls deterministic where practical | **PARTIAL** | Git-push guard + ECC's GateGuard/`block-no-verify` cover their scope well; cloud/IaC/IAM/destructive-IaC-apply is explicitly advisory-only today (`FUTURE-SCOPE.md` §10) — see Decision D5 |
-| 16 | Install/update/rollback/uninstall are safe | **MET, exceptionally well validated** | Minor strengthen: Node version enforcement gap (§A.5) |
-| 17 | No personal credentials/hardcoded identity | **MET** | Confirmed by direct repo-wide search (§A.3) |
-| 18 | External work updates based on evidence | **OUT OF SCOPE for this phase** | Per the requesting brief §21, automation is explicitly Phase 2, only after 2.0's core stabilizes; not designed here |
-| 19 | Telemetry useful without leaking sensitive content | **MET, thoroughly tested** | `test_telemetry.py` lines 224-234 directly test secret/path/token redaction |
-| 20 | Existing intended behavior has not regressed | **Process requirement, not a component** | Addressed by the migration plan's non-regression gate (§E) |
-| 21 | System remains understandable and maintainable | **MET**, one small wart | Exceptional documentation discipline; one duplicated helper function (§A.3) |
-| 22 | Usable without understanding internals | **MET** | "Continue this project." live-validated; natural-language routing 12/12 in VALIDATION.md |
+| 1 | Evidence-backed factual claims | **MET** | `evidence-policy.md` §1-2, 4 |
+| 2 | Unsupported RCA conclusions prevented | **MOSTLY MET** | §7 RCA rule; strengthened by evidence-taxonomy |
+| 3 | UNKNOWN is a valid outcome | **PARTIAL** | No bare `UNKNOWN` evidence label today |
+| 4 | Conflicting evidence surfaced | **NOT MET** | No label, no rule text, no test |
+| 5 | Repository/runtime outranks saved memory | **MET** | `evidence-policy.md` §8 |
+| 6 | False completion claims prevented | **MET, strong** | §3 hard rules, §6 evidence table |
+| 7 | MATERIAL work receives meaningful independent review | **PARTIAL → addressed by redesigned D3** | Presence enforced; outcome/resolution was not — see §M |
+| 8 | Critical state survives context compaction | **PARTIAL, untested** | Strong for OpenSpec-tracked work only |
+| 9 | Fresh sessions accurately recover unfinished work | **MOSTLY MET for MATERIAL work** | Weaker for non-OpenSpec-tracked work |
+| 10 | Rejected hypotheses remain rejected after recovery | **NOT MET, NOT TESTED** | No mechanism |
+| 11 | Main/subagent/team execution selected automatically | **MET** | §6, live-validated; extended this pass to include builder-role selection (§F) |
+| 12 | Unnecessary context minimized | **PARTIAL** | ECC's ~20K-token cost has no curation |
+| 13 | ECC exposure curated for SRE/CloudOps | **NOT MET** | See §D |
+| 14 | OpenSpec used only when justified by materiality | **MET** | §1 tier table |
+| 15 | Safety-critical controls deterministic where practical | **PARTIAL → sharpened by redesigned D5** | See §M |
+| 16 | Install/update/rollback/uninstall are safe | **MET, exceptionally well validated** | Minor strengthen: Node check |
+| 17 | No personal credentials/hardcoded identity | **MET** | Confirmed by repo-wide search |
+| 18 | External work updates based on evidence | **OUT OF SCOPE for this phase** | Automation is explicitly deferred |
+| 19 | Telemetry useful without leaking sensitive content | **MET, thoroughly tested** | |
+| 20 | Existing intended behavior has not regressed | **Process requirement** | Migration plan's non-regression gate |
+| 21 | System remains understandable and maintainable | **MET**, one small wart | Duplicated helper function |
+| 22 | Usable without understanding internals | **MET** | "Continue this project." live-validated |
 
-**Net finding: 13 of 22 criteria are already met, 7 are partially met with a specific, evidence-identified cause, 1 (RCA rejected-hypothesis survival) is fully unmet, and 1 (external work automation) is explicitly out of scope for this phase.** This is a narrow, well-bounded gap set — consistent with "this is not a rewrite."
+This pass's new capabilities (§E-J) are evaluated against the requesting brief's own non-negotiable design principles restated for this pass (evidence-first, repository-aware, runtime-aware, safe, small, composable, maintainable, shareable, enterprise-ready, SRE/CloudOps-focused) rather than against the original 22-item list, since builders/SRE-consolidation/presentation/teach-learn are new scope, not gaps in the original 22. §L's acceptance matrix now covers both.
 
 ---
 
-## C. Target architecture and ownership boundaries
-
-The existing responsibility split (`docs/ARCHITECTURE.md`) is correct and is **not changed** by this proposal:
+## C. Target architecture and ownership boundaries (updated)
 
 ```
-OpenSpec   → WHAT / WHY / acceptance criteria (unchanged)
-ECC        → HOW: specialist agents/skills (unchanged in kind; curated in SELECTION — see D4)
+OpenSpec    → WHAT / WHY / acceptance criteria (unchanged)
+ECC         → HOW: curated specialist agents/skills (unchanged in kind; curated selection — §D)
 Claude Code → runtime primitives: subagents, Agent Teams, hooks, permissions,
-              skillOverrides/Skill() rules, memory (unchanged; two more of its
-              existing primitives — skillOverrides, paths-scoping — are newly
-              put to use by Groundwork's own policy)
-Groundwork → governance: policy, routing, safety, evidence integrity,
-             validation, continuity, completion truth (unchanged role;
-             gains two new small policy surfaces — evidence-taxonomy and
-             ecc-capability-policy — and, pending Decisions D2/D5, at most
-             one new hook and one new small state artifact)
+              skillOverrides/Skill() rules, memory, native output styles,
+              native document-generation plugin marketplace (§H)
+MCP/CLI     → external-system access: cloud provider CLIs/APIs, kubectl, Terraform,
+              GitHub, Jira, etc. — access only, never workflow or policy (§I)
+Groundwork  → governance: policy, routing, safety, evidence integrity, validation,
+              continuity, completion truth (unchanged role) — PLUS, this pass:
+              repository-understanding policy (§E), builder-role selection
+              policy (§F), SRE-capability composition policy (§G),
+              output-truth/style separation policy (§H)
 ```
 
-Where each proposed capability attaches:
+Groundwork's role does not change in kind anywhere in this pass: it still owns *policy*, never *execution capability*. Every new thing in §E-J is either rule text (a policy surface) or, where a genuinely new behavioral contract exists, a small OpenSpec capability spec — never a new permanent agent, never a new always-on daemon, never a duplicate of something Claude Code, ECC, or OpenSpec already does.
+
+Updated capability-attachment table (full ownership matrix is §J; this is the architectural summary):
 
 | Capability | Owner file(s) | New surface? |
 |---|---|---|
-| `evidence-taxonomy` | `rules/evidence-policy.md` §2, §7 | Rule text only — no new hook, no new file |
-| `installer-upstream-compatibility` | `install.sh`, `setup.sh`, `README.md` | Corrects existing checks; no new file |
-| `review-evidence-strengthening` | `rules/engineering-workflow.md` §2.6, `hooks/require_material_review.py` | Extends the existing hook; no new hook |
-| `ecc-capability-policy` | `install.sh` (ECC install command flags), new short `rules/ecc-capability-policy.md` OR a section inside `engineering-workflow.md` (open question — see D4), `scripts/merge_settings.py` (only if `skillOverrides` is confirmed to apply to plugin skills) | One new small rule surface; no new hook |
-| `investigation-continuity` (D2) | Either an extension of `engineering-workflow.md` §7 + `groundwork_session_snapshot.py` (Option A) or those plus one new small, capped state file (Option B) | Zero or one new file, decision-pending |
-| `deterministic-safety-expansion` (D5) | One new hook, narrowly scoped, only if approved | Zero or one new hook, decision-pending |
-
-No component changes ownership. No responsibility moves from OpenSpec to Groundwork or vice versa. ECC's role does not change in *kind* (still "HOW: specialist agents/skills") — only Groundwork's *selection policy* over it is new, which is exactly the "Groundwork = policy" row in the requesting brief's own target ownership table (§12).
+| `evidence-taxonomy` | `rules/evidence-policy.md` §2, §7 | Rule text only |
+| `installer-upstream-compatibility` | `install.sh`, `setup.sh`, `README.md` | Corrects existing checks |
+| `review-evidence-strengthening` (redesigned, §M/D3) | `rules/output-contract.md` (new structured block), `hooks/require_material_review.py` (extended parser reusing telemetry's command-classification regex) | Extends two existing files; no new hook |
+| `ecc-capability-policy` | `install.sh`, `scripts/merge_settings.py` (conditional) | One new small rule surface |
+| `investigation-continuity` (D2, decision-pending) | `engineering-workflow.md` §7 + `groundwork_session_snapshot.py`, ± one new small state file | Zero or one new file |
+| `deterministic-safety-expansion` (redesigned, §M/D5) | Up to three narrow, independently-approvable new hooks | Zero to three new hooks, all decision-pending |
+| `repository-understanding` (§E) | `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` (extended), `architecture-quality.md` §5 (cross-referenced, unchanged) | Extends three existing playbooks; no new file |
+| `builder-execution-roles` (§F) | `rules/engineering-workflow.md` §6 (extended with 4 role personas), `playbooks/deploy.md` (closed-loop cross-reference) | Extends one rule file and one playbook; no new agent files |
+| SRE capability consolidation (§G) | No new owner — explicitly composes `TROUBLESHOOT`/`VALIDATE`/`AUDIT`/`DEPLOY`/`RESEARCH`/`DOCUMENT` playbooks + `ecc-capability-policy` + `repository-understanding` + MCP tool access | **No new surface at all** — this is the point |
+| `presentation-and-output-style` (§H) | `rules/output-contract.md` (truth/style invariant), `playbooks/document.md` (presentation branch) | Extends two existing files; the design-system template artifact is OPTIONAL/LATER (§O) |
+| `teach-learn-capability` (§I) | `playbooks/explain.md` (extended) | Extends one existing file |
+| MCP/tool-access policy (§I of the brief, folded into §F.5) | `rules/engineering-workflow.md` §6 (one short subsection) | Rule text only |
 
 ---
 
 ## D. ECC capability matrix
 
-**Verification basis**: counts, install-time selection mechanisms, and the full real name-level listing are all VERIFIED against the actual published `ecc-universal@2.2.1` npm tarball (the version `install.sh` installs today), downloaded directly from the npm registry and checksum-confirmed against the registry's own published SHA1 (`04845ca88b9cadb303b4e9a4d519f90429f8b49e`) — not GitHub `main`, not inferred from README prose. Every category below is grouped from the real 68 agent filenames and 286 skill directory names (both counted directly off the extracted filesystem, both sums independently verified to add up to the published totals). Fetched/verified 2026-09-28.
+**Verification basis**: counts, install-time selection mechanisms, and the full real name-level listing are all VERIFIED against the actual published `ecc-universal@2.2.1` npm tarball, checksum-confirmed against the registry's published SHA1. Fetched/verified 2026-09-28.
 
-### D.1 Selection mechanisms available today (this is the key finding — none of this existed when Groundwork's "no config lever" conclusion in `docs/TROUBLESHOOTING.md` was written, or it existed and was not re-checked)
+### D.1 Selection mechanisms available today
 
-- **ECC's own install-time filters** (VERIFIED, ECC 2.2.1 README): `--profile minimal|core|full`, `--without baseline:hooks`, `--no-hooks`, explicit `--skills a,b,c`, and capability-tag selection `--with capability:machine-learning`.
-- **Claude Code's `skillOverrides`** (VERIFIED, code.claude.com/docs/en/skills, fetched 2026-09-28): four states (`on`/`name-only`/`user-invocable-only`/`off`) settable in `.claude/settings.json`, editable via `/skills`. **RUNTIME VALIDATION REQUIRED**: Groundwork's own `docs/TROUBLESHOOTING.md` currently states "`skillOverrides` does not affect plugin-provided skills" — this was true or believed true as of an earlier test, but was not re-verified in this audit against the current Claude Code version, and the docs fetched today describe `skillOverrides` generally without confirming plugin-skill scope specifically. This must be tested live before `ecc-capability-policy` can rely on it (see Decision D4 and the acceptance matrix, §F).
-- **`Skill(name)` / `Skill(name *)` permission rules and `disableBundledSkills`** (VERIFIED, same source) — a coarser, permission-level on/off.
-- **Whole-plugin disable** (`claude plugin disable ecc@ecc`) — already known and documented (`docs/TROUBLESHOOTING.md`); too coarse for per-capability curation, useful only as an escape hatch.
-- **`ECC_DISABLED_MCPS`** — VERIFIED to be an ECC install/sync-time filter, not a live runtime toggle (ECC's own docs, quoted verbatim by the verification pass) — not usable for the curation goal.
+- **ECC's own install-time filters** (VERIFIED): `--profile minimal|core|full`, `--without baseline:hooks`, `--no-hooks`, `--skills a,b,c`, `--with capability:machine-learning`.
+- **Claude Code's `skillOverrides`** (VERIFIED, code.claude.com/docs/en/skills): four states, settable in `.claude/settings.json`. **RUNTIME VALIDATION REQUIRED**: whether it actually suppresses plugin-provided (ECC) skill auto-invocation — Groundwork's own docs currently assert it does not, unconfirmed against the current version.
+- **`Skill(name)` permission rules and `disableBundledSkills`** (VERIFIED) — coarser, permission-level.
+- **Whole-plugin disable** (`claude plugin disable ecc@ecc`) — too coarse for curation, an escape hatch only.
 
-### D.2 Skill matrix (286 total, real names, grouped by ECC's own directory-naming convention — sums independently verified to equal 286)
+### D.2 Skill matrix (286 total, real names — sums verified to equal 286)
 
-| Category | Count | Representative names | SRE/CloudOps relevance | Recommended default |
-|---|---|---|---|---|
-| `infra_sre` — deployment, containers/orchestration, CI/git ops, network diagnostics | 26 | `docker-patterns`, `kubernetes-patterns`, `canary-watch`, `deployment-patterns`, `production-audit`, `production-scheduling`, `github-ops`, `git-workflow`, `network-bgp-diagnostics`, `network-config-validation` | **CORE SRE** — the single most directly relevant category. **Important caveat, VERIFIED**: no `aws-*`, `gcp-*`, `azure-*`, or `terraform-*` skill exists anywhere in the published 286 (checked directly, zero matches); several of this category's own skills (`homelab-vlan-segmentation`, `homelab-wireguard-vpn`, `cisco-ios-patterns`, `netmiko-ssh-automation`) are home-lab/on-prem-network-hardware scoped, not hyperscaler-cloud scoped | Enabled by default, **minus** the home-lab/on-prem-hardware subset (out of place for an enterprise default, not unsafe — just off-topic) |
-| `database` — schema/query/migration patterns | 7 | `postgres-patterns`, `mysql-patterns`, `redis-patterns`, `database-migrations`, `clickhouse-io` | **CORE SRE** — production data-layer operations, written from an app-dev rather than DBA/ops angle but directly useful | Enabled by default |
-| `testing_qa` — TDD, e2e, verification gates per stack | 25 | `tdd-workflow`, `e2e-testing`, `verification-loop`, `browser-qa`, `ai-regression-testing` | **OPTIONAL SRE** — reliability-adjacent (shift-left), not itself production-ops | Enabled by default, narrow |
-| `security` — security review/scanning/compliance | 13 | `security-review`, `security-scan`, `security-bounty-hunter`, `hipaa-compliance`, `django-security` | **OPTIONAL SRE, mixed** — VERIFIED: dominated by app-layer/framework and vertical-compliance security (healthcare PHI, DeFi); **no IAM, secrets-management, or cloud-security-posture skill found in the set** — a real gap in ECC itself, not something Groundwork curation can manufacture | Enable the general `security-review`/`security-scan` items by default; the vertical-compliance items (healthcare, DeFi) on demand only |
-| `agent_meta` — Claude Code/ECC harness engineering itself (orchestration, evals, cost/context budgeting) | 69 | `agent-eval`, `context-budget`, `team-agent-orchestration`, `gateguard`, `token-budget-advisor` | **NOT RELEVANT TO GROUNDWORK DEFAULT** — this is the single largest skill category (69, 24% of all 286) and it is meta-tooling for operating AI agents, not infrastructure/production engineering | Disabled by default; on demand only |
-| `business_ops` — marketing, sales, finance, supply chain | 41 | `customer-billing-ops`, `investor-outreach`, `market-research`, `seo`, `logistics-exception-management` | **NOT RELEVANT TO GROUNDWORK DEFAULT** — second-largest category (41, 14%), clearly non-engineering | Disabled by default |
-| `lang_framework` — single-language/framework coding idioms | 40 | `android-clean-architecture`, `django-patterns`, `nextjs-turbopack`, `rust-patterns`, `swiftui-patterns` | **LANGUAGE/PROJECT-SPECIFIC** | Disabled by default; enabled on demand to match a project's actual stack |
-| `architecture_quality` — general architecture/code-quality practice | 18 | `api-design`, `architecture-decision-records`, `hexagonal-architecture`, `error-handling` | **OPTIONAL SRE** — `error-handling` and `mcp-server-patterns` have production-reliability relevance; the rest is general SWE discipline already covered by Groundwork's own `architecture-quality.md` | On demand |
-| `datasci_ml` — ML/AI research, literature, retrieval | 22 | `deep-research`, `iterative-retrieval`, `mle-workflow`, `scientific-thinking-literature-review` | **NOT RELEVANT TO GROUNDWORK DEFAULT** | Disabled by default |
-| `design_ux` — accessibility, frontend design systems | 14 | `accessibility`, `design-system`, `frontend-a11y`, `motion-ui` | **NOT RELEVANT TO GROUNDWORK DEFAULT** | Disabled by default |
-| `media_creative` — video/image/3D generation | 8 | `manim-video`, `remotion-video-creation`, `blender-motion-state-inspection` | **NOT RELEVANT TO GROUNDWORK DEFAULT** | Disabled by default |
-| `docs`, `crypto` (small) | 3 | `code-tour`, `documentation-lookup`, `evm-token-decimals` | Mixed/negligible | On demand |
+| Category | Count | SRE/CloudOps relevance | Recommended default |
+|---|---|---|---|
+| `infra_sre` — deployment, containers, CI/git ops, network diagnostics | 26 | **CORE SRE**, but no `aws-*`/`gcp-*`/`azure-*`/`terraform-*` skill exists at all; several skills are home-lab/on-prem-hardware scoped | Enabled by default, minus the home-lab subset |
+| `database` | 7 | **CORE SRE** | Enabled by default |
+| `testing_qa` | 25 | **OPTIONAL SRE** | Enabled by default, narrow |
+| `security` | 13 | **OPTIONAL SRE, mixed** — no IAM/secrets/cloud-security-posture skill found | General items by default; vertical-compliance items on demand |
+| `agent_meta` (Claude Code/ECC harness operations) | 69 | **NOT RELEVANT TO GROUNDWORK DEFAULT** — largest category (24%) | Disabled by default |
+| `business_ops` | 41 | **NOT RELEVANT** — second-largest (14%) | Disabled by default |
+| `lang_framework` | 40 | **LANGUAGE/PROJECT-SPECIFIC** | On demand, matched to project stack |
+| `architecture_quality` | 18 | **OPTIONAL SRE**, mostly redundant with `architecture-quality.md` | On demand |
+| `datasci_ml`, `design_ux`, `media_creative`, `docs`, `crypto` | 22+14+8+3 | **NOT RELEVANT** | Disabled by default |
 
-### D.3 Agent matrix (68 total, real filenames — sums independently verified to equal 68)
+### D.3 Agent matrix (68 total, real filenames — sums verified to equal 68)
 
-| Category | Count | Representative names | SRE/CloudOps relevance | Recommended default |
-|---|---|---|---|---|
-| `infra_network` | 3 | `network-architect`, `network-troubleshooter`, `homelab-architect` | **CORE SRE**, but small and, per the `homelab-` naming, home-lab-scale rather than enterprise-cloud-scale | Enabled by default |
-| `engineering_meta` — planning, code quality, process | 22 | `architect`, `planner`, `code-explorer`, `code-reviewer`, `performance-optimizer`, `silent-failure-hunter`, `tdd-guide` | **CORE SRE for the subset already named in `engineering-workflow.md` today** (`code-explorer`, `planner`, `code-reviewer`, `security-reviewer` — confirmed these are real agent names, not aspirational); `performance-optimizer` and `silent-failure-hunter` add production-reliability value | Enable the subset Groundwork's rules already reference by name, plus `performance-optimizer`/`silent-failure-hunter`; rest on demand |
-| `code_reviewers` — language/domain-specific review | 23 | `python-reviewer`, `security-reviewer`, `database-reviewer`, `network-config-reviewer`, `rust-reviewer` | **CORE SRE for 3** (`security-reviewer`, `database-reviewer`, `network-config-reviewer`); **LANGUAGE-SPECIFIC for the rest** (20 language reviewers) | The 3 infra-relevant reviewers by default; language reviewers on demand to match project stack |
-| `build_resolvers` — per-language build/compile-error fixers | 12 | `go-build-resolver`, `rust-build-resolver`, `pytorch-build-resolver` | **LANGUAGE/PROJECT-SPECIFIC** | On demand |
-| `gan_ml`, `opensource_pipeline`, `business_marketing` | 8 | `gan-evaluator`, `opensource-packager`, `marketing-agent` | **NOT RELEVANT TO GROUNDWORK DEFAULT** | Disabled by default |
+| Category | Count | SRE/CloudOps relevance | Recommended default |
+|---|---|---|---|
+| `infra_network` | 3 | **CORE SRE**, small, home-lab-scale naming | Enabled by default |
+| `engineering_meta` | 22 | **CORE for the subset already used by name in `engineering-workflow.md`** (`code-explorer`, `planner`, `code-reviewer`, `security-reviewer`), plus `performance-optimizer`/`silent-failure-hunter` | That subset by default; rest on demand |
+| `code_reviewers` | 23 | **CORE for 3** (`security-reviewer`, `database-reviewer`, `network-config-reviewer`); **LANGUAGE-SPECIFIC for 20** | The 3 by default; rest on demand |
+| `build_resolvers` | 12 | **LANGUAGE-SPECIFIC** | On demand |
+| `gan_ml`, `opensource_pipeline`, `business_marketing` | 8 | **NOT RELEVANT** | Disabled by default |
 
 ### D.4 The single most important finding in this matrix
 
-**VERIFIED**: across all 286 skills and 68 agents, **there is no AWS, GCP, Azure, or Terraform skill or agent at all**, and the infrastructure skills that do exist skew materially toward home-lab/on-prem network hardware (Cisco IOS, Netmiko SSH, WireGuard, VLAN segmentation) rather than enterprise/hyperscaler cloud operations. Roughly **33 of 286 skills** (`infra_sre` 26 + `database` 7) are squarely infra/platform-relevant, plus **13** security skills with partial (mostly app-layer, not infra-security) relevance and **25** testing/QA skills with reliability-adjacent relevance — against **69** agent-operations/harness-meta skills and **41** business-operations skills, together over a third of the entire catalog, that are not software-engineering skills at all. **This means ECC curation for SRE/CloudOps is not just a context-cost optimization — it materially corrects what the default experience looks like**, because more than a third of what installs today by default has nothing to do with engineering, and the infra-relevant fraction that remains has a real, evidence-confirmed coverage gap (no cloud-provider or IaC-tool skill) that Groundwork's curation cannot manufacture — it can only make the absence visible instead of silently diluted among 286 mostly-irrelevant entries. This gap (no AWS/GCP/Azure/Terraform coverage in ECC) is worth reporting upstream to ECC's maintainer; it is not something Groundwork can or should fork ECC to fix.
+**VERIFIED**: there is no AWS, GCP, Azure, or Terraform skill or agent anywhere in ECC. Roughly a third of the entire 286-skill catalog (`agent_meta` + `business_ops`) is not a software-engineering capability at all. ECC curation is a correctness improvement, not only a cost optimization.
 
----
+### D.5 Builder capability sourcing — where does each new builder role's actual capability come from? (new this pass)
 
-## E. Migration plan — smallest safe changes first
+The requesting brief is explicit: "Do not assume ECC provides Terraform/AWS/GCP capability — your audit already found it does not." This table answers, for each builder role (§F), what actually provides the capability:
 
-Every phase below is independently mergeable, independently testable, and independently revertable. No phase depends on Decision D2 or D5 being resolved a particular way — each names what changes for either outcome.
-
-### Phase 1 — Correctness fixes (no design decisions required, lowest risk)
-- **Objective**: fix the Node/OpenSpec version bug (§A.5); refresh ECC/OpenSpec version references (§A.6); consolidate the duplicated `dirty_change_names()` helper (§A.3).
-- **Files**: `install.sh`, `setup.sh`, `README.md`, `docs/ARCHITECTURE.md`, `docs/UPGRADE-ROLLBACK.md`, `CHANGELOG.md`; new small shared helper module imported by `require_material_review.py` and `groundwork_session_snapshot.py`.
-- **Behavior change**: `install.sh` gains a real Node version check (currently has none); the enforced floor changes from 18 to 20.19.0 in both `install.sh` and `setup.sh`.
-- **Compatibility risk**: **breaking for Node 18/19 environments** — by design (see proposal.md Impact). Must be called out prominently in `CHANGELOG.md` as a corrected requirement, not a new one.
-- **Tests**: extend `tests/test_setup.py`/a new install-focused test for the corrected version check; non-regression SHA-256 baseline re-run on all currently-protected files.
-- **Rollback**: trivial — pure `git revert`, no state migration involved.
-
-### Phase 2 — Evidence taxonomy and RCA strengthening (rule text only)
-- **Objective**: add `CONFLICTING EVIDENCE` and `UNKNOWN` labels (§B item 3-4); tighten the RCA rule.
-- **Files**: `rules/evidence-policy.md`, `playbooks/troubleshoot.md` (cross-reference only, no structural change), `docs/ARCHITECTURE.md`.
-- **Behavior change**: none deterministic (rule text is advisory, per the existing enforced-vs-advisory table in `docs/ARCHITECTURE.md`) — this is a **KEEP + STRENGTHEN** of an advisory mechanism, consistent with how every other evidence-policy addition has shipped historically.
-- **Compatibility risk**: none — additive to a rule file.
-- **Tests**: new classifier-style test cases (model-behavior observation, not a hook unit test, matching how `evidence-policy.md` additions have always been validated in `docs/VALIDATION.md`).
-- **Rollback**: trivial.
-
-### Phase 3 — Review evidence strengthening (Decision D3, see below)
-- **Objective**: implement whichever option D3 selects.
-- **Files**: `rules/engineering-workflow.md` §2.6, `hooks/require_material_review.py`.
-- **Tests**: new `test_hooks.py` cases for the strengthened check; must not regress any of the 14 existing review-gate sub-cases.
-- **Rollback**: hook change is isolated and independently revertable from Phase 1/2.
-
-### Phase 4 — ECC capability policy (Decision D4, see below)
-- **Objective**: implement the curated default install profile using §D.2/D.3's now-populated real data, once the `skillOverrides`-on-plugin-skills question is runtime-validated.
-- **Files**: `install.sh` (ECC install command), new small rule surface (file TBD by D4), `scripts/merge_settings.py` if `skillOverrides` entries are needed.
-- **Compatibility risk**: **medium** — this changes what capabilities are available by default to every existing installation that re-runs `install.sh`. Must be additive-safe (existing installs should not lose a capability they were relying on without a clear upgrade note) and must offer an escape hatch (`--ecc-profile full` or equivalent) back to today's wholesale install.
-- **Tests**: install-layout tests verifying the profile flag reaches ECC's installer correctly; a runtime-validation test (live, not unit) confirming a disabled skill is actually not auto-invoked.
-- **Rollback**: `--ecc-profile full` flag, or `uninstall.sh`/reinstall.
-
-### Phase 5 — Investigation continuity (Decision D2, see below)
-- **Objective**: implement whichever option D2 selects; add the compaction/fresh-session-recovery test suite (rejected-hypothesis-stays-rejected as an explicit, named test case) regardless of which option is chosen — Option A needs it to prove the existing git/OpenSpec model actually holds up under a constructed compaction scenario; Option B needs it to prove the new artifact does.
-- **Files**: depends on D2's outcome (§C table).
-- **Compatibility risk**: low if Option A (no new file, tests only); low-medium if Option B (one small new file, must be added to `install.sh`/`uninstall.sh`'s managed-file list and to the portability/telemetry-privacy review).
-- **Tests**: the deterministic compaction/fresh-session scenarios required by the requesting brief §9-10 — this is the one acceptance criterion (#10) currently fully unmet, so this phase is what actually closes it.
-- **Rollback**: Option A is test-only (trivially revertable); Option B needs an uninstall-path addition, itself tested per the existing installer-safety pattern.
-
-### Phase 6 — Deterministic safety expansion (Decision D5, see below) — lowest priority, most caution
-- **Objective**: implement only if D5 is approved, and only the narrow scope D5 recommends.
-- **Files**: one new hook, mirroring `block_protected_push.py`'s structure (fail-open, pattern-matched, depth-limited shell parsing).
-- **Compatibility risk**: **highest of any phase** — a new PreToolUse deny hook can block legitimate work if over-scoped. Must go through the same adversarial-review process `block_protected_push.py` went through (a security-reviewer pass explicitly trying to find both bypasses *and* false-positive legitimate commands it would wrongly block).
-- **Tests**: adversarial bypass tests (mirroring the 19 push-guard test cases) plus false-positive tests (commands that must NOT be blocked).
-- **Rollback**: hook removal from `settings.json`, or `GROUNDWORK_<HOOK>=off` env escape hatch (matching the existing pattern for the snapshot and telemetry hooks).
-
-**Order rationale**: Phase 1 fixes a real, live bug and should not wait on any design decision. Phases 2-3 strengthen existing advisory/enforced mechanisms with no new surface area. Phase 4 delivers the largest context/cost win (ECC curation directly addresses acceptance criteria 12-13) but needs the §D.2 data gap closed first. Phase 5 closes the one fully-unmet acceptance criterion (#10) but is explicitly a "genuine owner decision" per Groundwork's own autonomy rule (`engineering-workflow.md` §4) — multiple valid architectures, no repository evidence alone picks one. Phase 6 is last because it is the only phase that adds new deterministic *blocking* surface with real false-positive risk, and the repo's own validation-driven-evolution principle (`FUTURE-SCOPE.md` §12: "a real task exposed a gap" before a mechanism is added) is the weakest match for exactly this item — no incident has yet demonstrated the advisory rule (§10 of the requesting brief's own safety section, currently `evidence-policy.md`/`architecture-quality.md` advisory text) was insufficient.
-
----
-
-## F. Acceptance matrix — every Groundwork 2.0 requirement mapped to a concrete validation method
-
-This maps each proposed capability's core requirement to (a) the acceptance criterion it closes from §B, and (b) the concrete, named method that will demonstrate it — not just "tests pass." Full scenario-level detail lives in each capability's `specs/*/spec.md`; this table is the traceability summary.
-
-| Capability / requirement | Closes acceptance criterion (§B #) | Validation method |
+| Builder role's needed capability | Source | Verification |
 |---|---|---|
-| `evidence-taxonomy`: `UNKNOWN`/`CONFLICTING EVIDENCE` labels exist and are used correctly | #3, #4 | Model-behavior observation on constructed RESEARCH/TROUBLESHOOT prompts engineered to have no answer or two conflicting sources, matching the validation style already used for every prior rule-text-only Groundwork change (`docs/VALIDATION.md`) |
-| `evidence-taxonomy`: RCA rule requires an honest label, never a promoted guess | #2 | Same as above, applied to TROUBLESHOOT playbook scenarios specifically; non-regression via SHA-256 baseline on unrelated files |
-| `installer-upstream-compatibility`: correct, enforced Node floor | #16 | `tests/test_setup.py`-style fixture with a stubbed sub-20.19 Node on PATH, asserting refusal with a clear message, mirroring the existing old-Node test pattern already in the suite |
-| `installer-upstream-compatibility`: `install.sh` checks the version, not just presence | #16 | Same fixture run directly against `install.sh`, not only `setup.sh` |
-| `review-evidence-strengthening`: MUST-FIX review requires follow-up work before Stop | #7 | New `test_hooks.py` cases (constructed transcripts: MUST-FIX-then-Stop blocks, MUST-FIX-then-edit-then-Stop allows) plus the existing 14 review-gate cases re-run unchanged |
-| `ecc-capability-policy`: curated default excludes NOT-RELEVANT categories | #12, #13 | Install-layout test asserting the ECC install command carries the curated profile flags; a live fresh-session check that a curated-out skill is not offered |
-| `ecc-capability-policy`: `skillOverrides` only used if confirmed effective on plugin skills | #12, #13 | One live runtime test (§D.1) — this is RUNTIME VALIDATION REQUIRED and must run before Phase 4 ships, not be assumed either way |
-| `ecc-capability-policy`: measured context-cost reduction | #12 | Direct token-count comparison, curated vs. full install, at session start — matching the measurement rigor of the original ECC cost evidence in `docs/VALIDATION.md` 1.0.0 |
-| `investigation-continuity`: rejected hypothesis never resurfaces as active/verified after recovery | #10 | The explicit named test case required by the requesting brief §9 — a constructed long investigation with rejected hypotheses, simulated compaction, and a fresh-session handoff, asserting the rejected status survives |
-| `investigation-continuity`: recovered state revalidated against current repo/runtime | #5 (extended to the new mechanism) | Test: recovered state contradicted by current evidence is reported and overruled, not trusted |
-| `investigation-continuity`: no chain-of-thought persisted | requesting brief §8 (not separately numbered in §B, carried by #8/#9) | Direct inspection of the persisted content's schema/fields against the allowed list |
-| `deterministic-safety-expansion` (if approved): bypass resistance | #15 | Adversarial test pass reproducing the approved scope's known bypass classes, mirroring the push guard's own 19-case suite |
-| `deterministic-safety-expansion` (if approved): no false positives on legitimate commands | #15, and the requesting brief's own "not excessive confirmations" caution (§17) | A security-reviewer pass specifically hunting for legitimate commands the guard would wrongly block, before ship |
-| Cross-cutting: no completion claim exceeds its evidence | #6, #20 | Existing completion-facts hard rules (`engineering-workflow.md` §3) applied unchanged to every phase's own `docs/VALIDATION.md` entry; this document's own tasks.md leaves every implementation task unchecked until its evidence exists |
-| Cross-cutting: no personal/hardcoded identity introduced by any phase | #17 | Repeat the repo-wide portability search (§A.3 method) after each phase, before merge |
-| Cross-cutting: install/upgrade/rollback/uninstall stay safe through all phases | #16 | Full `tests/test_setup.py` re-run plus a live upgrade-from-1.5.1 rehearsal (tasks.md §7) |
+| Terraform/Ansible authoring, HCL syntax, module structure | **Native Claude reasoning + code generation** (Claude's own training, no tool needed to *write* HCL/YAML) | No ECC skill exists for this (§D.4); this is plain code generation, same category as writing Python or Go |
+| Terraform plan/apply/validate execution | **MCP/CLI** — the `terraform` binary via Bash, or a Terraform MCP server if the project has one configured | Groundwork requires no specific MCP; it uses whatever the repository/environment already provides (§I) |
+| Cloud resource state (GCP/AWS/Azure) | **MCP/CLI** — `gcloud`/`aws`/`az` CLI via Bash, or a cloud-provider MCP server | Same — task-driven, not installed by Groundwork |
+| Kubernetes manifest/Helm/Flux authoring | **Native Claude reasoning** for authoring; `kubernetes-patterns`/`docker-patterns`/`deployment-patterns` (VERIFIED ECC skills, `infra_sre` category) for patterns/conventions | Composes curated ECC (§D.2) |
+| Kubernetes cluster interaction (`kubectl`, `helm`, `flux`) | **MCP/CLI** | Task-driven |
+| CI/CD pipeline authoring (GitHub Actions, Spacelift config) | **Native Claude reasoning**; `github-ops`/`git-workflow`/`delivery-gate` (VERIFIED ECC skills) for conventions | Composes curated ECC |
+| Repository pattern discovery (existing modules, naming, conventions) | **`repository-understanding`** (§E, new Groundwork policy) | New this pass |
+| Independent review of generated infra/platform/delivery code | **Curated ECC reviewers** (`security-reviewer`, `database-reviewer`, `network-config-reviewer`, language reviewers) + `require_material_review.py` (existing, redesigned §M) | Composes existing + curated ECC |
+| Application/service code (Python, Go, APIs) | **Native Claude reasoning** + curated `lang_framework`/`testing_qa` ECC skills on demand | Composes curated ECC, matched to the project's actual stack |
+| Production-safety judgment (is this destructive, is this prod) | **Groundwork policy** — `engineering-workflow.md` §4 autonomy rule (existing) + redesigned D5 (§M) | Existing + this pass |
 
-## G. Decisions requiring owner input before implementation
-
-These follow the repo's own DECISION record format (`evidence-policy.md` §3) and are presented, not resolved — per the requesting brief's explicit instruction that Groundwork must not silently upgrade an inference into a decision.
-
-### D1 — Node/OpenSpec version fix
-DECISION: correct the documented and enforced Node floor to ≥20.19.0 (matching OpenSpec's real, verified requirement) and add the missing check to `install.sh`.
-EVIDENCE: §A.5 — primary-sourced against OpenSpec's own `package.json`/README/npm registry, fetched 2026-09-28.
-WHY: the current floor is factually wrong and only half-enforced; this is a correctness fix, not a design choice.
-TRADEOFFS: breaking for any Node 18/19 environment (which, per §A.5, was almost certainly already non-functional for OpenSpec use — this only surfaces the failure earlier and more clearly).
-VALIDATION METHOD: `tests/test_setup.py`-style fixture with a stubbed old-Node binary on PATH, asserting `install.sh` now refuses with a clear message.
-UNCERTAINTY: none material — this is the one item in this document with no live open question.
-**Recommendation: approve as-is; this should ship in Phase 1 regardless of any other decision.**
-
-### D2 — Investigation continuity for non-OpenSpec-tracked work
-**Option A — Extend, don't add a file.** Teach `groundwork_session_snapshot.py` and `engineering-workflow.md` §7 to also look for and surface *whatever the current session already leaves behind* (a scratch file, a comment block, a `TODO`/`INVESTIGATING` marker convention) with no new managed state artifact. EVIDENCE: matches Decision D4 in the predecessor change (`intelligent-engineering-harness/design.md`) — "a Groundwork state file would be a second source of truth that drifts" — and FUTURE-SCOPE.md §7's explicit stance. WHY: keeps the "no state file, no database" principle intact; smallest possible change. TRADEOFFS: does not, by itself, guarantee a rejected hypothesis is captured anywhere durable if the session ends mid-investigation without the engineer writing it down — the mechanism is advisory, not structural. VALIDATION METHOD: construct a compaction/fresh-session test where the *convention* was followed and confirm recovery; document (do not hide) the case where it was not followed and recovery fails.
-
-**Option B — One small, capped, opt-in investigation-state file.** A single append-only or overwrite file (e.g. `~/.claude/groundwork/investigation.md` or per-repo `.groundwork/investigation-state.md`), written only during TROUBLESHOOT/AUDIT-tier work, capped in size (matching the 2,500-char discipline already used by the snapshot hook), holding only: objective, established facts, rejected hypotheses with why, open hypotheses, evidence references, next action — explicitly never chain-of-thought, matching the requesting brief §8's own instruction. EVIDENCE: this is the only way to make acceptance criterion #10 (rejected hypotheses stay rejected) deterministically testable rather than convention-dependent. WHY: RCA work is usually TRIVIAL/STANDARD tier and therefore has no OpenSpec `tasks.md` to anchor to — today's continuity design structurally excludes exactly this class of work. TRADEOFFS: is a second source of truth that can drift from the repository/runtime (mitigated by the existing rule "repository/runtime always outranks saved memory," which would apply to this file too — a stale rejected-hypothesis note that current evidence contradicts must be reported and overruled, never trusted blindly); adds one more file to the installer's managed set, to `uninstall.sh`, and to the telemetry-privacy review (must never contain secrets, matching the existing snapshot-hook clipping/data-boundary pattern). VALIDATION METHOD: the compaction/fresh-session test suite required by the requesting brief §9-10, run directly against this file.
-
-**Recommendation**: Option B is the only option that makes acceptance criterion #10 more than advisory, and the requesting brief is explicit that this criterion is non-negotiable ("A rejected hypothesis must not become an active or verified hypothesis after recovery... Test this explicitly"). Option A is closer to the existing architecture's stated philosophy and should be the fallback if the owner judges the second-source-of-truth risk to outweigh the guarantee. **This is presented as a genuine architecture fork per `engineering-workflow.md`'s own §4 criteria (multiple materially different valid approaches, no repository evidence alone picks one) — owner decision required.**
-
-### D3 — Review evidence strengthening
-DECISION (proposed, narrow): keep `require_material_review.py`'s presence-based gate exactly as-is (it is well-tested and its known limitation — "a call merely named '…review…' satisfies the gate" — is an accepted, documented tradeoff, not a defect to re-litigate); add one additional, narrowly-scoped rule-text requirement to `engineering-workflow.md` §2.6 that a MUST-FIX-bearing review must be followed by demonstrable further work (a file edit, a re-run test) before the Stop hook is satisfied a second time in the same session — this is checkable by the *existing* hook's own transcript-scanning mechanism with a small extension (has a review call happened, AND if the review's own output can be found to contain "MUST FIX", has any tool call happened after it), without building a findings-parsing/tracking system.
-EVIDENCE: requesting brief §15 explicitly warns against "a workflow engine just for review tracking" and asks for "enough deterministic evidence" — not full structured findings storage.
-WHY: smallest sound approach; avoids the fragility of parsing free-text review verdicts for MUST FIX counts (reviewers do not use a fixed vocabulary today, and inventing one would require every reviewer type — ECC's, a subagent's, a teammate's — to comply, which Groundwork cannot enforce upstream).
-TRADEOFFS: still gameable by a reviewer call that does no real work and a session that stops without any further tool use anyway (rare but possible); does not capture *what* the review found, only that work continued after it.
-VALIDATION METHOD: new `test_hooks.py` cases constructing a transcript with a MUST-FIX-bearing review followed immediately by Stop (should still block) vs. followed by an edit then Stop (should allow).
-UNCERTAINTY: whether "MUST FIX" text-matching in review output is reliable enough not to false-block on a review that used different wording — needs a small sample of real ECC/subagent reviewer outputs to check vocabulary consistency before implementation (RUNTIME VALIDATION REQUIRED, Phase 3).
-**Recommendation: approve the narrow version; do not build a structured findings database.**
-
-### D4 — ECC capability policy mechanism
-DECISION (two-part, proposed): (1) use ECC's own `--profile`/`--with capability:*` install-time flags in `install.sh` to select a curated default set, with `--ecc-profile full` as an explicit opt-out back to today's behavior; (2) **only if runtime validation confirms `skillOverrides` actually suppresses plugin-provided skill auto-invocation** (currently UNVERIFIED — Groundwork's own docs assert the opposite, not re-checked against the current Claude Code version in this audit), also add `skillOverrides` entries via `merge_settings.py` for finer-grained control than ECC's own install-time categories offer.
-EVIDENCE: §D.1 — all mechanisms VERIFIED to exist; the specific plugin-skill-scope question is the one open runtime-validation item.
-WHY: uses only native, already-existing mechanisms from ECC and Claude Code — no fork, no vendored content, matches the requesting brief §11-12 exactly ("Groundwork capability policy... ECC upstream → Groundwork capability policy → relevant capabilities exposed on demand").
-TRADEOFFS: part (2) may turn out to be a no-op if the runtime validation fails — the design must not depend on it; part (1) alone (ECC's own install-time selection) is sufficient to deliver most of the context-cost win even if part (2) doesn't pan out.
-VALIDATION METHOD: a live test — install ECC with a `skillOverrides` entry disabling one specific plugin skill, then confirm in a fresh session whether Claude still auto-invokes it. §D.2/D.3's category data is now VERIFIED (real names, checksummed source) and no longer blocks this decision.
-UNCERTAINTY: only the `skillOverrides`-on-plugin-skills question remains (RUNTIME VALIDATION REQUIRED) — this is now the sole blocker for part (2); part (1) (ECC's own install-time `--profile`/`--with capability:*` selection) has no remaining unknowns and could proceed independently.
-**Recommendation: approve the two-part approach; treat part (2) as conditional on its own validation, not a blocking dependency for part (1).**
-
-### D5 — Deterministic safety expansion beyond Git
-DECISION (proposed): **defer broad cloud/IaC/production blocking; approve only a narrow, evidence-matched candidate if the owner wants any Phase 6 work at all** — specifically, pattern-detect the smallest, clearest bypass class analogous to what `block_protected_push.py` already does for Git (e.g., a `terraform apply`/`destroy` invocation with no preceding `terraform plan`-generated plan file referenced, or a small, explicit list of unambiguously destructive cloud-CLI verb+resource-type combinations), fail-open, adversarially tested exactly like the push guard was.
-EVIDENCE: `FUTURE-SCOPE.md` §10 (the repo's own prior conclusion, written under the same evidence-first discipline this audit is applying) explicitly defers this pending "a real task" showing the advisory rule insufficient — no such task has occurred yet, per the repository's own record. Counter-evidence: the requesting brief §17 explicitly asks Groundwork 2.0 to "preserve or strengthen deterministic protections" for "destructive cloud operations, production changes, IAM/security changes."
-WHY: this is a genuine tension between the requesting brief's enterprise-readiness goal and the repository's own validated principle of not adding enforcement mechanisms ahead of evidence. Resolving it silently in either direction would violate the audit's own instructions (not to silently remove/keep based on assumption, and not to add mechanisms without a demonstrated gap).
-TRADEOFFS: broad blocking risks false positives that make Groundwork "unusable with excessive confirmations" (requesting brief §17's own caution); no blocking at all leaves acceptance criterion #15 partially unmet indefinitely.
-VALIDATION METHOD: if approved, the same adversarial-review process `block_protected_push.py` went through — a security-reviewer pass explicitly trying both bypasses and false-positive legitimate commands.
-UNCERTAINTY: whether "enterprise-readiness" as stated in the request should override the repo's own wait-for-a-real-gap principle is precisely the kind of business-intent ambiguity `engineering-workflow.md` §4 itself says is a genuine owner decision, not something to infer.
-**Recommendation: owner decides scope (none / narrow-IaC-only / broader); do not approve a broad "block risky cloud commands" hook without a specific, named, real incident or task to scope it against — this is the one place in this design where over-engineering risk is highest.**
+**Conclusion**: no builder role requires a new agent, skill, or MCP server that Groundwork itself installs or maintains. Every role is a composition of (native Claude reasoning) + (curated existing ECC agents/skills) + (whatever MCP/CLI the task's own repository/environment already provides) + (Groundwork's own policy for discovery and safety). This is the direct evidence answer to the brief's own required question for every new component: "what exact capability is missing, what's closest, why can't it be reused" — for builder roles specifically, nothing is missing except the *policy* of when/how to compose these, which is what §F actually adds.
 
 ---
 
-## H. Risks and unresolved questions (material items only)
+## E. Repository-understanding design (shared capability)
 
-1. **`openspec/changes/intelligent-engineering-harness` is unarchived with one blocked task (6.4, `claude -p` fresh-session proof, blocked on `claude auth login`).** This change is the source of the `project-continuation`, `validation-and-review-evidence`, and `harness-installation` capabilities that this proposal modifies. Until it is archived (or task 6.4 is otherwise resolved/waived by the owner), those three capabilities exist only as delta specs inside an open change, not in `openspec/specs/`, which is a minor OpenSpec-hygiene ambiguity for tooling that expects modified capabilities to have an archived baseline. **Does not block this audit**, but should be resolved (either by running `claude login` and completing 6.4, or by an explicit owner decision to archive with the caveat documented) before or during Phase 1.
-2. **Resolved during this audit**: §D.2/D.3's ECC category tables are now populated with real, checksum-verified agent/skill names (not inferred) — task 0.10 is complete. The one open item this surfaced (§D.4): ECC has no AWS/GCP/Azure/Terraform coverage at all, which Phase 4 cannot fix by curation alone — worth a note to the user about reporting it upstream to ECC, and worth factoring into whether MCP servers (cloud-provider CLIs/APIs, `FUTURE-SCOPE.md` §9) become a nearer-term priority than this document currently scopes them.
-3. **The `skillOverrides`-on-plugin-skills question (D4) is unresolved** and Groundwork's own existing documentation (`docs/TROUBLESHOOTING.md`) may itself be stale on this exact point — it should be re-tested live, not assumed either way, before part (2) of D4 is built.
-4. **D5 is a genuine values tension**, not a technical unknown — see D5 above. Recommend explicit owner sign-off on scope before any Phase 6 work starts.
-5. **Node version fix (D1) is a breaking change for a currently-silent-failure population.** No telemetry exists to estimate how many real installs are on Node 18/19 today (Groundwork's telemetry does not and should not capture Node version — this is an acceptable gap, not a telemetry defect). Recommend the CHANGELOG entry be explicit that this corrects a pre-existing bug, not a new requirement, to set expectations correctly.
-6. **This document itself should go through the same independent-review gate it describes** (requesting brief §15/§26's own spirit) before any phase begins implementation — once a phase is approved, `/opsx:apply` should route it through the existing MATERIAL-tier review gate like any other Groundwork change.
+### E.1 What already exists (do not duplicate this)
+
+`engineering-workflow.md` §2 step 1 (UNDERSTAND) **already** requires reading "the actual code, config, tests, git log... repository structure, README, CLAUDE.md, project rules/config, architecture docs, OpenSpec artifacts, tests, CI/CD, deployment/IaC, configuration, runtime/tooling/MCP setup" and building a DONE/PARTIAL/MISSING/BLOCKED/UNVERIFIED table before touching anything. `architecture-quality.md` §5 **already** states "follow the project's established conventions first, then the vendor's current official guidance... where they conflict, say which you followed and why." `evidence-policy.md` §5 **already** states "derive verification commands from the project's own evidence... never invent them," and its speed rule (§5 of engineering-workflow.md) already makes research depth proportional to risk. `groundwork_session_snapshot.py` **already** discovers verification commands (Makefile/package.json/pyproject/CI) at session start.
+
+**This means "repository-aware building" is not a new principle for Groundwork — it is the existing UNDERSTAND step and the existing conventions-win rule, applied to infrastructure/platform/delivery domains specifically, where they were not previously spelled out in enough domain-specific detail for an engineer to know exactly what to look for.** The gap is narrow: the existing playbooks (`implement.md`, `deploy.md`, `design.md`) say "inspect the existing implementation... before writing anything" in one line, with no domain-specific checklist for IaC/platform/delivery work.
+
+### E.2 What's added (small, on-demand, no new always-loaded content)
+
+Each of `playbooks/implement.md`, `playbooks/deploy.md`, `playbooks/design.md` gains a short, explicitly domain-scoped bullet list under their existing "inspect before writing" step, read only when a task is infrastructure/platform/delivery-shaped (these playbooks are already read on demand per `task-routing.md`, so this costs nothing for a pure application-code task):
+
+- Existing Terraform/Ansible/Helm/Flux structure and module organization
+- Naming, variable, label/tag conventions
+- Environment/workspace organization (how nonprod vs. prod is distinguished — this is also load-bearing for §M/D5's production-detection problem)
+- IAM and networking patterns already in use
+- State/backend patterns (Terraform backend config, Spacelift stack layout)
+- CI/CD and delivery patterns already in use
+- Testing and validation conventions already in use (what `terraform validate`/`helm lint`/CI already runs)
+- **The closest analogous existing implementation** — the single highest-value discovery, since "create another nonprod GKE cluster like our existing cluster" is only answerable by finding that existing cluster's definition first
+
+### E.3 The core behavioral contract (this is what needs a spec)
+
+1. **Proportional, not exhaustive**: matching the existing speed rule, discovery scope is proportional to the task — "add a variable to this module" does not need a whole-repository scan; "create a new environment" does.
+2. **Repository pattern wins over generic knowledge**, unless the repository pattern is unsafe, broken, deprecated, or incompatible with the requirement — and when deviating, Claude states why. This is `architecture-quality.md` §5's existing rule, made explicit and testable for builder work specifically (see the acceptance scenario in §L).
+3. **One shared capability, not four separate implementations.** All four builder roles (§F) and the existing DESIGN/IMPLEMENT/DEPLOY/AUDIT playbooks use the same discovery procedure and the same "pattern wins, justify deviation" rule — there is exactly one place this contract is defined (this section + the playbook extensions), referenced everywhere it's used, never restated.
+
+New spec: `specs/repository-understanding/spec.md`.
 
 ---
+
+## F. Builder execution roles
+
+### F.1 Why these are not new task-routing categories
+
+"Build the Terraform for this service" routes to **IMPLEMENT** today (writing code/config) and then **DEPLOY** (applying it) — both existing categories, unchanged. "Onboard this application to our GKE platform" is also IMPLEMENT+DEPLOY. Builder roles are not a new axis on *what kind of task this is* — they are a new axis on *who executes it*, sitting inside the **existing** `engineering-workflow.md` §6 execution-model decision (main session / subagent / Agent Team), exactly where "reuse subagent definitions where they fit" already lives.
+
+### F.2 Why these are not permanent agent files
+
+Per the brief's own instruction ("prefer native/dynamic execution over maintaining permanent custom agent files") and per what's already decided in Groundwork's execution model: Claude Code's `Agent` tool spawns a subagent or Agent Team teammate dynamically via a `name` + prompt at call time — no persisted `.claude/agents/*.md` file is required for this to work, and `engineering-workflow.md` §6 already says specialists are "derived from the actual project and task, reusing subagent definitions where they fit — never a fixed technology-specific roster." **The four builder roles are role *personas* — short, rule-text-defined descriptions of scope and evidence sources — instantiated as the `name`/prompt of a dynamically-spawned subagent or teammate, not as four new permanent agent definition files.** This is the direct application of "native dynamic subagent role" from the brief's own menu of options, and it is the option that adds the least permanent surface area.
+
+### F.3 The four role personas (added to `engineering-workflow.md` §6, ~4 lines each)
+
+| Role | Scope | Primary evidence sources (via `repository-understanding`, §E) | Primary composed capability |
+|---|---|---|---|
+| **Infrastructure Engineer** | Terraform, Ansible, cloud infra (GCP/AWS/networking/IAM/DNS/LB/storage/VMs), IaC validation | Terraform/Ansible structure, modules, environment org, state/backend, IAM/networking patterns, CI/Spacelift patterns | Native reasoning for HCL/YAML authoring; `terraform`/cloud CLIs via MCP/Bash for execution (§D.5); curated ECC reviewers for review |
+| **Platform Engineer** | Kubernetes/GKE/EKS runtime config, Helm, Flux/GitOps, namespaces, RBAC, workload identity, ingress, autoscaling, observability integration, app onboarding | Existing application/platform patterns, chart structure, namespace/RBAC conventions | Native reasoning + `kubernetes-patterns`/`docker-patterns`/`deployment-patterns` (curated ECC); `kubectl`/`helm`/`flux` via MCP/Bash |
+| **Delivery Engineer** | CI/CD, GitHub Actions, Spacelift, build pipelines, Docker/image builds, release/promotion workflows, rollback, post-deploy verification | Existing delivery architecture, pipeline conventions | `github-ops`/`git-workflow`/`delivery-gate` (curated ECC); native reasoning for pipeline authoring |
+| **Application Engineer** | Application/service code supporting an infra/platform/delivery outcome — APIs, workers, cloud integrations, health/readiness checks, telemetry, Docker/Kubernetes-aware app changes | Existing app conventions, language/framework in use | Native reasoning + curated `lang_framework`/`testing_qa` ECC skills matched to the project's actual stack — **explicitly not a general-purpose software-development framework**; scoped to supporting infra/platform/delivery outcomes, per the brief's own instruction |
+
+Each persona description in the rule text is a *scope and evidence-source* statement, not a system prompt to memorize — the actual instantiation still goes through the full existing `engineering-workflow.md` §2 execution order (UNDERSTAND→DESIGN→IMPLEMENT→TEST→INDEPENDENT REVIEW→FIX MUST FIX→VERIFY→RUNTIME VALIDATE→REPORT), unchanged.
+
+### F.4 Automatic orchestration (extends the existing §6 decision, no new mechanism)
+
+The existing main-session/subagent/Agent-Team decision in `engineering-workflow.md` §6 gains one more input: *if the task is infrastructure/platform/delivery/application-domain-shaped, the persona used for a subagent or teammate call is drawn from §F.3; otherwise unchanged from today.* Examples, matching the brief's own:
+
+- "Add another variable to this Terraform module" → main session (simple, sequential) — **no role needed**, matching today's behavior for small changes.
+- "Build the Terraform for this infrastructure" → **Infrastructure Engineer** subagent (focused, isolated) → independent review (curated ECC reviewer).
+- "Build and deploy a new service to nonprod GKE" → potentially genuinely independent workstreams (Application + Infrastructure + Platform + Delivery) → **Agent Team only if the existing §6 team-justification criteria are met** (2+ genuinely independent workstreams, separate file ownership, one-line justification) — never automatically just because four roles exist, matching the brief's explicit caution. If teams are disabled or the session is non-interactive, the same decomposition runs on subagents, exactly as §6 already specifies for every other case.
+
+**No new orchestration code.** This is a rule-text extension of a decision procedure Claude Code's own platform already executes (Agent tool, `name`-based team formation) — Groundwork adds no scheduler, no team manager, no state machine, matching the existing "Groundwork adds no orchestration code of its own" principle, now explicitly extended to cover builder-role selection.
+
+### F.5 MCP/tool-access policy for builders (small, folded into §6, not a separate phase)
+
+- Groundwork does not install or configure cloud/Kubernetes/CI MCP servers itself — it uses whatever the task's environment already provides, matching the brief's explicit instruction and `FUTURE-SCOPE.md` §9's existing "MCP servers are optional capabilities, never mandatory Groundwork dependencies" principle (unchanged, just now explicitly extended to builder work).
+- Read-only discovery (`terraform plan`, `kubectl get/describe`, `gcloud/aws/az ... list/describe`) is safe by default, matching the brief's own instruction and the existing autonomy rule's silence on read-only operations (nothing in §4 requires asking before a read).
+- Mutating operations follow the existing `engineering-workflow.md` §4 autonomy rule (already requires authorization for "an irreversible or destructive operation... production apply/deploy, IAM changes, paid resources") **plus** the redesigned D5 tiers (§M) for the narrow set where deterministic enforcement is warranted.
+- Groundwork never requires or stores static cloud credentials — credential handling is entirely the user's/environment's MCP or CLI configuration, outside Groundwork's scope, matching its existing zero-credential design (confirmed in the first-pass portability audit, §A.3).
+
+### F.6 The closed-loop build→deploy→validate path (mostly already exists — one real gap closed)
+
+`engineering-workflow.md` §2 (UNDERSTAND→...→RUNTIME VALIDATE→REPORT) and `playbooks/deploy.md` (preview→apply→validate→rollback-ready) **already** cover most of the brief's requested closed loop. The one genuine gap: neither explicitly states that a **failed** runtime validation routes back into the existing TROUBLESHOOT workflow, fixes the cause, and **re-runs the same validation** before any completion claim — today this is implied but not stated. `playbooks/deploy.md`'s workflow gains one explicit line: *"If runtime validation fails: apply `troubleshoot.md`'s evidence-first RCA to the failure, fix the smallest safe verified cause, and re-run the same validation — never report DEPLOYED or COMPLETE without a successful re-validation."* This closes the loop with a one-line addition to an existing file, not a new mechanism.
+
+### F.7 Completion truth for builders (no new status system — confirmed unnecessary)
+
+The existing completion-evidence table (`evidence-policy.md` §6: Code/Tests/Reviewed/Merged/Deployed/Live-validated, PARTIAL/COMPLETE/BLOCKED/FAILED) **already** produces exactly the examples the brief gives:
+
+- Terraform code exists, plan not run → `Tests: ❌` (or N/A if genuinely out of scope) → `Overall: PARTIAL` — already the rule (§3 hard rules: "code written ≠ done").
+- Plan passes, apply not performed → `Deployed: ❌` → `Overall: PARTIAL` — already the rule ("tested ≠ deployed").
+- Apply performed, runtime validation unavailable → `Live validated: ❌, RUNTIME VALIDATION REQUIRED` → `Overall: PARTIAL` — already the rule ("deployed ≠ live validated").
+- Runtime verified → all rows ✅ → `Overall: COMPLETE` (or `VERIFIED` when the user asked a VALIDATE-shaped question) — already the rule.
+
+**No new status system is introduced.** This section exists to confirm, not to design — the brief's own instruction ("use existing Groundwork completion terminology where possible rather than inventing a second status system") is fully satisfiable with zero changes to `evidence-policy.md` §6; at most, the DEPLOY playbook's Output Format example gains one or two infra-specific illustrative lines.
+
+New spec: `specs/builder-execution-roles/spec.md` (covers §F.2-F.7's behavioral contract with the acceptance scenarios in §L).
+
+---
+
+## G. SRE capability consolidation — analysis, not a new component
+
+The brief lists ~20 SRE capabilities (incident investigation, RCA, drift detection, capacity analysis, SLO/error-budget analysis, postmortem generation, etc.) and asks whether each needs a new agent/skill or can compose through existing workflows. This section is the answer, and the answer is: **compose, with one confirmed real gap.**
+
+| Capability | Composes through | Confirmed available? |
+|---|---|---|
+| Incident investigation, RCA, evidence collection | `TROUBLESHOOT` playbook + `evidence-policy.md` §7 (strengthened by evidence-taxonomy) | **VERIFIED existing, strengthened this pass** |
+| Terraform/IaC plan intelligence | `VALIDATE`/`DEPLOY` playbook + Infrastructure Engineer role (§F) | **VERIFIED existing + this pass's builder roles** |
+| Environment comparison, desired-vs-actual drift detection | `AUDIT` playbook + repository-understanding (§E) + runtime evidence (`terraform plan`, `kubectl diff`) | **VERIFIED existing playbook + this pass's shared discovery** |
+| Change correlation, change timeline construction | `TROUBLESHOOT` playbook step 3 ("gather evidence: logs, events, config, recent changes (`git log`)") | **VERIFIED existing, unchanged** |
+| Capacity/resource analysis, CPU/memory/storage, Kubernetes requests/limits, autoscaling | `AUDIT`/`TROUBLESHOOT` + curated ECC `infra_sre` skills (`production-audit`, `latency-critical-systems`, `data-throughput-accelerator`) + runtime evidence (`kubectl top`, metrics) | **VERIFIED existing playbooks + curated ECC** |
+| SLO/error-budget analysis, availability/reliability analysis | `AUDIT`/`VALIDATE` + runtime evidence | **Composes, but no ECC skill by that name was confirmed among the representative names surfaced** — UNVERIFIED whether any of the `infra_sre` category's remaining ~5 unnamed skills cover this; not a blocker (native reasoning + runtime metrics evidence is sufficient), but flagged honestly rather than asserted |
+| Dependency/upgrade analysis | `AUDIT`/`RESEARCH` + repository-understanding | **VERIFIED existing** |
+| Cloud cost impact | `AUDIT`/`DESIGN` + runtime evidence (billing API via MCP if configured) | **Composes; Groundwork installs no cost-specific tooling** — task-driven, per §F.5 |
+| Runbook execution | `DEPLOY`/`TROUBLESHOOT` + repository's own runbook docs (read as evidence, per `DOCUMENT` playbook's existing "reuse an existing template" rule) | **VERIFIED existing** |
+| Post-deployment validation | `DEPLOY` playbook step 6, extended (§F.6) | **VERIFIED existing, one gap closed this pass** |
+| Postmortem generation | `DOCUMENT` playbook (existing "incident write-up" format) + `teach-learn-capability` (§I) for the learning angle | **VERIFIED existing, composes with this pass's addition** |
+| Security/IAM investigation | `AUDIT` playbook + curated `security-reviewer`/`database-reviewer`/`network-config-reviewer` (ECC) | **VERIFIED existing + curated ECC**, though §D.2 confirms ECC itself has no dedicated IAM/cloud-security-posture skill — a gap in the upstream toolbox, not in Groundwork's composition |
+| Learning from completed incidents/changes | `teach-learn-capability` (§I) | **New this pass, small** |
+
+**Explicit non-fragmentation rule** (the direct answer to §7 of the brief, and the reason no `specs/sre-capability/spec.md` file exists): Groundwork SHALL NOT introduce a separate agent, skill, or playbook per SRE sub-capability listed above. This is not a new rule to write — it is `architecture-quality.md` §4's existing principle ("no abstraction, layer, plugin point, framework, or option without a concrete reason") applied here, plus `task-routing.md`'s existing "exactly one category per task" rule, both unchanged. This section is deliberately **analysis only, producing zero new files** — which is itself the correct, evidence-backed answer to "should this be consolidated," matching the brief's own instruction not to add a component "merely because it sounds useful."
+
+---
+
+## H. Presentation, output-style, and design-system architecture
+
+### H.1 What Claude Code already provides — VERIFIED this pass, corrects one prior assumption
+
+- **Native output styles** (VERIFIED, `code.claude.com/docs/en/output-styles`, fetched 2026-09-28): a Markdown file at `.claude/output-styles/` (project) or `~/.claude/output-styles/` (user), selected via `/output-style <name>` or the `outputStyle` settings.json key (already a pre-existing key Groundwork's own installer tests were built to preserve, confirming this mechanism was already indirectly known to exist). A custom style **replaces** Claude's default system-prompt instructions unless it opts in to `keep-coding-instructions: true`. Multiple named styles coexist and are switchable. **The docs state explicitly: "an output style is an instruction Claude follows... nothing enforces it... use a hook for anything that has to happen without fail."**
+- **Native Artifacts** exist in Claude Code CLI (VERIFIED, `code.claude.com/docs/en/artifacts`) — this corrects an initial assumption in this pass's research that Artifacts were claude.ai/Cowork-only. However, Artifacts require ALL of: a Pro/Max/Team/Enterprise plan, `/login` with a claude.ai account, the direct Anthropic API (not Bedrock/Vertex/Foundry), and no CMEK/HIPAA/ZDR org policy — an enterprise engineer using an API key or a Bedrock/Vertex-backed deployment (a plausible, even likely, configuration for the enterprise audience this brief targets) does not get Artifacts. **Groundwork cannot assume Artifacts are available.**
+- **A first-party, plan/login-independent document-generation plugin** (VERIFIED, `code.claude.com/docs/en/plugins/anthropic-marketplaces` + `github.com/anthropics/skills`): `/plugin marketplace add anthropics/skills` then `/plugin install document-skills@anthropic-agent-skills` installs docx/pdf/pptx/xlsx generation skills, with no plan-tier or claude.ai-login gate described anywhere in the docs (unlike Artifacts). This is the mechanism, if the engineer chooses to install it, for real pptx/docx output.
+- **Markdown/HTML/Mermaid via ordinary Write+Bash** — VERIFIED, no gate of any kind, available in every plain Claude Code CLI session regardless of plan or auth state. Anthropic's own output-styles documentation uses a Mermaid-diagram-first custom style as its own worked example, treating this as an ordinary, expected capability.
+
+### H.2 The ownership decision this evidence settles (not an owner decision — the evidence is clear)
+
+**Groundwork's `output-contract.md` (truth: evidence, validation, completion status) stays exactly where it is — rule text, always loaded, enforced by nothing but honesty and (for the one enforced piece, independent review) a hook.** It is never reimplemented as a native output style, because the platform's own documentation says output styles are unenforced instructions, and Groundwork's entire reason for existing is that unenforced instructions are not enough for the things that must be true. This directly matches the brief's own conceptual diagram (`AUTHORITATIVE EVIDENCE → GROUNDWORK OUTPUT CONTRACT → STYLE`).
+
+**Native output styles, where the owner chooses to use them, own tone/audience/format framing (concise/technical/executive/incident/architecture/presentation) — a set of *optional*, Groundwork-authored custom style files is the smallest-maintainable way to offer this, not a new Groundwork mechanism.** Each such style file, if and when authored, must state in its own instructions that Groundwork's evidence/validation/completion rules (loaded separately, via `~/.claude/rules/`) remain in force regardless of style — this is a one-sentence requirement per style file, not new machinery.
+
+**One RUNTIME VALIDATION REQUIRED item**: whether selecting a non-Default output style has any effect on whether `~/.claude/rules/**/*.md` (including Groundwork's own rules) still load. The docs distinguish "built-in software-engineering instructions" (the system-prompt template an output style replaces) from project/user memory (CLAUDE.md, rules/), which are believed to be a separate loading pipeline (INFERENCE, not directly confirmed) — this must be live-tested before any Groundwork-authored output style ships, and is listed as a task in Phase 11 (§K), not assumed either way.
+
+### H.3 Presentation capability (§9 of the brief)
+
+Routes through the **existing `DOCUMENT` category and playbook** (`task-routing.md`'s DOCUMENT row already covers "report, summary... executive summary" — a presentation is one more format under the same umbrella; no new task-routing category). `playbooks/document.md` gains a short branch for when the requested format is a presentation/deck:
+
+- Source of truth is the same as every other DOCUMENT output: "gather the source of truth before writing: the repository, configuration, tests, CI, runtime evidence, or the findings being reported" (existing rule, unchanged) — for a presentation this means the same verified evidence a completed task already produced (completion facts, validation results, architecture as it actually is), never invented numbers or fabricated architecture to make a slide look better. This is the brief's own "critical rule" (§9), and it is enforced by nothing new — it is `output-contract.md`'s existing "never imply verification that did not happen" rule, applied to slide content.
+- Default output format: **Markdown/Mermaid** (portable, no plan/auth gate, git-diffable) — matching the "smallest maintainable" instruction and the fact that this format works identically regardless of the engineer's plan tier or model provider.
+- Optional enhancement, never assumed: if `document-skills@anthropic-agent-skills` is installed, use it for real `.pptx`/`.docx` output; if not, produce Markdown and say so, never fail or degrade quality by assuming a tool that may not be present.
+
+### H.4 Design system (§10 of the brief) — smallest maintainable form, OPTIONAL/LATER
+
+A "concise design-system artifact plus templates," as the brief itself suggests as the ceiling, not a design framework. Concretely, if and when built: one small reference file capturing slide-structure conventions (title/section/architecture-diagram/KPI/closing slide patterns), Mermaid diagram conventions for architecture/workflow diagrams, and a note on how it composes with `document-skills`' own theming if that plugin is installed. **This artifact is explicitly OPTIONAL/LATER in this pass (§O)** — it is a template library, not a governance capability, has no deterministic acceptance criterion suited to Groundwork's test discipline, and building it now would be exactly the "add a component merely because it sounds useful" the brief warns against before a real presentation task has exposed what the template actually needs to contain. The **architecture decision** (native styles + DOCUMENT playbook + Markdown-first + evidence-truth-never-changes) is decided now; the **artifact** is deferred.
+
+New spec: `specs/presentation-and-output-style/spec.md` (covers the truth/style separation invariant and the presentation-truth rule — the two genuinely new, testable contracts from §H.2-H.3; the design system itself has no spec since it doesn't exist yet).
+
+---
+
+## I. Teach/learn capability
+
+"Teach me what we just fixed" already routes to **EXPLAIN** today (`task-routing.md`'s EXPLAIN row: "explain or teach something, answer a technical question"). `playbooks/explain.md` gains a short "teach from verified work" branch:
+
+- **Source is the session's own established evidence** — completion facts, evidence chain, and (where `investigation-continuity`, §M/D2, is in play) the rejected hypotheses and decisions it recorded. This is a direct, deliberate reuse of `investigation-continuity`'s data, not a second knowledge store — the brief's own instruction ("do not create a second knowledge database") is satisfied by consuming, not duplicating, the D2 mechanism's output.
+- **Never rewrite or reinterpret facts beyond the evidence** — if teaching about work from an unavailable prior session, state plainly what is being reconstructed from artifacts (commits, docs, tickets) versus recalled directly, matching `evidence-policy.md` §8's existing "repository/runtime wins over memory, mismatch is reported" rule.
+- Output covers, only when the evidence actually supports each: what happened, architecture involved, why it failed, how it was diagnosed, evidence used, commands/tools involved, rejected hypotheses, final cause, remediation, prevention, concepts worth learning, and an optional short quiz — reusing `output-contract.md`'s existing three-layer shape (plain explanation first, technical detail on demand), not a new response format.
+
+New spec: `specs/teach-learn-capability/spec.md` (small — the one real contract is "never exceeds the session's own verified evidence").
+
+---
+
+## J. Capability ownership matrix (comprehensive, cross-cutting)
+
+| Capability | Current owner | Proposed owner | Native Claude overlap | ECC overlap | OpenSpec overlap | External tool overlap | Decision | Reason |
+|---|---|---|---|---|---|---|---|---|
+| Evidence policy / labels | Groundwork | Groundwork | None | None | None | None | KEEP | Groundwork's core reason to exist |
+| Material requirements / acceptance criteria | OpenSpec | OpenSpec | None | None | Owns it | None | KEEP | Unchanged — brief §13 reaffirmed |
+| Agent/subagent/team execution primitive | Claude Code | Claude Code | Owns it | Consumes it | None | None | KEEP | Groundwork adds no orchestration code |
+| Task routing (10 categories) | Groundwork | Groundwork | None | None | None | None | KEEP | No new category needed for builders/presentation |
+| Output truth (evidence, validation, completion) | Groundwork | Groundwork | Explicitly NOT owned by native output styles (§H.2, docs' own words) | None | None | None | KEEP | The one thing that must survive any style |
+| Output style (tone/format framing) | — (did not exist) | **Native Claude output-styles**, Groundwork authors optional presets | Owns the mechanism | None | None | None | NEW, native-owned | Docs explicitly recommend this split |
+| Independent review gate (presence) | Groundwork hook | Groundwork hook | Subagent/teammate spawn mechanism (fresh context, free) | Provides reviewer personas | None | None | KEEP | Working, tested |
+| Independent review evidence (MUST-FIX resolution) | — (did not exist) | Groundwork hook, extended | Reuses telemetry's existing command-classification regex | Reviewer output format | None | None | NEW, redesigned D3 | See §M |
+| Protected-branch/push safety | Groundwork hook | Groundwork hook | Bash permission model is the backstop | None | None | None | KEEP | Working, tested |
+| Cloud/IaC/production mutation safety | — (advisory only) | Groundwork policy + up to 3 narrow new hooks | Bash permission prompts (Tier 1) | None | None | The actual `terraform`/`kubectl`/cloud CLI | Decision-pending, redesigned D5 | See §M |
+| Session-start continuity snapshot | Groundwork hook | Groundwork hook | SessionStart hook mechanism | None | Consumes `openspec status` | None | KEEP | Working, tested |
+| Investigation continuity (rejected hypotheses) | — (did not exist) | Decision-pending (D2) | None | None | None | None | Decision-pending | See §M |
+| Telemetry | Groundwork hook | Groundwork hook | Stop hook mechanism | None | None | None | KEEP | Thoroughly tested |
+| Health dashboard | Groundwork script | Groundwork script | None | None | None | None | KEEP | No gap found |
+| Installer / upgrade / rollback | Groundwork | Groundwork | None | Installs ECC | Installs OpenSpec CLI | None | STRENGTHEN | Node version bug |
+| ECC capability selection | — (wholesale install) | Groundwork policy, using ECC's own install-time flags | `skillOverrides`/`Skill()` rules (pending validation) | Owns the capabilities themselves | None | None | NEW policy | §D |
+| Repository understanding (discovery procedure) | Partially exists (generic UNDERSTAND step) | Groundwork policy, extended for builder domains | None | None | None | None | STRENGTHEN | §E — extends 3 existing playbooks, no new file |
+| Infrastructure/Platform/Delivery/Application builder roles | — (did not exist) | Groundwork policy (role personas) + native dynamic subagent/team instantiation | Owns the instantiation mechanism | Provides component skills (curated) | Governs MATERIAL builder changes | `terraform`/`kubectl`/cloud CLIs via MCP | NEW policy, no new files beyond rule text | §F |
+| Terraform/Ansible/cloud execution | — | Task-driven MCP/CLI | None | **Confirmed absent from ECC** | None | Owns it | Composed, not built | §D.5, §D.4 |
+| Kubernetes/Helm/Flux execution | — | Task-driven MCP/CLI | None | Provides pattern-guidance skills only | None | Owns execution | Composed | §D.5 |
+| SRE incident/RCA/capacity/drift capabilities | Fragmented across brief's own list | Composed via existing TROUBLESHOOT/VALIDATE/AUDIT + curated ECC + repository-understanding | None new | Partial coverage, gaps noted | None | Runtime evidence via MCP/CLI | **No new component** | §G — explicit anti-fragmentation finding |
+| Presentation generation | — (did not exist) | DOCUMENT playbook (policy) + optional `document-skills` plugin (capability) | Artifacts exist but plan/auth-gated, not assumed; `document-skills` plugin is the portable answer | None | None | `document-skills` (Anthropic first-party plugin, not ECC) | NEW policy + optional external plugin | §H — Groundwork builds no rendering engine |
+| Design system (visual templates) | — (did not exist) | OPTIONAL/LATER Groundwork template artifact | None | None | None | Composes `document-skills`' theming if installed | DEFERRED | §H.4 |
+| Teach/learn | — (did not exist, implicitly EXPLAIN) | EXPLAIN playbook, extended | None | None | None | None | NEW policy, tiny | §I |
+| Documentation (README/runbooks/ADRs) | Groundwork (DOCUMENT playbook) | Groundwork (DOCUMENT playbook) | None | `docs` category (2 skills) exists but unused, redundant with existing DOCUMENT rules | None | None | KEEP | No gap found |
+| MCP/external tool access | — (implicit) | Groundwork policy: task-driven, least-privilege, no installed-by-default set | Owns the MCP protocol/runtime | N/A | N/A | Owns the actual access | Policy only, no installs | §F.5 |
+| Credential handling | — (never Groundwork's) | Unchanged — never Groundwork | N/A | N/A | N/A | Owns it (user's own MCP/CLI config) | KEEP | Confirmed zero-credential design, §A.3 |
+| Scheduled automation (Jira/EOD/briefings) | — (does not exist) | Explicitly out of scope this phase | N/A | N/A | N/A | Future MCP need | DEFERRED | Brief §20; `FUTURE-SCOPE.md` §9 already says the same |
+
+No two rows in this table define the same contract independently — every capability has exactly one row, exactly one proposed owner, and an explicit note where an overlap was checked and found not to be a duplication (e.g., `document-skills` vs. Artifacts — different gating, not competing implementations of the same thing; ECC's `docs` skills vs. Groundwork's DOCUMENT playbook — ECC's are unused/redundant, not adopted, so no duplication is introduced by leaving DOCUMENT as-is).
+
+---
+
+## K. Migration plan — re-evaluated, dependency-ordered (supersedes the first pass's flat 6-phase list; content is preserved and merged, not duplicated)
+
+Grouped into the five stages the brief itself proposes, reordered only where repository evidence changed the dependency picture (builder roles depend on repository-understanding and ECC curation; presentation/teach-learn depend on nothing new and could ship earlier, but are sequenced last because they are lowest-priority "experience" work, matching the brief's own stage naming).
+
+### STAGE 1 — FOUNDATION
+- **Phase 1 — Correctness fixes**: Node/OpenSpec version bug, version-reference refresh, `dirty_change_names()` consolidation. *(Unchanged from the first pass.)*
+- **Phase 2 — Evidence taxonomy**: `CONFLICTING EVIDENCE`/`UNKNOWN` labels, RCA tightening. *(Unchanged.)*
+- **Phase 3 — Capability ownership documentation** *(new, cheap)*: fold §J's matrix into `docs/ARCHITECTURE.md`; no new rule mechanism — `architecture-quality.md` §4's existing "no abstraction without a concrete reason" already provides the anti-fragmentation enforcement (advisory, as it already is for everything else in that file); this phase makes the *specific* ownership decisions visible in docs, it does not add new policy machinery.
+
+### STAGE 2 — TRUST
+- **Phase 4 — Review evidence strengthening, redesigned**: implement the new D3 (§M) — a structured `REVIEW RESULT` block (rule text, `output-contract.md`) + extended `require_material_review.py` parser that reuses `groundwork_telemetry.py`'s existing test-command-detection regex to require a validation re-run after a MUST-FIX finding, not merely "any tool call."
+- **Phase 5 — Investigation continuity**: implement whichever D2 option the owner selects; the critical rejected-hypothesis-survives-recovery test (§L) ships in this phase regardless of option.
+- **Phase 6 — Deterministic safety, redesigned**: implement whichever of D5's three narrow candidates (Terraform-prod-guard / kubectl-prod-guard / IAM-mutation-guard) the owner approves, independently shippable, none mandatory.
+
+### STAGE 3 — CAPABILITY
+- **Phase 7 — ECC capability policy**: curated install profile (unchanged mechanism from the first pass); cross-checked this pass against builder-role needs (§D.5) — no change to the recommended default set, the builder analysis confirms it rather than expanding it.
+- **Phase 8 — Repository understanding**: extend `implement.md`/`deploy.md`/`design.md` with the builder-domain discovery checklist (§E.2); new spec.
+- **Phase 9 — Builder execution roles**: extend `engineering-workflow.md` §6 with the four role personas and the MCP/tool-access policy (§F.3-F.5); extend `deploy.md` with the closed-loop troubleshoot-and-revalidate line (§F.6); new spec. Depends on Phase 7 (curated ECC composition) and Phase 8 (shared discovery).
+
+### STAGE 4 — EXPERIENCE
+- **Phase 10 — Output-style/presentation architecture**: extend `output-contract.md` with the truth/style separation invariant; extend `document.md` with the presentation branch; new spec. Includes the one RUNTIME VALIDATION REQUIRED check (§H.2: does an output style affect rules/ loading) before any Groundwork-authored style file ships. The design-system template artifact itself is explicitly **not** built in this phase (§O).
+- **Phase 11 — Teach/learn**: extend `explain.md`; new small spec.
+
+### STAGE 5 — VALIDATION
+- **Phase 12 — End-to-end acceptance scenarios**: the full §L scenario set run as live/model-behavior evidence (matching `docs/VALIDATION.md`'s existing discipline — real transcripts, not just unit-test pass counts), covering every new capability from Phases 4-11.
+- **Phase 13 — Cross-phase regression gate**: SHA-256/behavior non-regression on every unchanged file, full existing test suite plus all new tests green in one run, a real upgrade-from-1.5.1 rehearsal, rollback tested, uninstall tested, documentation matches shipped behavior, no completion claim in any phase's VALIDATION.md entry exceeds its evidence, `openspec validate --strict`. *(This is the first pass's old Phase 7, renumbered, content unchanged.)*
+
+**Ordering rationale, restated**: FOUNDATION ships regardless of any decision (D1 is settled; evidence-taxonomy and ownership docs are pure additions). TRUST ships before CAPABILITY because builder roles (Stage 3) will genuinely run `terraform apply`/`kubectl` mutations once shipped, which makes the safety and review-evidence work in Stage 2 a real prerequisite, not a nice-to-have — this is a materially stronger dependency argument than the first pass had, precisely because builder roles now exist in the design. CAPABILITY ships before EXPERIENCE because presentation/teach-learn are lowest-priority "quality of life" work that depends on nothing else and can safely wait. VALIDATION is last because it validates everything that shipped, not a specific new mechanism.
+
+---
+
+## L. Acceptance matrix — every Groundwork 2.0 requirement mapped to a concrete validation method (extended)
+
+### L.1 Carried over from the first pass (unchanged validation methods)
+
+| Capability / requirement | Closes | Validation method |
+|---|---|---|
+| `evidence-taxonomy` labels exist and are used correctly | §B #3, #4 | Model-behavior observation on constructed prompts |
+| Installer Node floor corrected and enforced in `install.sh` itself | §B #16 | Stubbed old-Node fixture test |
+| ECC curated default excludes NOT-RELEVANT categories | §B #12, #13 | Install-layout test + live fresh-session check |
+| `skillOverrides` only used if confirmed effective on plugin skills | §B #12, #13 | One live runtime test (RUNTIME VALIDATION REQUIRED) |
+| Rejected hypothesis never resurfaces after recovery | §B #10 | The named compaction/fresh-session test |
+| Recovered state revalidated against current repo/runtime | §B #5 | Stale-vs-current test |
+| No chain-of-thought persisted (continuity) | brief §8 | Schema/field inspection |
+| Cross-cutting: no completion claim exceeds evidence | §B #6, #20 | Existing hard rules, unchanged |
+| Cross-cutting: no hardcoded identity introduced by any phase | §B #17 | Repeat the portability search after each phase |
+
+### L.2 New this pass — the exact scenarios the brief requested (§25), plus their validation method
+
+| Scenario | Requirement it tests | Validation method |
+|---|---|---|
+| **Repository-aware infra build** — given an existing Terraform pattern, asked for analogous infra, Groundwork reuses it, generated code follows conventions, validation runs, deployment status is not fabricated | `repository-understanding` + `builder-execution-roles` | Live scenario: construct a small fixture Terraform repo with a real module/naming convention, ask for an analogous resource, verify the generated code follows the fixture's convention and that no "DEPLOYED" claim appears without an actual apply |
+| **Platform onboarding** — given existing K8s/Helm/Flux patterns, onboarding uses them, rendered config is validated, runtime success is not claimed without runtime evidence | `repository-understanding` + `builder-execution-roles` (Platform Engineer) | Live scenario, same method, Helm/Flux fixture |
+| **Delivery** — given existing CI/CD, adding automation modifies it rather than inventing a parallel pipeline without justification | `repository-understanding` + `builder-execution-roles` (Delivery Engineer) | Live scenario, GitHub Actions fixture |
+| **Cross-domain build** — genuinely independent workstreams may use an Agent Team; otherwise the simpler model | `engineering-workflow.md` §6 extension (§F.4) | Reuses the existing team-vs-subagent unit-test-on-constructed-transcripts method from the predecessor change (`intelligent-engineering-harness`), extended with a builder-persona case |
+| **Repository pattern vs. generic knowledge** — repository conventions win when safe/compatible | `repository-understanding` §E.3 rule 2 | Live scenario: fixture repo convention deliberately differs from the generic/textbook approach; assert the fixture convention is followed |
+| **Rejected unsafe pattern** — an existing but unsafe/deprecated pattern is not blindly copied, and the deviation is explained | `repository-understanding` §E.3 rule 2 | Live scenario: fixture repo contains a demonstrably unsafe pattern (e.g. a hardcoded secret in a `.tfvars` example); assert Groundwork does not replicate it and states why |
+| **Nonprod deployment** — given explicit authorization, implementation/review/plan pass, Groundwork may deploy through the established mechanism and validates runtime state afterward | `builder-execution-roles` §F.6, existing DEPLOY playbook | Live scenario against a real (sandboxed) nonprod target, matching the rigor of the existing DEPLOY playbook validation already in `docs/VALIDATION.md`'s style |
+| **No authorization** — a mutating operation requiring authorization, absent, stops before mutation, preserves completed evidence/work | `engineering-workflow.md` §4 (existing) + redesigned D5 tiers | Unit test on the relevant D5 hook (if one ships) + live scenario for the advisory (§4) path |
+| **Presentation truth** — slides use only supported architecture/results/metrics/status; visual/storytelling transformations do not change factual meaning | `presentation-and-output-style` §H.3 | Live scenario: generate a presentation from a known evidence set, assert every factual claim in the deck traces to that evidence set with nothing added |
+| **Output style invariance** — one evidence package rendered as technical/executive/presentation output yields equivalent factual claims and completion status | `presentation-and-output-style` §H.2 | Live scenario: same completed task, three output styles, diff the factual content (not the prose) |
+| **D3 MUST FIX** — a MATERIAL change with a MUST FIX finding is not complete until evidence shows it was addressed and affected validation rerun | Redesigned D3 (§M) | New `test_hooks.py` cases: MUST-FIX-then-Stop-with-no-test-rerun (block) vs. MUST-FIX-then-edit-then-test-rerun-then-Stop (allow) vs. no-MUST-FIX (unchanged/allow) |
+| **Continuity** (compaction, fresh-session, rejected hypothesis) | D2 | Retained unchanged from L.1 — this is the same critical test, not a new one |
+| **Deduplication** — a proposed capability already adequately provided by native Claude/ECC/OpenSpec/existing Groundwork is composed, not reimplemented | §G, §J | This document's own §D.5, §G, and §J tables **are** the evidence for this scenario at design time; at implementation time, each phase's independent review explicitly checks its diff against §J before approval |
+
+---
+
+## M. Decisions requiring owner input before implementation
+
+### D1 — Node/OpenSpec version fix (unchanged, settled)
+**Recommendation: approve as-is.** No material uncertainty remains. *(Full record unchanged from the first pass.)*
+
+### D2 — Investigation continuity for non-OpenSpec-tracked work (unchanged options, reaffirmed field list)
+Same two options as the first pass (A: extend the existing convention-based model with no new file; B: one small, capped, opt-in investigation-state artifact). **Reaffirmed per this pass's explicit instruction**: whichever option is selected must preserve exactly these fields — objective, proven facts, evidence references, decisions, rejected hypotheses with reason, active hypotheses, files changed, validation results, blockers, uncertainty, remaining tasks, next action — and must never persist chain-of-thought. The critical test is unchanged: a rejected hypothesis must not become active or verified after compaction or fresh-session recovery unless new evidence explicitly reopens it, and current repository/runtime evidence always outranks saved state. **No change to the recommendation** (Option B is the only option that makes acceptance criterion #10 more than advisory; Option A is the fallback if the owner judges the second-source-of-truth risk to outweigh the guarantee) — this remains a genuine owner decision.
+
+### D3 — Review evidence strengthening — **REDESIGNED this pass**
+
+The first pass's proposal ("any tool call after a MUST-FIX review satisfies the gate") was correctly rejected as too weak: it does not demonstrate the finding was addressed or that affected validation reran. Redesigned contract:
+
+```
+IMPLEMENTATION → INDEPENDENT FRESH-CONTEXT REVIEW → STRUCTURED REVIEW RESULT
+  → MUST FIX? YES → resolve finding → rerun affected validation → verify resolution
+             NO  → continue
+  → completion gate
+```
+
+**DECISION (proposed)**: two small, composable additions, both reusing existing Groundwork mechanisms rather than building new infrastructure:
+
+1. **A structured `REVIEW RESULT` block**, defined in `output-contract.md`, that any reviewer-shaped call (ECC reviewer, subagent, or teammate) is asked to emit at the end of its own response — the exact same pattern already proven by the existing `Harness metadata` block (a short, fenced, label-shaped block that `groundwork_telemetry.py` already parses deterministically from free text). Minimal shape: `Verdict: approve | changes-required`, `Must-fix: <N>`, `Findings: <short labels>`.
+2. **`require_material_review.py` is extended** (not replaced) to: (a) locate this block in the reviewer's own transcript output when present, (b) if `Must-fix: 0` or the block is absent, behave exactly as today (presence-only gate, unchanged); (c) if `Must-fix: N>0`, additionally require, before allowing Stop, both a file-editing tool call **and** a test/validation-shaped Bash call observed in the transcript *after* the review — reusing, not reimplementing, `groundwork_telemetry.py`'s already-tested `TEST_CMD` regex classification. This directly answers the critique: "any tool call" becomes "an edit and a validation re-run," which is meaningfully closer to "the finding was addressed and affected validation reran" without requiring the hook to semantically judge correctness (which stays, as today, a human/reviewer judgment — the gate proves the *shape* of resolution happened, not that the fix is good, matching the existing gate's own stated philosophy).
+
+**What is deliberately not built**: no persistent findings database, no workflow-tracking engine, no requirement that a second review confirm the fix (the brief's own instruction against a "workflow database" is honored — everything here lives in the existing session transcript, already retained by Claude Code, read once at Stop time, exactly like the existing gate does today). "What diff was reviewed" and "reviewer independence" are not separately tracked: independence is a structural guarantee of the subagent/teammate spawn mechanism itself (fresh context is definitionally true for any `Agent` call, confirmed by the predecessor change's own verified research), and diff-identity is implicit in the existing precondition (the hook only fires when a complete-and-uncommitted OpenSpec change exists) — adding explicit diff-hash tracking was considered and rejected as unneeded machinery for a gap this narrow.
+
+EVIDENCE: the `Harness metadata` block pattern and `groundwork_telemetry.py`'s `TEST_CMD` regex are both existing, tested Groundwork mechanisms (confirmed by the first pass's independent code audit) — this redesign composes them rather than inventing a new mechanism, directly satisfying "investigate the smallest deterministic representation... do not create a database/workflow engine unless no smaller mechanism can satisfy the contract."
+WHY: a structured, short, label-shaped block is exactly as fragile/robust as the existing Harness metadata block already proven in production telemetry parsing — reusing a validated pattern beats inventing a new one.
+TRADEOFFS: a reviewer that does not emit the structured block degrades gracefully to today's presence-only behavior (never worse than the current gate, never silently stricter without the reviewer's cooperation) — this means the strengthened check only engages once reviewer prompts/personas are updated to know about the block, which is a rollout dependency, not a design flaw; a reviewer or the model could still fabricate `Must-fix: 0` when there was a real finding — this is the same class of residual gameability the existing gate already accepts ("enforces that review happened, not its quality").
+VALIDATION METHOD: new `test_hooks.py` cases (§L.2).
+UNCERTAINTY: whether real ECC/subagent/teammate reviewers can be reliably prompted to emit the block consistently — RUNTIME VALIDATION REQUIRED, a small sample check before Phase 4 ships (same caution the first pass already flagged, now sharpened: the sample check should specifically verify the block appears, not just check MUST-FIX vocabulary generally).
+**Recommendation: approve this redesigned, two-part mechanism — it is the smallest deterministic representation found that actually satisfies the brief's stronger contract.**
+
+### D4 — ECC capability policy mechanism (unchanged, confirmed by builder-capability cross-check)
+No change to the mechanism. §D.5's builder-capability sourcing analysis confirms (does not expand) the recommended default CORE SRE set — no builder role needs a capability outside what §D.2/D.3 already recommends enabling by default. **Recommendation unchanged: approve the two-part approach.**
+
+### D5 — Deterministic safety expansion beyond Git — **REDESIGNED this pass**
+
+The first pass deferred to a single vague "narrow candidate, owner decides." This pass's builder roles (§F) mean Groundwork will, if approved, genuinely execute `terraform apply`, `kubectl` mutations, and similar — this materially strengthens the case that *some* deterministic guard is warranted (the "a real task exposed the gap" trigger `FUTURE-SCOPE.md` §12 requires is now much closer to true, because the task now genuinely exists in the design, not hypothetically). Redesigned into a **tiered, menu-based model** instead of one abstract candidate:
+
+**Tier 0 — read-only discovery.** `terraform plan`, `kubectl get/describe`, `gcloud/aws/az ... list/describe`. Always allowed, no gate — matches the brief's own "read-only discovery should generally be safe/default."
+
+**Tier 1 — nonprod mutation, explicitly authorized by the task.** `terraform apply` against a dev/nonprod workspace, `kubectl apply` to a non-prod namespace/context, when the user's own request named the action (e.g. "deploy this to our dev GKE cluster"). **Needs no new hook** — already covered by (a) Claude Code's own Bash permission prompts (unchanged, existing backstop) and (b) `engineering-workflow.md` §4's existing autonomy rule, which already lists only production/IAM/data/paid-resource changes as requiring authorization, implicitly leaving nonprod mutation unblocked when the task itself authorized it. Confirmed by re-reading §4, not assumed.
+
+**Tier 2 — production / IAM / data-destructive / paid-resource-creation.** This is where a deterministic hook adds real value beyond a prompt (the same reason `block_protected_push.py` exists at all — a hook cannot be argued around the way a permission prompt sometimes can). Three independently-approvable, narrowly-scoped candidates, each structurally mirroring `block_protected_push.py` (fail-open, pattern-matched, depth-limited shell/eval parsing, adversarially tested for both bypass **and** false-positive):
+
+1. **Terraform-prod-guard**: deny `terraform apply`/`destroy` with no preceding `terraform plan`-generated plan file referenced, or targeting a workspace/state-backend matching a production-naming pattern discoverable via `repository-understanding` (§E.2's environment-organization discovery step) — **highest priority of the three**, closest in shape and risk profile to the already-proven push guard.
+2. **kubectl-prod-guard**: deny mutating verbs (`apply`/`delete`/`patch`/`scale`/`rollout`) against a context/namespace matching a production-naming pattern.
+3. **IAM-mutation-guard**: deny a short, explicit list of IAM-mutating cloud-CLI commands (`aws iam`, `gcloud iam`, `az role` create/attach/delete forms) outright, mirroring how the push guard denies force-flags outright rather than pattern-matching them.
+
+Each is independently shippable, independently revertable, and none is mandatory — the owner may approve zero, one, two, or all three.
+
+**The known, honestly-stated limitation carried into every one of these**: production-vs-nonprod detection by naming convention is heuristic and repository-specific (same class of limitation as the push guard's own documented "non-exact branch names" gap) — the guard's accuracy depends on `repository-understanding` correctly surfacing the repo's actual environment-naming convention, and a repository with no consistent naming convention degrades these guards to the explicit-list case only (IAM-mutation-guard) or to relying on the Tier 1 authorization-in-the-request signal alone.
+
+EVIDENCE: `FUTURE-SCOPE.md` §10's original deferral, now counter-weighted by this pass's builder roles making the "real task" trigger concrete rather than hypothetical; the brief's explicit instruction to "avoid false positives... prefer risk-aware authorization... nonprod mutation may be allowed when explicitly authorized."
+WHY: a tiered menu resolves the first pass's "too vague to approve" problem without pre-committing to a broad, false-positive-prone mechanism — each tier's boundary is drawn from evidence already established elsewhere in this document (§F.5's Tier 1 reasoning, the push guard's own proven pattern for Tier 2).
+TRADEOFFS: three hooks is more surface area than one — mitigated by each being independently approvable and structurally identical to a hook already shipped, tested, and validated; the production-naming-heuristic limitation is real and stated, not hidden.
+VALIDATION METHOD: adversarial bypass **and** false-positive testing for each approved candidate, mirroring the push guard's own 19-case suite, per candidate.
+UNCERTAINTY: none of the three candidates has been built or tested yet — this is a design proposal, not implemented evidence; the production-naming-detection accuracy specifically needs real-repository validation before any candidate ships.
+**Recommendation: approve Terraform-prod-guard at minimum (closest to proven pattern, highest-value target given builder roles will genuinely run `terraform apply`); kubectl-prod-guard and IAM-mutation-guard are owner's call based on which mutation surface the owner's actual environments expose most.**
+
+---
+
+## N. Risks and unresolved questions (material items only, extended)
+
+1. **`openspec/changes/intelligent-engineering-harness` is unarchived with one blocked task.** *(Unchanged from the first pass.)*
+2. **§D.2/D.3's ECC category tables are real, checksum-verified data** — resolved in the first pass, still holds.
+3. **The `skillOverrides`-on-plugin-skills question (D4) is unresolved** and must be live-tested, not assumed.
+4. **D5 is now a stronger case for approving at least the Terraform-prod-guard**, but is still fundamentally an owner risk-appetite call — see D5 above.
+5. **Node version fix (D1) is a breaking change for a currently-silent-failure population.** *(Unchanged.)*
+6. **This document itself should go through the same independent-review gate it describes** before any phase begins implementation.
+7. **NEW this pass: the output-style/rules-loading interaction (§H.2) is unverified** and must be live-tested before any Groundwork-authored output style ships — flagged, not assumed, in either direction.
+8. **NEW this pass: SRE capability consolidation (§G) found several capabilities (SLO/error-budget analysis, IAM/cloud-security-posture) where ECC itself has no matching skill**, mirroring the Terraform/cloud-provider gap found in the first pass. Groundwork's composition model handles this correctly (native reasoning + runtime evidence fills the gap; Groundwork does not need to build a replacement skill) but the owner should be aware these specific SRE sub-capabilities will rely more heavily on native reasoning and less on a curated, pre-built ECC skill than capabilities like Kubernetes/container patterns do.
+9. **NEW this pass: the production-naming-detection heuristic underlying all three D5 Tier-2 candidates depends on `repository-understanding` correctly surfacing a repo's actual environment convention** — repositories with inconsistent or absent naming conventions will get materially weaker protection from these guards; this is a real, stated limitation, not a hidden one, and is the single biggest technical risk in the D5 redesign.
+10. **NEW this pass: the presentation capability's dependence on an optional, user-installed plugin (`document-skills`) means presentation quality/format genuinely varies by what the engineer has installed** — this is by design (Groundwork does not force a dependency), but should be stated plainly in user-facing docs so it is not mistaken for a bug when an engineer without the plugin gets Markdown instead of a `.pptx`.
+
+---
+
+## O. Proposed Groundwork 2.0 file tree after deduplication
+
+Every artifact below answers "what concrete responsibility requires this," per the brief's own instruction not to force a file tree. Nothing is listed that this document did not derive a specific need for.
+
+```
+groundwork/
+├── setup.sh                                    EXISTING, MODIFIED (Phase 1: corrected Node floor)
+├── install.sh / uninstall.sh                    EXISTING, MODIFIED (Phase 1: Node version check added to install.sh;
+│                                                  Phase 7: curated ECC profile flags)
+├── rules/
+│   ├── engineering-workflow.md                  EXISTING, MODIFIED (Phase 5 D2 outcome; Phase 9: four builder-role
+│   │                                              personas + orchestration + MCP/tool-access policy in §6)
+│   ├── architecture-quality.md                  EXISTING, UNCHANGED
+│   ├── evidence-policy.md                       EXISTING, MODIFIED (Phase 2: CONFLICTING EVIDENCE/UNKNOWN labels)
+│   ├── task-routing.md                          EXISTING, UNCHANGED (confirmed no new category needed)
+│   └── output-contract.md                       EXISTING, MODIFIED (Phase 4: structured REVIEW RESULT block;
+│                                                  Phase 10: truth/style separation invariant)
+├── playbooks/
+│   ├── implement.md                             EXISTING, MODIFIED (Phase 8: builder-domain discovery checklist)
+│   ├── deploy.md                                EXISTING, MODIFIED (Phase 8: discovery checklist; Phase 9: closed-loop
+│   │                                              troubleshoot-and-revalidate line)
+│   ├── design.md                                EXISTING, MODIFIED (Phase 8: discovery checklist)
+│   ├── document.md                              EXISTING, MODIFIED (Phase 10: presentation branch)
+│   ├── explain.md                                EXISTING, MODIFIED (Phase 11: teach-from-verified-work branch)
+│   ├── troubleshoot.md, audit.md, validate.md,   EXISTING, UNCHANGED (composed by, not modified for, SRE consolidation
+│   │   research.md, plan.md                       — §G's explicit finding)
+├── hooks/
+│   ├── block_protected_push.py                  EXISTING, UNCHANGED
+│   ├── require_material_review.py                EXISTING, MODIFIED (Phase 4: redesigned D3 structured-block parser,
+│   │                                              reusing telemetry's TEST_CMD regex)
+│   ├── groundwork_session_snapshot.py             EXISTING, MODIFIED (Phase 5: D2 outcome; consolidated
+│   │                                              dirty_change_names() helper)
+│   ├── groundwork_telemetry.py                    EXISTING, UNCHANGED (its TEST_CMD regex is reused, not modified)
+│   ├── _shared.py (or similar)                    NEW, Phase 1 — the consolidated dirty_change_names() helper;
+│   │                                              the only new hook-adjacent file with zero decision-dependency
+│   ├── block_terraform_prod_apply.py              NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 1)
+│   ├── block_kubectl_prod_mutation.py             NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 2)
+│   └── block_iam_mutation.py                      NEW, Phase 6, DECISION-PENDING (D5 Tier 2, candidate 3)
+├── scripts/                                      EXISTING, UNCHANGED except merge_settings.py (Phase 7, conditional
+│                                                  on D4 part 2's skillOverrides validation)
+├── tests/                                        EXISTING, MODIFIED across every phase that ships (new cases only,
+│                                                  no restructuring)
+├── openspec/
+│   ├── changes/groundwork-2-enterprise-sre/       THIS document (self)
+│   └── changes/intelligent-engineering-harness/   EXISTING, unarchived (§N item 1)
+├── docs/
+│   ├── ARCHITECTURE.md                            EXISTING, MODIFIED (Phase 3: capability ownership matrix folded in)
+│   └── (VALIDATION/TROUBLESHOOTING/UPGRADE-ROLLBACK/FUTURE-SCOPE/CHANGELOG)  EXISTING, MODIFIED per-phase as each ships
+└── ~/.claude/output-styles/*.md (installed location, not in this repo's tree)  OPTIONAL/LATER, Phase 10 —
+    Groundwork-authored preset style files (concise/technical/executive/incident/architecture/presentation);
+    NOT built this pass (§H.4); depends on the RUNTIME VALIDATION REQUIRED rules-loading check (§H.2, §N item 7)
+    presentation-design-system reference (template/conventions)                OPTIONAL/LATER, no committed location yet
+```
+
+**Explicitly NOT created, and why**: no `agents/infrastructure-engineer.md` or equivalent per-role permanent agent file (§F.2 — roles are dynamic personas in rule text, not files); no `rules/sre-capability.md` (§G — explicit non-fragmentation finding, zero new files); no `rules/repository-understanding.md` as a fifth always-loaded rule (§E.2 — folded into three existing on-demand playbooks instead, to avoid always-loaded cost for non-builder tasks); no `hooks/presentation_generator.py` or any custom rendering engine (§H — composes the native `document-skills` plugin or plain Markdown, builds nothing); no second telemetry/evidence database for teach/learn (§I — consumes existing evidence, does not store new state); no scheduled-automation files of any kind (brief §20, explicitly deferred).
+
+---
+
+## Letter-mapping changelog (for anyone diffing against the first pass)
+
+First pass → this pass: A→A, B→B, C→C (updated), D→D (extended with D.5), [new] →E,F,G,H,I,J, old E (Migration)→K, old F (Acceptance matrix)→L, old G (Decisions)→M, old H (Risks)→N, [new]→O. Every in-document cross-reference and every cross-reference in `proposal.md`, `tasks.md`, and `specs/*/spec.md` has been updated to match this mapping.
 
 ## Next step
 
-Per the requesting brief's explicit instruction (§27, STOP POINT): **implementation does not begin from this document.** The owner reviews `proposal.md`, this file, and `tasks.md`, approves or amends each Decision (D1-D5) and each Phase (1-6) independently, and only then does a phase get its own `/opsx:apply` pass with its own tests, its own independent review, and its own entry in `docs/VALIDATION.md` — matching exactly how every prior Groundwork capability has shipped.
+Per the requesting brief's explicit instruction, repeated in this pass (§28, STOP POINT again): **implementation does not begin from this document.** Task 0.13 (owner sign-off) remains unchecked. PR #20 remains a draft, not merged. No implementation file, hook, rule, script, or user-global Claude configuration has been touched by this pass — only this OpenSpec change's own design artifacts.

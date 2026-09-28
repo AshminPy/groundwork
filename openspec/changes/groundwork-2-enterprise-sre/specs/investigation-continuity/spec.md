@@ -28,7 +28,7 @@ Whatever is persisted for continuity SHALL contain only conclusions, evidence re
 
 #### Scenario: Content check
 - **WHEN** the chosen mechanism's persisted content is inspected
-- **THEN** it contains objective, established facts, rejected hypotheses with their reasons, open hypotheses, evidence references, decisions, and next action only
+- **THEN** it contains objective, established facts, rejected hypotheses with their reasons, active hypotheses, evidence references, decisions, files changed, validation results, blockers, uncertainty, remaining tasks, and next action only (reaffirmed field list, `design.md` §M/D2)
 
 ### Requirement: Deterministic compaction and fresh-session-recovery test coverage
 The chosen mechanism SHALL be proven, not merely implemented: a deterministic test suite SHALL construct a long investigation (multiple established facts, multiple rejected hypotheses, several decisions, changed files, validation results, unresolved work), simulate compaction and a fresh-session handoff, and verify correct reconstruction of objective, completed work, remaining work, proven facts, unverified facts, rejected hypotheses (explicitly asserted as still rejected), decisions, and next action.
