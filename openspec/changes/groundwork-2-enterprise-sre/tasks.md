@@ -36,15 +36,15 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 ## STAGE 1 — FOUNDATION
 
 ### Phase 1 — Correctness fixes (Decision D1, approved-as-proposed; no owner fork)
-- [ ] 1.1 Correct the documented Node floor (README.md, install.sh error text, setup.sh, docs/ARCHITECTURE.md) from "≥18" to "≥20.19.0"
-- [ ] 1.2 Add an actual Node version-number check to `install.sh` (currently checks presence only)
-- [ ] 1.3 Extract `dirty_change_names()` from `hooks/require_material_review.py` and `hooks/groundwork_session_snapshot.py` into one shared helper
+- [x] 1.1 Correct the documented Node floor (README.md, install.sh error text, setup.sh, docs/ARCHITECTURE.md) from "≥18" to "≥20.19.0" — `NODE_MIN_MAJOR=20; NODE_MIN_MINOR=19` in both `install.sh`/`setup.sh`, README.md's Requirements line and ARCHITECTURE.md's installer row both state ≥20.19.0 with the OpenSpec-vs-ECC floor distinction explained
+- [x] 1.2 Add an actual Node version-number check to `install.sh` (currently checks presence only) — `install.sh:43-48` compares major/minor against `NODE_MIN_MAJOR`/`NODE_MIN_MINOR`, not presence-only; verified by the stubbed-Node test matrix in 1.5
+- [x] 1.3 Extract `dirty_change_names()` from `hooks/require_material_review.py` and `hooks/groundwork_session_snapshot.py` into one shared helper — `hooks/groundwork_shared.py` (new), imported defensively by both callers (and `TEST_CMD` by a third, `groundwork_telemetry.py`) so a broken/partial shared module degrades one capability at a time rather than crashing a hook
 - [x] 1.4 Refresh ECC and OpenSpec version references — CORRECTED SCOPE (finding M4): ECC is not npm-published to Groundwork at all; it installs unpinned from GitHub `main` via `claude plugin marketplace add`/`claude plugin install` (verified 2.2.2 at investigation time). `docs/ARCHITECTURE.md` and `setup.sh`'s `LAST_VERIFIED_ECC` corrected accordingly; OpenSpec refreshed to 1.13.2 (genuinely npm-published, verified)
-- [ ] 1.5 New/extended test: `install.sh` refuses on a stubbed Node <20.19.0 with a clear message
-- [ ] 1.6 Non-regression: full existing suite green plus new cases
-- [ ] 1.7 Independent fresh-context review (MATERIAL — touches install.sh)
-- [ ] 1.8 CHANGELOG entry explicit that this corrects a pre-existing bug, not a new requirement
-- [ ] 1.9 docs/VALIDATION.md entry
+- [x] 1.5 New/extended test: `install.sh` refuses on a stubbed Node <20.19.0 with a clear message — `test_install_node_version_check` (`test_playbooks.py`): stubbed 18.19.1/20.18.9/19.9.9 rejected, 20.19.0/20.19.5/22.1.0 accepted
+- [x] 1.6 Non-regression: full existing suite green plus new cases — `pytest -q` 16 passed; standalone 485 checks across 5 files, 0 failed (final Phase 13 regression run)
+- [x] 1.7 Independent fresh-context review (MATERIAL — touches install.sh) — first round found 5 MUST FIX + 11 NICE TO HAVE on Phase 1 (the M1/M2/M4/M5 findings and N2/N3/N4/N5/N10), all 5 MUST FIX and 5 of 11 NICE TO HAVE fixed and verified; a second round confirmed the fixes and found no new MUST FIX; see docs/VALIDATION.md
+- [x] 1.8 CHANGELOG entry explicit that this corrects a pre-existing bug, not a new requirement — CHANGELOG.md's Phase 1 entry states the Node floor was always wrong ("OpenSpec's real `engines.node` requirement, not ECC's lower one") rather than framing it as new scope
+- [x] 1.9 docs/VALIDATION.md entry — see the "Deterministic evidence" section of the Groundwork 2.0.0 entry (Node floor, M1/M2/M4/M5 findings)
 
 ### Phase 2 — Evidence taxonomy (rule text only)
 - [x] 2.1 Add `CONFLICTING EVIDENCE` and `UNKNOWN` to `rules/evidence-policy.md` §2
