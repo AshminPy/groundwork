@@ -596,6 +596,83 @@ def test_session_snapshot() -> None:
     finish()
 
 
+# ------------------------------------- investigation continuity (2.0, Decision D2, Option B)
+
+def test_investigation_continuity() -> None:
+    print("groundwork_session_snapshot.py — investigation continuity (2.0, Decision D2)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        repo = make_repo(tmp, "inv-repo")
+        cfg = tmp / "cfg"
+        env = {"CLAUDE_CONFIG_DIR": str(cfg)}
+
+        # 1. No investigation file yet -> names the deterministic path, does not invent content.
+        out = run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env)
+        text = snapshot_text(out)
+        check("no investigation file -> names where one would be", "no saved investigation file for this repo yet" in text and "would be at" in text, text)
+        m = re.search(r"would be at (\S+\.md)", text)
+        check("path is under the investigations dir", m is not None and "groundwork/investigations/" in m.group(1), text)
+        computed_path = Path(m.group(1)) if m else None
+
+        # 2. The exact same path is computed again on a second call (determinism — required so a
+        #    file the model writes on one turn is found on the next, same repo, same path).
+        out2 = run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env)
+        m2 = re.search(r"would be at (\S+\.md)", snapshot_text(out2))
+        check("investigation path is deterministic across calls", m2 is not None and m2.group(1) == str(computed_path), f"{m} vs {m2}")
+
+        # 3. A file written at exactly that path is picked up, with the rejected-hypothesis
+        #    invariant instruction attached — the core D2 acceptance criterion's supporting fact.
+        computed_path.parent.mkdir(parents=True, exist_ok=True)
+        computed_path.write_text(
+            "# Investigation: intermittent 502s\n\n"
+            "## Rejected hypotheses\n"
+            "- Upstream timeout too low — REJECTED: timeout is 30s, failures happen at 2s\n\n"
+            "## Active hypotheses\n"
+            "- DB connection pool exhaustion\n\n"
+            "## Next action\n"
+            "Add pool-wait-time metric\n"
+        )
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("saved investigation file content is surfaced", "Rejected hypotheses" in text and "Upstream timeout too low" in text and "REJECTED" in text, text)
+        check("rejected-stays-rejected instruction is attached", "stays rejected unless new evidence explicitly reopens it" in text, text)
+        check("hint-not-fact framing present (evidence-policy.md §8)", "hints to verify against current repository/runtime evidence, never fact on their own" in text, text)
+
+        # 4. An oversized investigation file is truncated with its own marker, not silently
+        #    dropped and not allowed to crowd out git/OpenSpec facts.
+        computed_path.write_text("# Investigation\n" + ("x" * 5000))
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("oversized investigation file is truncated with a marker", "truncated here" in text, text[-300:])
+        check("truncated investigation content still fits the overall snapshot cap", len(text) <= 2500, str(len(text)))
+
+        # 5. Empty file -> treated as if absent (no empty section injected).
+        computed_path.write_text("   \n\n  ")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(repo)}, env=env))
+        check("whitespace-only investigation file -> no investigation section injected", "investigation continuity:" not in text, text)
+
+        # 6. Non-git directory -> no investigation facts at all (no stable identity to key on),
+        #    and no crash.
+        plain = tmp / "plain-dir"
+        plain.mkdir()
+        (plain / "openspec" / "changes" / "c").mkdir(parents=True)
+        (plain / "openspec" / "changes" / "c" / "tasks.md").write_text("- [ ] a\n")
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(plain)}, env=env))
+        check("non-git dir -> no investigation continuity section", "investigation continuity" not in text, text)
+
+        # 7. Two different repos with the same basename get two different files (no collision).
+        outer = tmp / "outer1" / "inv-repo"
+        outer.mkdir(parents=True)
+        git(outer, "init", "-q", "-b", "main")
+        git(outer, "commit", "-q", "--allow-empty", "-m", "init")
+        outer2 = tmp / "outer2" / "inv-repo"
+        outer2.mkdir(parents=True)
+        git(outer2, "init", "-q", "-b", "main")
+        git(outer2, "commit", "-q", "--allow-empty", "-m", "init")
+        p1 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer)}, env=env))).group(1)
+        p2 = re.search(r"would be at (\S+\.md)", snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(outer2)}, env=env))).group(1)
+        check("same-basename repos get distinct investigation paths", p1 != p2, f"{p1} vs {p2}")
+    finish()
+
+
 # --------------------------------------------------------------------------- settings merge / unmerge
 
 def load(path: Path) -> dict:
@@ -736,7 +813,7 @@ if __name__ == "__main__":
     if shutil.which("git") is None:
         print("git not found on PATH — cannot run these tests")
         sys.exit(1)
-    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_settings_merge, test_legacy_migration):
+    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_investigation_continuity, test_settings_merge, test_legacy_migration):
         try:
             test()
         except AssertionError:

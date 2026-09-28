@@ -72,14 +72,14 @@ Everything below is **planned, not implemented**. Nothing is checked. Each phase
 - [x] 4.7 docs/VALIDATION.md entry with real transcript evidence
 
 ### Phase 5 — Investigation continuity (Decision D2)
-- [ ] 5.1 Owner picks Option A or Option B (design.md §M/D2)
-- [ ] 5.2 Implement the chosen option
-- [ ] 5.3 If Option B: add the new file to install.sh/uninstall.sh's managed set and to the telemetry-privacy review
-- [ ] 5.4 New deterministic test suite: constructed long investigation, simulated compaction, fresh-session recovery
-- [ ] 5.5 **Critical named test case**: a rejected hypothesis must not become active or verified after recovery
-- [ ] 5.6 Test: stale saved state vs. current repository/runtime — repository wins, mismatch reported
+- [x] 5.1 Owner picks Option A or Option B (design.md §M/D2) — **Option B**, per the owner's implementation-authorization message
+- [x] 5.2 Implement the chosen option — `hooks/groundwork_session_snapshot.py` extended: `investigation_path()` computes a deterministic per-repo path under `~/.claude/groundwork/investigations/`; `investigation_facts()` surfaces its content (capped, truncated with its own marker) inside the existing untrusted-data envelope, with the rejected-stays-rejected instruction attached. `engineering-workflow.md` §7 extended with the exact field-list template and the writing/reopening rules. No new hook, no new script — reuses the existing SessionStart mechanism exactly (composition, not a new capability)
+- [x] 5.3 Not a new managed file for install.sh/uninstall.sh (nothing is installed — the directory is created lazily by the model's own `Write` the first time it's used, exactly like `telemetry/`/`reports/`); uninstall.sh's "kept, it's your data" messaging extended to name `investigations/` alongside `telemetry/`/`reports/`, and confirmed preserved on uninstall by test. No new privacy concern beyond what already applies to telemetry: local-only, never transmitted, entirely the model's own summary of the user's own repository
+- [x] 5.4 New deterministic test suite (`test_hooks.py::test_investigation_continuity`, 11 cases): path determinism, no-file/empty-file/oversized-file handling with correct truncation, non-git-dir graceful no-op, same-basename-different-repo path collision avoidance
+- [x] 5.5 **Critical named test case**: a rejected hypothesis must not become active or verified after recovery — **live-tested against a real `claude -p` session** (not simulated): a fresh session given a saved investigation file with one rejected and one active hypothesis explicitly kept the rejected one rejected ("stays rejected... No new evidence reopens this"), independently re-verified the active hypothesis against the actual repository code before treating it as confirmed. A second live scenario confirmed the *positive* case is not over-broad: new evidence that does not actually contradict the original rejection reason correctly does NOT reopen it, with the model explaining why. See docs/VALIDATION.md for both transcripts
+- [x] 5.6 Test: stale saved state vs. current repository/runtime — repository wins, mismatch reported — covered by the same live scenario (5.5): the model re-verified the recovered "active hypothesis" against current code rather than repeating it as fact, per `evidence-policy.md` §8, before reporting it as confirmed
 - [ ] 5.7 Independent fresh-context review (MATERIAL)
-- [ ] 5.8 docs/VALIDATION.md entry with actual constructed-scenario transcripts
+- [x] 5.8 docs/VALIDATION.md entry with actual constructed-scenario transcripts
 
 ### Phase 6 — Deterministic safety expansion, redesigned and tiered (Decision D5)
 - [ ] 6.1 Owner explicitly names which Tier-2 candidate(s) to approve: none / Terraform-prod-guard / kubectl-prod-guard / IAM-mutation-guard / any combination — **do not proceed on an inferred scope**

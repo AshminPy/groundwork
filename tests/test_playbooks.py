@@ -132,6 +132,8 @@ def test_install_copies_playbooks() -> None:
         (cfg / "groundwork" / "reports" / "dashboard.html").write_text("<html></html>")
         (cfg / "groundwork" / "telemetry").mkdir(exist_ok=True)
         (cfg / "groundwork" / "telemetry" / "events.jsonl").write_text("{}\n")
+        (cfg / "groundwork" / "investigations").mkdir(exist_ok=True)
+        (cfg / "groundwork" / "investigations" / "some-repo-abc123.md").write_text("# Investigation\n")
         check("no playbook installed under rules/", not list((cfg / "rules").rglob("research.md")))
         for cat in CATEGORIES:
             check(f"installed {cat}.md identical to repo",
@@ -140,6 +142,7 @@ def test_install_copies_playbooks() -> None:
         check("uninstall exits 0", r.returncode == 0, r.stderr[-300:])
         check("uninstall removes the playbooks and VERSION", not (cfg / "groundwork" / "playbooks").exists() and not (cfg / "groundwork" / "VERSION").exists())
         check("uninstall keeps telemetry records", (cfg / "groundwork" / "telemetry" / "events.jsonl").is_file())
+        check("uninstall keeps investigation-continuity files (Decision D2, your data)", (cfg / "groundwork" / "investigations" / "some-repo-abc123.md").is_file())
         check("uninstall keeps historical reports, removes generator and launchd job", (cfg / "groundwork" / "reports" / "dashboard.html").is_file() and not (cfg / "groundwork" / "bin").exists() and not list(agents_dir.glob("*.plist")))
         check("uninstall removes the telemetry hook", not (cfg / "hooks" / "groundwork_telemetry.py").exists())
         check("uninstall removes rules/groundwork", not (cfg / "rules" / "groundwork").exists())
