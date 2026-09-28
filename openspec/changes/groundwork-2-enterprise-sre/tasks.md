@@ -134,10 +134,10 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [-] 10.7 (OPTIONAL/LATER, not scheduled this phase) author Groundwork-provided output-style presets and the presentation design-system template — not built; no real presentation task in this implementation exposed a concrete need for one, per the design's own deferral condition
 
 ### Phase 11 — Teach/learn capability (new this pass)
-- [ ] 11.1 Extend `playbooks/explain.md` with the teach-from-verified-work branch
-- [ ] 11.2 Model-behavior validation: complete-evidence and unavailable-prior-session scenarios
-- [ ] 11.3 Non-regression check (no new storage introduced)
-- [ ] 11.4 docs/VALIDATION.md entry
+- [x] 11.1 Extend `playbooks/explain.md` with the teach-from-verified-work branch
+- [x] 11.2 Model-behavior validation: complete-evidence and unavailable-prior-session scenarios — both live-tested; see docs/VALIDATION.md
+- [x] 11.3 Non-regression check (no new storage introduced) — confirmed: implementation touches only `playbooks/explain.md`, consuming existing evidence (session evidence, git history, `investigation-continuity`'s saved state) rather than adding a store
+- [x] 11.4 docs/VALIDATION.md entry
 
 ## STAGE 5 — VALIDATION
 

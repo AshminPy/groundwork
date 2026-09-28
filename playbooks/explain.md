@@ -5,7 +5,7 @@ Make the user understand something well enough to act on it or reason about it t
 
 ## Workflow
 1. Identify what the user already knows from the request and match the depth: "high level" → the model and why it matters; "low level" → mechanics, edge cases, exact behaviour. Depth is a modifier, not a different task.
-2. Lead with the mental model in one or two sentences, then the mechanism, then a concrete example drawn from the user's own context when available (their repo, stack, or environment).
+2. Lead with the mental model in one or two sentences, then the mechanism, then a concrete example drawn from the user's own context when available (their repo, stack, or environment). **Teaching from work this session (or a recoverable investigation, `engineering-workflow.md` §7) established**: draw only on that established evidence — completion facts, evidence chain, and any rejected hypotheses/decisions recorded — never invent or embellish to make a more complete-sounding lesson; cover only what evidence actually supports (what happened, architecture, cause, diagnosis path, evidence used, rejected hypotheses and why, remediation, prevention, concepts worth learning), and a short optional quiz if useful, clearly marked optional. When teaching about work from a session whose evidence trail is unavailable, state plainly what is reconstructed from artifacts (commits, docs, tickets) versus recalled with confidence.
 3. Prefer the official documentation's terms and, for version-dependent behaviour, name the version.
 4. If the explanation depends on something not verified (an assumption about their setup), say so in one line.
 5. Keep it as short as understanding allows; simple English, one idea per sentence.
