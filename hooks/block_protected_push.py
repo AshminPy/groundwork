@@ -165,6 +165,8 @@ def deny(reason: str):
 def main():
     try:
         data = json.load(sys.stdin)
+        if not isinstance(data, dict):
+            raise ValueError("hook input must be a JSON object")
     except Exception:
         sys.exit(0)
     if data.get("tool_name") != "Bash":

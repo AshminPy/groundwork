@@ -443,6 +443,16 @@ def test_push_guard() -> None:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
             denied = '"permissionDecision": "deny"' in out
             check(f"{cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
+
+        # Hook stdin is valid JSON but not an object -> fail open, never a crash. Found by the
+        # Phase 1/2/4 re-review: this hook had the identical unguarded `data.get(...)` bug that
+        # require_material_review.py was fixed for in the same round — same fix here.
+        for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
+            result = subprocess.run(["python3", str(PUSH_HOOK)], input=bad_stdin,
+                                     capture_output=True, text=True, timeout=15)
+            check(f"non-dict JSON stdin ({bad_stdin}) -> fail open, no crash",
+                  result.returncode == 0 and result.stdout.strip() == "" and result.stderr == "",
+                  f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
     finish()
 
 
