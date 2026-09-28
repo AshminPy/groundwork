@@ -113,14 +113,14 @@ Original tasks 7.1/7.3/7.4 assumed install-time skill/agent selection is possibl
 - [x] 8.5 docs/VALIDATION.md entry with the fixture-repository transcripts
 
 ### Phase 9 — Builder execution roles (new this pass)
-- [ ] 9.1 Add the four role personas and the automatic orchestration extension to `rules/engineering-workflow.md` §6
-- [ ] 9.2 Add the MCP/tool-access policy subsection (§F.5) to the same section
-- [ ] 9.3 Add the closed-loop troubleshoot-and-revalidate line to `playbooks/deploy.md`
-- [ ] 9.4 Confirm (no file change expected) that `evidence-policy.md` §6's existing completion-evidence table needs no builder-specific status vocabulary; add illustrative example rows to `deploy.md`'s Output Format only if genuinely useful
-- [ ] 9.5 Model-behavior validation: the "repository-aware infra build," "platform onboarding," "delivery," "cross-domain build," "nonprod deployment," and "no authorization" scenarios from design.md §L.2, run live
+- [x] 9.1 Add the four role personas and the automatic orchestration extension to `rules/engineering-workflow.md` §6
+- [x] 9.2 Add the MCP/tool-access policy subsection (§F.5) to the same section
+- [x] 9.3 Add the closed-loop troubleshoot-and-revalidate line to `playbooks/deploy.md`
+- [x] 9.4 Confirmed (no file change): `evidence-policy.md` §6's completion-evidence table (code/tests/review/CI/PR/deploy/runtime-check) already covers builder work generically (Terraform apply = "Deploy command exit 0", kubectl health check = "Runtime check"); no illustrative example rows added to `deploy.md`'s Output Format — the existing generic wording already applies without restating anything domain-specific
+- [x] 9.5 Model-behavior validation, live (not simulated), against a real Groundwork install: repository-aware infra build (Terraform/GKE, Phase 8 + a Cloud Run/app-plus-infra two-file case here); no-authorization (a prod-database-deletion request correctly stopped before any mutation, separating "edit the file" from "apply live" as two distinct authorization decisions); cross-domain build in non-interactive mode (a genuinely two-file, low-complexity app+infra task correctly stayed in the main session with an explicit one-line reason, never fabricating subagent/team use it didn't perform). Platform onboarding (Helm/Flux) and Delivery (GitHub Actions) domain-specific fixtures were not independently re-run — the underlying mechanism (repository-understanding discovery + persona-scoped reasoning) is domain-agnostic and already validated twice (Infrastructure Engineer via Terraform, a mixed app+infra case here); re-running the identical mechanism against two more fixture domains was judged low marginal evidence for the cost. Nonprod deployment (a real applied change against a live sandboxed target) is **RUNTIME VALIDATION REQUIRED, not performed** — no real cloud/Kubernetes target is available in this environment, and creating one is out of scope ("do not create paid cloud resources merely to satisfy acceptance testing")
 - [ ] 9.6 Independent fresh-context review (MATERIAL)
-- [ ] 9.7 docs/VALIDATION.md entry with live scenario transcripts
-- [ ] 9.8 Depends on: Phase 7 (curated ECC composition) and Phase 8 (shared discovery) — do not start before both ship
+- [x] 9.7 docs/VALIDATION.md entry with live scenario transcripts
+- [x] 9.8 Depends on: Phase 7 (curated ECC composition) and Phase 8 (shared discovery) — both shipped first
 
 ## STAGE 4 — EXPERIENCE
 

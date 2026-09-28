@@ -60,6 +60,14 @@ Pick the simplest model that produces the result. The user never has to say "cre
 - **Fallback** — when teams are disabled or the session is non-interactive (`-p`), run the same decomposition with subagents. Never report a team that did not run.
 - Use the native runtime (Agent tool, `SendMessage`, the task list, hooks). Do not build orchestration, schedulers, message buses, or team managers around it.
 
+**Builder personas (Groundwork 2.0)** — when a subagent or teammate is spawned for infrastructure/platform/delivery/application-domain work, its scope comes from whichever of these fits (a scope-and-evidence-source statement, not a system prompt to memorize — the full §2 execution order still applies unchanged); anything simpler (e.g. one variable in an existing module) stays in the main session, no persona needed:
+- **Infrastructure Engineer** — Terraform/Ansible/cloud infra (IAM, networking, DNS, storage, compute), IaC validation. Evidence via `repository-understanding` (module/state/IAM/networking patterns); execution via `terraform`/cloud CLIs (MCP/Bash); curated ECC reviewers for review.
+- **Platform Engineer** — Kubernetes/Helm/GitOps runtime config, namespaces, RBAC, workload identity, ingress, app onboarding. Evidence via existing chart/namespace conventions; `kubectl`/`helm`/`flux` (MCP/Bash).
+- **Delivery Engineer** — CI/CD, build pipelines, image builds, release/promotion, rollback. Evidence via existing pipeline conventions; curated `github-ops`/`git-workflow`-class ECC skills.
+- **Application Engineer** — app/service code *supporting* an infra/platform/delivery outcome (APIs, workers, health checks, telemetry) — not a general-purpose dev framework. Evidence via the project's own language/framework conventions.
+These are **dynamic personas only** — the `name`/prompt of an `Agent` call or team teammate, never a permanent `.claude/agents/*.md` file; Agent-Team formation still requires the existing team-justification criteria above (2+ genuinely independent workstreams), never automatically just because roles exist.
+Builders never install or configure cloud/Kubernetes/CI MCP servers themselves — only what the task's environment already provides (`FUTURE-SCOPE.md` §9). Read-only discovery (`plan`/`get`/`describe`/`list`) is safe by default; mutating operations follow §4's existing authorization rule. Groundwork never stores or requires static cloud credentials.
+
 ## 7. Continuation — "continue this project" (fresh session, no prior chat)
 Reconstruct the current state from the repository, in this order, before changing anything:
 1. The Groundwork session snapshot injected at session start (branch, HEAD, dirty/untracked counts, OpenSpec progress, discovered verification commands, and — Groundwork 2.0 — the saved investigation-continuity file for this repo, if one exists; see below).

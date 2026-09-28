@@ -10,7 +10,7 @@ Change a running system (cloud, Kubernetes, Docker, local) safely, prove it is h
 4. Preview before applying wherever the tooling allows (`terraform plan`, dry-run, diff). Read the preview; a replace or destroy of a stateful resource is a stop-and-confirm.
 5. Apply. Watch the rollout to completion.
 6. Validate health on the real path: service health, a real request, pod/rollout status, logs, metrics or traces — not just an exit code 0.
-7. Have the rollback ready before applying and state it; execute it if validation fails.
+7. Have the rollback ready before applying and state it; execute it if validation fails. If runtime validation fails: apply `troubleshoot.md`'s evidence-first RCA to the failure, fix the smallest safe verified cause, and re-run the same validation — never report DEPLOYED or COMPLETE without a successful re-validation.
 8. Respect the guards: no direct push to protected branches, no force-push, no `--dangerously-skip-permissions`, no weakening of security controls to make a deploy pass.
 
 ## Evidence
