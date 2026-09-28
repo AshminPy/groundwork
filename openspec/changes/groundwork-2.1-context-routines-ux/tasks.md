@@ -90,3 +90,89 @@
 - [x] 12.3b Second, narrowly-scoped independent review confirming both MUST FIX fixes by direct old-vs-new reproduction (extracted the pre-fix `setup.sh` via `git show HEAD^:setup.sh`, ran both old and new against the identical corrupted-`config.json` scenario, confirmed the old script dies silently while the new one degrades to `Capabilities INVALID` and continues; grepped `docs/ARCHITECTURE.md`/`README.md` for every remaining "unpinned" hit and confirmed each is inside the clearly-dated historical clause, not a live claim). All 3 nice-to-haves spot-checked and confirmed present. Full regression re-run independently (28 passed, `openspec validate --strict` valid). **Verdict: approve, Must-fix: 0.**
 - [x] 12.4 Write the final release-candidate report per the brief's required structure — `docs/RELEASE-REPORT-2.1.md` (release identity, architecture, context engineering, skills, MCP/integrations, routines, UX, tests, runtime validation, independent review, known limitations, deferred items, acceptance-standard walkthroughs)
 - [-] 12.5 Never merge to main, never tag, never publish a release — a standing constraint honored throughout, not a one-time task; PR #22 remains draft, open for owner review
+
+## Phase 13 — Routine configuration contract (owner requirement, raised during PR #22 review)
+
+The owner reviewed the shipped Routines subsystem and found it did not satisfy "configure once, run
+automatically": (1) `READ_ONLY_TOOLS`/`JIRA_LIVE_TOOLS` were byte-identical, so a routine could never
+actually reach Jira or GitHub regardless of configuration; (2) no identity/scope/access was ever
+collected or persisted, so nothing could actually be configured once. This phase fixes both at the
+root, incorporated into the existing Routines/onboarding capabilities rather than a new OpenSpec
+change. Full design: `design.md` §D.2. Prior review history (§12.3a/12.3b) is preserved above, not
+erased — this phase's own independent review is separate and additional.
+
+- [x] 13.1 Redesign `config.json`'s per-routine schema (`scripts/groundwork_config.py`): `jira_eod`
+  gains site/identity/access/mcp_server/scope/posting; `pr_followup` gains identity/access/scope
+  (repositories + 5 filter booleans); `news` keeps topics; `weekly_status`/`work_digest`/`doc_drift`
+  gain repository/integration scope fields; every routine's `schedule` becomes
+  `{frequency, time}` (was a bare string). New `get`/`set` CLI subcommands (dotted-path,
+  JSON-or-string values, validated before every write — an invalid value never corrupts the
+  saved file). Per-routine field validation added to `validate_config()` (known access/posting/
+  scope-type enums, HH:MM schedule-time format).
+- [x] 13.2 Rebuild capability grants (`scripts/groundwork_routines.py` `_capabilities_for()`) from
+  routine + configured access + configured scope + configured mutation permission — never one
+  flat global allowlist. `pr_followup` gets exact real `gh` subcommands or session-confirmed real
+  `mcp__github__*` read tool names, never a write-shaped one (it never mutates). `jira_eod` gets
+  its configured MCP server's tools at the server level (exact per-tool read/write enumeration
+  isn't knowable for an arbitrary user-configured server — documented as an honest limit, not
+  hidden); BLOCKED if the server name is empty. `weekly_status`/`work_digest` reuse
+  `jira_eod`/`pr_followup`'s own already-configured access rather than asking again.
+- [x] 13.3 BLOCKED-before-invocation: `build_command()` returns `(None, reason)` when required
+  access is unconfigured; `run_routine()` never calls `subprocess.run` in that case. Live-verified:
+  `jira_eod` with `access=unconfigured` and `claude` deliberately unreachable on `PATH` returns
+  `status: blocked`, never a crash from the missing binary.
+- [x] 13.4 Semantic status: every routine prompt now requires a `ROUTINE RESULT` block (same
+  shape/tolerance as `require_material_review.py`'s `REVIEW RESULT` parser). Exit 0 alone is never
+  `COMPLETE`: a missing/malformed block is `FAILED`; a block reporting `BLOCKED`/`PARTIAL` is
+  recorded as exactly that. Live-verified with stub `claude` binaries for all four cases
+  (COMPLETE/BLOCKED/PARTIAL-via-block, and missing-block-is-FAILED).
+- [x] 13.5 Result storage separate from telemetry: `~/.claude/groundwork/routines/results/<name>/
+  run-<ts>.json` (0600/0700, retained to the 10 most recent runs, auto-pruned), holding the
+  routine's actual output text. `routines.jsonl` telemetry confirmed to never contain a `content`
+  field or the routine's real output text (direct inspection). `groundwork_routines.py latest
+  <name>` / `setup.sh --routines NAME` retrieves it.
+- [x] 13.6 `setup.sh` progressive per-routine wizard: `configure_routine_{jira_eod,pr_followup,
+  news,weekly_status,work_digest,doc_drift}()`, only asked for routines actually enabled. Jira:
+  site/identity/access(+MCP server name)/ticket scope/posting/schedule. PR follow-up: identity
+  (with safe `gh auth status`-based auto-detect suggestion)/access/repository scope/schedule.
+  News: topics (arbitrary custom allowed)/schedule. The other three: minimal — schedule (+
+  period/paths where relevant), matching "reasonable defaults, no unnecessary questions."
+- [x] 13.7 `--configure` reconfiguration menu: change profile / reconfigure one routine / cancel —
+  any single routine's fields revisitable without reinstalling Groundwork or touching any other
+  routine's saved configuration.
+- [x] 13.8 `--doctor` extended with real per-routine detail (`groundwork_routines.py doctor`,
+  formatting centralized in `format_doctor_text()` for testability): configuration/site/identity/
+  access/connectivity/scope/posting/topics/schedule/last-run, CONFIGURED ≠ AVAILABLE ≠ CONNECTED ≠
+  VERIFIED distinctions via best-effort safe checks (`gh auth status`, `claude mcp list`), never
+  asserting CONNECTED without actually checking — "RUNTIME VALIDATION REQUIRED" stated plainly
+  when it can't be checked from here.
+- [x] 13.9 Tests: `tests/test_groundwork_config.py` extended (+35 checks: per-routine defaults,
+  get/set CLI round-trip incl. rejection-leaves-file-unchanged, disabling needs no other fields).
+  `tests/test_groundwork_routines.py` substantially rewritten (89 checks: capability-building
+  least-privilege per routine, BLOCKED-before-subprocess, semantic-status from real stub-`claude`
+  runs, result storage/retention/telemetry-separation, `check_access()` never-guesses-CONNECTED,
+  doctor formatting, prompt-content scope-references, reschedule-without-duplication).
+  `tests/test_setup.py` gained `test_routine_configuration_wizard` (55 checks: the full interactive
+  wizard for Jira/PR-followup/News/disable-a-routine, end to end through `--doctor`); existing
+  `--configure`/`--doctor` assertions updated for the new menu/output format. Full suite: 43 test
+  functions, 0 failed.
+- [x] 13.10 Re-reviewed all six routines individually against configuration/identity/scope/
+  capabilities/authorization/schedule/execution/result-delivery/semantic-status/verification/
+  failure-behavior — `design.md` §D.2's "Per-routine review" paragraph; confirmed genuinely
+  distinct capability-building logic per routine, not six prompts sharing one undifferentiated path.
+- [x] 13.11 Updated `docs/ROUTINES.md` (substantially rewritten: configuration contract, per-routine
+  schema, capability grants table, semantic status, telemetry-vs-results) and `docs/VALIDATION.md`
+  (new "Routine configuration contract" subsection with deterministic + live evidence), plus
+  `README.md`'s Routines paragraph. `docs/RELEASE-REPORT-2.1.md`'s release-identity and
+  independent-review sections are deliberately updated once at 13.13, after the final commit SHA
+  and this phase's own review verdict are both known — updating them now would mean rewriting
+  twice. Recorded honestly throughout that this was found during owner review of PR #22, without
+  erasing the Phase 12.3a/12.3b review history.
+- [ ] 13.12 Full validation loop (focused tests → full regression → strict OpenSpec validation →
+  fresh install → setup wizard → configure representative routines → verify saved config → doctor
+  → routines listing → routine result retrieval → reconfiguration → schedule update → disable →
+  uninstall → safe live routine validation) then a NEW adversarial independent reviewer dispatched
+  specifically against the Routine Configuration Contract, every MUST FIX fixed, a fresh
+  confirmation reviewer, Must-fix: 0.
+- [ ] 13.13 PR #22 updated (commit + push to the existing branch) and its description refreshed to
+  reflect this phase, still draft/unmerged/untagged/unpublished.

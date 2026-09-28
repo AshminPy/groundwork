@@ -448,7 +448,8 @@ def test_capabilities_and_routines() -> None:
         r = b.run("--doctor")
         check("--doctor exits 0 on a healthy install", r.returncode == 0, r.stdout + r.stderr)
         check("--doctor shows the configured capability profile", "Capability profile  CONFIGURED   sre-cloudops" in r.stdout.replace("\t", " ") or "sre-cloudops" in r.stdout, r.stdout)
-        check("--doctor shows the -- Routines -- section with real enabled/schedule status", "-- Routines --" in r.stdout and "jira_eod: enabled=True" in r.stdout, r.stdout)
+        check("--doctor shows the -- Routines -- section with real per-routine detail",
+              "-- Routines --" in r.stdout and "Jira EOD" in r.stdout and "Configuration ........ PASS" in r.stdout, r.stdout)
 
         # ---- regression: --doctor must still show Capabilities/Routines even when core checks
         # fail (previously: verify_install()'s non-zero return under `set -e` short-circuited
@@ -459,7 +460,7 @@ def test_capabilities_and_routines() -> None:
         check("--doctor with a broken core install still shows the Capabilities section (regression)",
               "Capability profile" in r.stdout and "sre-cloudops" in r.stdout, r.stdout)
         check("--doctor with a broken core install still shows the Routines section (regression)",
-              "-- Routines --" in r.stdout and "jira_eod" in r.stdout, r.stdout)
+              "-- Routines --" in r.stdout and "Jira EOD" in r.stdout, r.stdout)
         (b.cfg / "groundwork" / "playbooks").mkdir(parents=True, exist_ok=True)
         for src in (REPO_ROOT / "playbooks").glob("*.md"):
             shutil.copy(src, b.cfg / "groundwork" / "playbooks" / src.name)
@@ -486,11 +487,12 @@ def test_capabilities_and_routines() -> None:
         check("--configure actually rewrote config.json to the new profile", cfg2["profile"] == "minimal", cfg2)
         check("--configure did not add a new backup (no reinstall)", len(b.backup_dirs()) == 1, b.backup_dirs())
 
-        # ---- --configure declining the prompt makes no change
-        r = b.run("--configure", stdin="1\n")
-        check("--configure declining (choice 1) makes no change, exit 0", r.returncode == 0 and "No change made" in r.stdout, r.stdout)
+        # ---- --configure: top-level menu is "1. change profile / 2. reconfigure one routine /
+        # 3. cancel" (Groundwork 2.1 routine-configuration contract) — choosing 3 (cancel) makes no change
+        r = b.run("--configure", stdin="3\n")
+        check("--configure choosing 3 (cancel) makes no change, exit 0", r.returncode == 0 and "No change made" in r.stdout, r.stdout)
         cfg3 = json.loads(cfgfile.read_text())
-        check("declined --configure left the profile as minimal", cfg3["profile"] == "minimal", cfg3)
+        check("cancelled --configure left the profile as minimal", cfg3["profile"] == "minimal", cfg3)
 
         # ---- --routines lists configured routines and their status
         r = b.run("--routines")
@@ -520,8 +522,72 @@ def test_capabilities_and_routines() -> None:
     finish()
 
 
+def test_routine_configuration_wizard() -> None:
+    print("setup.sh --configure: interactive routine wizard (Groundwork 2.1 routine configuration contract)")
+    if shutil.which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        b = Box(tmp / "b")
+        r = b.run("--non-interactive", "--profile", "work", "--capability-profile", "sre-cloudops", "--schedule", "daily")
+        check("base sre-cloudops install exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfgfile = b.cfg / "groundwork" / "config.json"
+
+        # ---- Jira EOD: "1"=reconfigure-one-routine menu, "1"=Jira EOD, "2"=enable yes, then its
+        # own fields in order (site, identity, access=1/jira_mcp, mcp_server, scope=1, posting=1, time)
+        r = b.run("--configure", stdin="2\n1\n2\nhttps://acme.atlassian.net\njane@acme.com\n1\natlassian\n1\n1\n17:00\n")
+        check("interactive Jira EOD configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        jira = cfg["routines"]["jira_eod"]
+        check("Jira URL persisted exactly as entered", jira["site"] == "https://acme.atlassian.net", jira)
+        check("Jira identity persisted exactly as entered", jira["identity"] == "jane@acme.com", jira)
+        check("Jira access mechanism persisted (jira_mcp)", jira["access"] == "jira_mcp", jira)
+        check("Jira MCP server name persisted", jira["mcp_server"] == "atlassian", jira)
+        check("Jira ticket scope persisted (assigned_to_me)", jira["scope"]["type"] == "assigned_to_me", jira)
+        check("Jira schedule time persisted exactly", jira["schedule"]["time"] == "17:00", jira)
+        check("no credential-shaped key anywhere in the saved file", "token" not in cfgfile.read_text().lower() and "password" not in cfgfile.read_text().lower())
+
+        # ---- PR follow-up: identity + access + repository scope (selected repos)
+        r = b.run("--configure", stdin="2\n4\n2\noctocat\n1\n2\nowner/repo1, owner/repo2\n08:30\n")
+        check("interactive PR follow-up configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        pr = cfg["routines"]["pr_followup"]
+        check("GitHub identity persisted", pr["identity"] == "octocat", pr)
+        check("GitHub access mechanism persisted (gh_cli)", pr["access"] == "gh_cli", pr)
+        check("selected repository scope persisted as a real list, not the ['current'] default",
+              pr["scope"]["repositories"] == ["owner/repo1", "owner/repo2"], pr)
+        check("default PR scope filter (authored_by_me) still true — never silently cleared by reconfiguring other fields",
+              pr["scope"]["authored_by_me"] is True, pr)
+
+        # ---- News: arbitrary custom topics, not just the suggested list
+        r = b.run("--configure", stdin="2\n2\n2\nAI, PKI, Identity Security\n07:00\n")
+        check("interactive News configuration exits 0", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        news = cfg["routines"]["news"]
+        check("arbitrary custom topics persisted, not just the suggested defaults",
+              news["topics"] == ["AI", "PKI", "Identity Security"], news)
+
+        # ---- Disabling a routine requires no other fields (§17: disabling Jira does not require configuration)
+        r = b.run("--configure", stdin="2\n3\n1\n")
+        check("interactive Weekly Status disable exits 0 with just one answer", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        cfg = json.loads(cfgfile.read_text())
+        check("disabling weekly_status needed no other fields, still schema-valid", cfg["routines"]["weekly_status"]["enabled"] is False, cfg["routines"]["weekly_status"])
+
+        # ---- --doctor reflects everything configured, with real values, not fabricated ones
+        r = b.run("--doctor")
+        check("--doctor exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("--doctor shows the real configured Jira site and identity", "acme.atlassian.net" in r.stdout and "jane@acme.com" not in r.stdout, r.stdout)
+        check("--doctor shows Jira identity as 'configured' (not the literal PII value — doctor shows presence, not the value, for identity)",
+              "Identity ............. configured" in r.stdout, r.stdout)
+        check("--doctor shows the real configured GitHub identity", "octocat" in r.stdout, r.stdout)
+        check("--doctor shows the real configured news topics", "PKI" in r.stdout and "Identity Security" in r.stdout, r.stdout)
+        check("--doctor shows Weekly Status as DISABLED after reconfiguring it off", "Weekly Status" in r.stdout, r.stdout)
+    finish()
+
+
 if __name__ == "__main__":
-    for t in (test_setup, test_verify_reports_ecc_version, test_capabilities_and_routines):
+    for t in (test_setup, test_verify_reports_ecc_version, test_capabilities_and_routines, test_routine_configuration_wizard):
         try:
             t()
         except AssertionError:

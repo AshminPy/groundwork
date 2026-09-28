@@ -16,25 +16,33 @@
 
 #### Scenario: Doctor on a healthy install
 - **WHEN** `--doctor` runs against an install with a capability profile configured
-- **THEN** it prints the existing core PASS/FAIL rows followed by a Capabilities section (profile, cloud, platform, integrations, skills) and a Routines section (one line per routine with enabled/mutates/schedule/last-run)
+- **THEN** it prints the existing core PASS/FAIL rows followed by a Capabilities section (profile, cloud, platform, integrations, skills) and a Routines section giving each enabled routine's own configuration (site/identity/access/scope/posting/topics as applicable), connectivity status (CONFIGURED/AVAILABLE/CONNECTED/RUNTIME VALIDATION REQUIRED, never a guessed CONNECTED), schedule, and last-run status — without exposing anything credential-shaped (there is none to expose)
 
 #### Scenario: Doctor on a partially broken install
 - **WHEN** one or more core checks (rules, playbooks, hooks, telemetry, etc.) FAIL
 - **THEN** `--doctor` still prints the full Capabilities and Routines sections after the core rows, and its exit code still reflects the core failure
 
 ### Requirement: `--configure` revisits capability selection without reinstalling
-`setup.sh --configure` SHALL re-run only the capability/Routines selection (or accept `--capability-profile` directly), write the result the same way the initial setup does, and SHALL NOT take a new configuration backup or re-run `install.sh`.
+`setup.sh --configure` SHALL re-run only the capability/Routines selection (or accept `--capability-profile` directly), write the result the same way the initial setup does, and SHALL NOT take a new configuration backup or re-run `install.sh`. It SHALL also offer reconfiguring one specific routine's own fields (identity, scope, access, schedule) in place, leaving every other routine's configuration untouched.
 
 #### Scenario: Reconfigure to a different profile
 - **WHEN** `./setup.sh --configure --capability-profile minimal` runs against an already-configured install
 - **THEN** `config.json`'s profile changes to `minimal`, no new backup directory is created, and Groundwork's core installation is untouched
 
-### Requirement: `--routines` lists configured Routines and their last-run status
-`setup.sh --routines` SHALL print every known Routine's enabled state, whether it mutates, its schedule, and its last recorded run status, read from the same `config.json` and telemetry `--doctor` uses.
+#### Scenario: Reconfigure one routine only
+- **WHEN** `./setup.sh --configure` is run interactively and the user chooses to reconfigure a single routine (e.g. `pr_followup`)
+- **THEN** only that routine's fields change; every other routine's already-saved configuration is unchanged, and no new backup directory is created
+
+### Requirement: `--routines` lists configured Routines and their last-run status; a routine name retrieves its latest result
+`setup.sh --routines` SHALL print every known Routine's enabled state, whether it mutates, its schedule, and its last recorded run status, read from the same `config.json` and telemetry `--doctor` uses. `setup.sh --routines NAME` SHALL instead print that routine's most recently stored result (semantic status and actual output content).
 
 #### Scenario: No routines ever run
 - **WHEN** `--routines` runs against a freshly configured install with no routine ever executed
 - **THEN** every routine line shows `never run`
+
+#### Scenario: Retrieving one routine's latest result
+- **WHEN** `--routines NAME` is run for a routine that has completed at least one run
+- **THEN** it prints that run's semantic status and its actual stored output content, not just a status word
 
 ### Requirement: Uninstall removes capability configuration and unschedules every Routine
 `uninstall.sh` SHALL remove `config.json` (Groundwork's own configuration, not user data) and SHALL unschedule every known Routine's scheduled job before removing the Routines script, the same way it already unschedules the report dashboard's job.

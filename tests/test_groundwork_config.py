@@ -201,10 +201,117 @@ def test_never_stores_secrets_by_construction() -> None:
     finish()
 
 
+def test_routine_defaults_shape() -> None:
+    print("groundwork_config.py — per-routine default shape (owner requirement: configure once)")
+    mod = load_module()
+    jira = mod._default_jira_eod(True)
+    check("jira_eod default: access starts unconfigured (never guesses a mechanism)", jira["access"] == "unconfigured", jira)
+    check("jira_eod default: posting starts dry_run (safe default)", jira["posting"] == "dry_run", jira)
+    check("jira_eod default: scope defaults to assigned_to_me", jira["scope"]["type"] == "assigned_to_me", jira)
+    check("jira_eod default: site/identity blank, not guessed", jira["site"] == "" and jira["identity"] == "", jira)
+
+    pr = mod._default_pr_followup(True)
+    check("pr_followup default: access starts unconfigured", pr["access"] == "unconfigured", pr)
+    check("pr_followup default: repository scope defaults to current only (never org-wide)", pr["scope"]["repositories"] == ["current"], pr)
+    check("pr_followup default: authored_by_me is the primary default filter (owner's own PRs, not everyone's)",
+          pr["scope"]["authored_by_me"] is True, pr)
+
+    news_on = mod._default_news(True)
+    news_off = mod._default_news(False)
+    check("news default (enabled): ships the suggested topic list", news_on["topics"] == mod.DEFAULT_NEWS_TOPICS, news_on)
+    check("news default (disabled): no topics pre-filled", news_off["topics"] == [], news_off)
+
+    for name, builder in (("weekly_status", mod._default_weekly_status), ("work_digest", mod._default_work_digest),
+                           ("doc_drift", mod._default_doc_drift)):
+        d = builder(True)
+        check(f"{name} default: has a schedule with frequency+time", "frequency" in d["schedule"] and "time" in d["schedule"], d)
+    finish()
+
+
+def test_set_get_cli_round_trip() -> None:
+    print("groundwork_config.py — CLI: get/set persist identity/scope/schedule, reject invalid values")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "config.json"
+        run_cli(["init", "sre-cloudops", "--path", str(path)])
+
+        r = run_cli(["set", "jira_eod", "site=https://company.atlassian.net", "identity=user@company.com",
+                     "access=jira_mcp", "mcp_server=atlassian", "posting=automatic", "--path", str(path)])
+        check("set jira_eod site/identity/access/mcp_server/posting: exit 0", r.returncode == 0, r.stdout + r.stderr)
+
+        r = run_cli(["get", "jira_eod", "site", "--path", str(path)])
+        check("get jira_eod site: URL persists exactly", r.stdout.strip() == "https://company.atlassian.net", r.stdout)
+        r = run_cli(["get", "jira_eod", "identity", "--path", str(path)])
+        check("get jira_eod identity: identity persists exactly", r.stdout.strip() == "user@company.com", r.stdout)
+
+        r = run_cli(["set", "jira_eod", "scope.type=projects", 'scope.projects=["ABC","XYZ"]', "--path", str(path)])
+        check("set jira_eod nested scope.type/scope.projects: exit 0", r.returncode == 0, r.stdout + r.stderr)
+        r = run_cli(["get", "jira_eod", "scope.type", "--path", str(path)])
+        check("get jira_eod scope.type: ticket scope persists", r.stdout.strip() == "projects", r.stdout)
+        r = run_cli(["get", "jira_eod", "scope.projects", "--path", str(path)])
+        check("get jira_eod scope.projects: project list persists as JSON array", json.loads(r.stdout) == ["ABC", "XYZ"], r.stdout)
+
+        r = run_cli(["set", "pr_followup", "identity=octocat", "access=gh_cli", "--path", str(path)])
+        check("set pr_followup identity/access: exit 0", r.returncode == 0, r.stdout + r.stderr)
+        r = run_cli(["get", "pr_followup", "identity", "--path", str(path)])
+        check("get pr_followup identity: GitHub identity persists", r.stdout.strip() == "octocat", r.stdout)
+
+        r = run_cli(["set", "news", 'topics=["AI","PKI","Identity Security"]', "--path", str(path)])
+        check("set news arbitrary custom topics: exit 0", r.returncode == 0, r.stdout + r.stderr)
+        r = run_cli(["get", "news", "topics", "--path", str(path)])
+        check("get news topics: arbitrary custom topics persist, not just the suggested list",
+              json.loads(r.stdout) == ["AI", "PKI", "Identity Security"], r.stdout)
+
+        r = run_cli(["set", "jira_eod", "schedule.frequency=daily", "schedule.time=17:00", "--path", str(path)])
+        check("set jira_eod schedule: exit 0", r.returncode == 0, r.stdout + r.stderr)
+        r = run_cli(["get", "jira_eod", "schedule.time", "--path", str(path)])
+        check("get jira_eod schedule.time: configured time persists exactly", r.stdout.strip() == "17:00", r.stdout)
+
+        before = json.loads(path.read_text())
+        r = run_cli(["set", "jira_eod", "access=not-a-real-mechanism", "--path", str(path)])
+        check("set jira_eod with an invalid access value: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+        after = json.loads(path.read_text())
+        check("rejected set left the file unchanged (no partial/corrupt write)", before == after, (before, after))
+
+        r = run_cli(["set", "jira_eod", "posting=not-a-real-posting-mode", "--path", str(path)])
+        check("set jira_eod with an invalid posting value: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+
+        r = run_cli(["set", "pr_followup", "access=not-a-real-mechanism", "--path", str(path)])
+        check("set pr_followup with an invalid access value: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+
+        r = run_cli(["set", "jira_eod", "schedule.frequency=not-a-real-frequency", "--path", str(path)])
+        check("set with an invalid schedule frequency: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+
+        r = run_cli(["set", "jira_eod", "schedule.time=25:99", "--path", str(path)])
+        check("set with an out-of-range schedule time: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+
+        r = run_cli(["set", "jira_eod", "token=leaked-secret-value", "--path", str(path)])
+        check("set with a credential-shaped key: rejected, never persisted", r.returncode == 1, r.stdout + r.stderr)
+        check("credential-shaped key never landed in the saved file",
+              "leaked-secret-value" not in path.read_text(), path.read_text())
+
+        r = run_cli(["set", "not-a-real-routine", "enabled=true", "--path", str(path)])
+        check("set on an unknown routine name: rejected, exit 1", r.returncode == 1, r.stdout + r.stderr)
+    finish()
+
+
+def test_disabling_a_routine_does_not_require_its_fields() -> None:
+    print("groundwork_config.py — disabling a routine needs no other fields (§17: disabling Jira does not require configuration)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "config.json"
+        run_cli(["init", "minimal", "--path", str(path)])
+        r = run_cli(["set", "jira_eod", "enabled=false", "--path", str(path)])
+        check("disabling jira_eod alone: exit 0, no other fields required", r.returncode == 0, r.stdout + r.stderr)
+        cfg = json.loads(path.read_text())
+        check("disabled jira_eod is still schema-valid with only default/blank fields", cfg["routines"]["jira_eod"]["enabled"] is False)
+    finish()
+
+
 if __name__ == "__main__":
     for fn in (test_default_config_and_validate, test_validate_config_catches_problems,
                test_load_save_roundtrip_and_fail_open, test_default_path_respects_claude_config_dir,
-               test_cli_init_show_validate, test_never_stores_secrets_by_construction):
+               test_cli_init_show_validate, test_never_stores_secrets_by_construction,
+               test_routine_defaults_shape, test_set_get_cli_round_trip,
+               test_disabling_a_routine_does_not_require_its_fields):
         try:
             fn()
         except AssertionError:

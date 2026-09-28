@@ -56,3 +56,76 @@ The `doc_drift` routine SHALL compare implementation against documentation and r
 #### Scenario: Drift found
 - **WHEN** the routine's prompt runs against a repository with a documented-but-unshipped capability
 - **THEN** the prompt instructs it to report the drift for a human or follow-up session to fix, not to edit the documentation in place
+
+### Requirement: A routine's identity, scope, access mechanism and mutation permission are configured once
+Each routine's identity (e.g. a Jira site/user, a GitHub username), scope (e.g. ticket/PR/repository selection), access mechanism, and mutation permission SHALL be collected once via the setup/configure flow and persisted in `config.json`, and SHALL NOT be re-requested at routine-run time. A routine's own prompt SHALL reference this configured scope explicitly rather than operating generically.
+
+#### Scenario: Configured scope appears in the prompt
+- **WHEN** `jira_eod`'s prompt is built for a routine configured with a specific site, identity, and ticket scope
+- **THEN** the generated prompt text names that exact site, identity, and scope description, and instructs the model to operate only within it
+
+#### Scenario: PR follow-up queries are identity-scoped, never an unfiltered account-wide scan
+- **WHEN** `pr_followup`'s prompt is built for a routine configured with a specific GitHub identity
+- **THEN** the generated prompt text names that identity, instructs every query to be filtered by it, and explicitly forbids an unfiltered scan of every PR the account can see
+
+### Requirement: An unconfigured access mechanism blocks the routine before any subprocess is spawned
+A routine that requires an access mechanism (`jira_eod`, `pr_followup`, and `weekly_status`/`work_digest` when configured to reuse either) SHALL report `status: blocked` with a clear reason when that access is `"unconfigured"` (or, for `jira_eod`'s `jira_mcp` access, when no MCP server name is configured) — and SHALL NOT invoke `claude` at all in that case.
+
+#### Scenario: Unconfigured Jira access
+- **WHEN** `jira_eod` is enabled but its `access` field is `"unconfigured"`, and `claude` is not reachable on `PATH`
+- **THEN** `run_routine("jira_eod", ...)` returns `status: blocked` with a reason naming the missing configuration, not a crash from the missing binary — because the binary is never invoked
+
+#### Scenario: Dependent routine blocks on a borrowed, unconfigured mechanism
+- **WHEN** `work_digest` is configured with `use_github: true` but `pr_followup`'s own `access` is `"unconfigured"`
+- **THEN** `work_digest` reports `status: blocked` naming the missing GitHub configuration, without ever invoking `claude`
+
+### Requirement: The runtime capability set is built from routine + configured access + configured scope + configured mutation permission
+`scripts/groundwork_routines.py` SHALL build each routine's `--allowedTools` allowlist from its own configured access mechanism, never from one flat global allowlist shared across all routines. A routine that never mutates (`pr_followup`, `news`, `weekly_status`, `work_digest`, `doc_drift`) SHALL NEVER be granted a write-shaped tool for any external system, regardless of configuration.
+
+#### Scenario: PR follow-up never receives a GitHub mutation tool
+- **WHEN** `pr_followup`'s capability set is built for any configured access mechanism (`gh_cli` or `github_mcp`)
+- **THEN** the resulting tool list contains only read-shaped GitHub operations, never a create/merge/update/close/comment-shaped one
+
+#### Scenario: Each routine's grant differs by its own configuration
+- **WHEN** `news`, `doc_drift`, and a configured `jira_eod` are each asked for their capability set
+- **THEN** `news` receives `WebSearch`/`WebFetch` and no Jira/GitHub-shaped tool, `doc_drift` receives only base repository-read tools, and `jira_eod` receives the base tools plus exactly its own configured Jira access mechanism's tools — no routine's grant is copied from another's
+
+### Requirement: Routine completion status is semantic, never exit-code-only
+Every routine's prompt SHALL require a structured `ROUTINE RESULT` block (`Status: COMPLETE|PARTIAL|BLOCKED|FAILED|SKIPPED`) in its output. A `claude -p` exit code of 0 SHALL NOT by itself be treated as `COMPLETE`: a missing or unparseable block on an otherwise-successful process run SHALL be recorded as `FAILED`, and a block whose own `Status` is `BLOCKED` or `PARTIAL` SHALL be recorded as exactly that, never upgraded.
+
+#### Scenario: Exit 0 with a BLOCKED block is recorded as blocked
+- **WHEN** a routine's `claude -p` process exits 0, but its own output's `ROUTINE RESULT` block reports `Status: BLOCKED`
+- **THEN** the routine run's recorded status is `blocked`, not `complete`
+
+#### Scenario: Exit 0 with no result block is recorded as failed
+- **WHEN** a routine's `claude -p` process exits 0 but its output contains no parseable `ROUTINE RESULT` block
+- **THEN** the routine run's recorded status is `failed`, with a reason naming the missing block — never silently treated as `complete`
+
+### Requirement: Routine output is stored separately from telemetry, with bounded retention
+A routine's own useful output (the digest/report/status content) SHALL be stored separately from its telemetry record, under an owner-only directory, retained only for a bounded number of the most recent runs per routine, and retrievable on demand. Telemetry SHALL continue to contain no routine output content.
+
+#### Scenario: Result content never appears in telemetry
+- **WHEN** a routine completes and both its telemetry record and its stored result are inspected
+- **THEN** the telemetry record contains no `content` field and none of the routine's actual output text, while the stored result file does contain that text
+
+#### Scenario: Latest result is retrievable
+- **WHEN** `groundwork_routines.py latest <name>` (or `setup.sh --routines <name>`) is run after a routine has completed at least once
+- **THEN** it prints that routine's most recent semantic status and its actual stored output content
+
+#### Scenario: Retention is bounded
+- **WHEN** a routine has run more times than the configured retention limit
+- **THEN** only the most recent runs up to that limit are kept on disk; older result files are pruned automatically
+
+### Requirement: Setup only asks about routines the user actually enables
+The setup/configure flow SHALL ask routine-specific configuration questions only for routines the user has enabled, and SHALL NOT ask about a routine's fields when the user declines to enable it.
+
+#### Scenario: Declining a routine asks nothing further
+- **WHEN** the user answers "No" to enabling a given routine during setup or `--configure`
+- **THEN** no further question is asked for that routine, and its configuration is saved as disabled with no other fields required
+
+### Requirement: `--configure` allows revisiting any single routine's configuration without reinstalling
+`setup.sh --configure` SHALL offer a way to reconfigure one specific routine's fields (identity, scope, access, schedule, etc.) in place, without requiring a backup or reinstall of Groundwork.
+
+#### Scenario: Reconfiguring one routine leaves everything else untouched
+- **WHEN** `--configure` is used to change only `pr_followup`'s GitHub identity
+- **THEN** `jira_eod`, `news`, and every other already-configured routine's fields are unchanged, and no new backup directory is created
