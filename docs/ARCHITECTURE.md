@@ -132,7 +132,9 @@ Claude Code stops re-running any Stop hook after 8 consecutive blocks, so the ga
 
 On every `SessionStart` (startup, resume, clear, compact, fork) it injects, as `additionalContext`, only facts it can read from the repository: git branch/HEAD/ahead-behind/dirty counts/recent commits, each active OpenSpec change with `<done>/<total>` tasks (flagging a complete-and-uncommitted change as "review gate applies"), the signal files and directories present, and the verification commands the repo declares (Makefile targets, package scripts, pytest/ruff/mypy in pyproject, tox/nox, Go/Rust, Terraform directories, CI workflows). Capped at 2,500 characters, 3-second git timeouts, no network, fail-open, `GROUNDWORK_SNAPSHOT=off` to disable. It complements ECC's SessionStart bootstrap (saved session summary + instincts, matched by worktree) rather than duplicating it: ECC remembers what the last session *said*, the snapshot shows what the repository *is*.
 
-Continuation itself is the rule in `engineering-workflow.md` §7: reconstruct from snapshot → git → OpenSpec → docs → tests/CI/IaC → implementation → only then session files and memory; produce the DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED table; act on code over docs. There is deliberately no Groundwork state file, database, or daemon — OpenSpec tasks and git are the record.
+Continuation itself is the rule in `engineering-workflow.md` §7: reconstruct from snapshot → git → OpenSpec → docs → tests/CI/IaC → implementation → only then session files and memory; produce the DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED table; act on code over docs. For OpenSpec-tracked work, OpenSpec tasks and git remain the record — still no state file there.
+
+**Investigation continuity (2.0), for work not tracked by an OpenSpec change**: the same hook's `investigation_path()`/`investigation_facts()` compute a deterministic path (`~/.claude/groundwork/investigations/<repo-slug>-<hash>.md`, from `git rev-parse --show-toplevel`) and surface that file's content — capped, control-character-stripped — as part of the same `additionalContext`, when one exists. This is the one deliberate, small, capped exception to "no Groundwork state file": a single per-repository Markdown file with an exact field list (objective, proven facts, evidence references, decisions, rejected hypotheses with reason, active hypotheses, files changed, validation results, blockers, uncertainty, remaining tasks, next action) — never chain-of-thought — created lazily by the model's own write, exactly like `telemetry/`/`reports/`, not installed or managed by `install.sh`. `engineering-workflow.md` §7 states the writing/reopening rules, most importantly: a hypothesis recorded as rejected stays rejected on recovery unless new evidence specifically contradicting the rejection reason is stated; current repository/runtime evidence always outranks what was saved.
 
 ## Execution model — how Claude chooses main / subagent / team
 
@@ -149,12 +151,17 @@ Every Groundwork capability has exactly one owner. No two components define the 
 | Task routing (10 categories) | Groundwork (`rules/task-routing.md`) | Unchanged in 2.0 |
 | Output truth (evidence, validation, completion) | Groundwork (`rules/output-contract.md`) | Never owned by a native output style — see design.md §H |
 | Evidence taxonomy | Groundwork (`rules/evidence-policy.md`) | Extended 2.0: `CONFLICTING EVIDENCE`, `UNKNOWN` |
-| Independent review (presence) | Groundwork (`hooks/require_material_review.py`) | Unchanged mechanism |
+| Independent review (presence + verdict) | Groundwork (`hooks/require_material_review.py`) | Strengthened 2.0: a MUST FIX finding requires a fresh review reporting `Must-fix: 0` (parsed from its own `REVIEW RESULT` block, `rules/output-contract.md`), not just an edit and a test re-run |
 | Protected-branch/push safety | Groundwork (`hooks/block_protected_push.py`) | Unchanged |
-| Session continuity snapshot | Groundwork (`hooks/groundwork_session_snapshot.py`) | Unchanged mechanism |
+| Session continuity snapshot | Groundwork (`hooks/groundwork_session_snapshot.py`) | Extended 2.0: investigation continuity (`investigation_path()`/`investigation_facts()`) for non-OpenSpec-tracked work — see the session-snapshot section above |
 | Telemetry | Groundwork (`hooks/groundwork_telemetry.py`) | Unchanged |
 | Health dashboard | Groundwork (`scripts/groundwork_report.py`) | Unchanged |
 | Installer/upgrade/rollback | Groundwork (`install.sh`/`setup.sh`) | Strengthened 2.0: corrected Node floor, enforced in `install.sh` itself |
+| ECC install/curation policy | Groundwork (`install.sh`, documented in `ecc-capability-policy`) | Corrected 2.0: ECC installs unpinned from GitHub `main` (pinned since 2.1, see below); no upstream curation mechanism exists on this install path, so the full catalog ships, governed only by `hook_profile` and whole-plugin disable |
+| Repository-understanding discovery | Groundwork (`playbooks/implement.md`/`deploy.md`/`design.md`) | New 2.0: one shared, proportional discovery checklist referenced by all three, not restated |
+| Builder execution roles | Groundwork (`rules/engineering-workflow.md` §6) | New 2.0: four dynamic personas (Infrastructure/Platform/Delivery/Application Engineer) — never a permanent `.claude/agents/*.md` file |
+| Presentation/output-style truth | Groundwork (`rules/output-contract.md`'s truth/style invariant + `playbooks/document.md`) | New 2.0: a native output style may change tone/format, never Groundwork's evidence or completion rules |
+| Teach/learn | Groundwork (`playbooks/explain.md`) | New 2.0: draws only on session/investigation-continuity evidence already established; no new storage |
 | ECC's specialist agents/skills | ECC | Installed, not forked or vendored |
 | MCP/external tool access | The task's own environment | Groundwork installs nothing by default; `docs/INTEGRATIONS.md` (2.1) documents, never wires |
 | Credential handling | The user's own MCP/CLI configuration | Never Groundwork |
@@ -163,7 +170,7 @@ Every Groundwork capability has exactly one owner. No two components define the 
 | Capability/Routines configuration | Groundwork (`scripts/groundwork_config.py`, `setup.sh --configure`, 2.1) | New in 2.1; one human-readable `config.json`; shipped profiles never contain secrets, `validate` checks a hand-edited file on request |
 | Dependency version pinning (ECC) | Groundwork (`install.sh`, 2.1) | Pinned via `#ref`; unchanged for OpenSpec (already npm-version-pinned) |
 
-This table is extended, not rewritten, as later phases ship (2.0: ECC capability curation, repository understanding, builder execution roles, presentation/output-style, teach/learn; 2.1: capability resolution, Routines, capability configuration, ECC pinning) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else.
+This table is extended, not rewritten, as later phases ship (2.0: review-evidence strengthening, investigation continuity, the ECC install-policy correction, repository understanding, builder execution roles, presentation/output-style, teach/learn; 2.1: capability resolution, Routines, capability configuration, ECC pinning) — each documented here only once actually implemented, per the same evidence-first rule this document follows for everything else. SRE-capability consolidation and D5's deferred Tier-2 safety guards added no new owner (composition and an explicit non-build respectively) and so have no row here.
 
 ## Autonomy — when Groundwork asks versus proceeds
 

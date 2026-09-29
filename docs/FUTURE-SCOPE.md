@@ -81,8 +81,9 @@ Long sessions degrade. The aim is not to preserve every token; it is **fresh rea
 
 A future session continues an existing project without the old chat, using in order: current repository/runtime evidence → Git state and history → OpenSpec/task artifacts → project documentation → tests → Claude native memory → minimal continuation information only if genuinely needed. Stale memory never overrides current repository or runtime evidence. Old Agent Team processes need not survive a session; a fresh session reconstructs state and spawns new agents if needed.
 
-**CURRENT (1.1.0):** `engineering-workflow.md` §7 and the snapshot hook implement this order. There is deliberately no Groundwork state file.
-**FUTURE:** add a minimal continuation record only if a pilot shows reconstruction from the repository losing something material.
+**CURRENT (1.1.0):** `engineering-workflow.md` §7 and the snapshot hook implement this order.
+**CURRENT (2.0):** the minimal continuation record described below as FUTURE has been built, for the narrow case it names — non-OpenSpec-tracked work only. `hooks/groundwork_session_snapshot.py`'s `investigation_path()`/`investigation_facts()` surface one small, capped, per-repository Markdown file (objective, proven facts, evidence, decisions, active/rejected hypotheses with reason, files changed, validation results, blockers, uncertainty, remaining tasks, next action — never chain-of-thought) at SessionStart, when one exists; `engineering-workflow.md` §7 states the writing/reopening rules. It is not a database or daemon, is not installed or managed by `install.sh` (created lazily by the model's own write, like `telemetry/`/`reports/`), and current repository/runtime evidence still always outranks it. OpenSpec-tracked work still has no separate Groundwork state file — task checklists and git remain the record there.
+**FUTURE (superseded by the above for the case it named):** ~~add a minimal continuation record only if a pilot shows reconstruction from the repository losing something material~~ — done in 2.0, see above.
 
 ## 8. Response style
 
@@ -158,7 +159,7 @@ None of these were marked high-priority in the 2.1 brief; building all of them u
 | OpenSpec / ECC | proportional use; no duplication | unchanged |
 | Execution model | main / subagent / team rule with fallback | observe live team use before any team hook |
 | Context engineering | snapshot + delegation guidance | isolated-context defaults; native memory; no custom store |
-| Continuity | repo-first order, no state file | minimal record only if a pilot proves the need |
+| Continuity | repo-first order; **2.0**: one small, capped state file for non-OpenSpec-tracked work only (see §7) | OpenSpec-tracked work still has no separate state file — unchanged |
 | Response style | completion block for engineering only | domain shapes; core principles move with the core |
 | MCP | none required | approved list, least privilege, on demand |
 | Safety | Git guard, review gate, deny lists, data framing | more deterministic guards, one per proven gap |

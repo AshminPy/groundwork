@@ -6,6 +6,23 @@ Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs 
 
 Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) — see [CREDITS.md](CREDITS.md) for exactly what's original here versus what's installed from upstream.
 
+## Version history
+
+**Groundwork 2.1** (current) added context engineering, capability resolution, scheduled Routines, a setup-time capability configurator, and ECC version pinning, on the same small-footprint model below — see [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) and [CHANGELOG.md](CHANGELOG.md) for full detail.
+
+**Groundwork 2.0 — what shipped** moved from a lightweight engineering harness to a more complete evidence-first SRE/CloudOps workflow, on the same small-footprint model: rule text and composition first, new files only when nothing existing can satisfy the requirement. Full detail, live-validation evidence and exact test/task status: [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE-REPORT-2.0.md](docs/RELEASE-REPORT-2.0.md).
+
+- **Repository-aware engineering** — before proposing infrastructure/platform/delivery work, Groundwork inspects the existing module/pipeline structure, naming and label conventions, environment organization, IAM/networking and state/backend patterns, CI/CD conventions, and the closest existing analogous implementation, and follows them unless they're demonstrably unsafe or broken.
+- **Dynamic engineering roles** — automatically reasons from an Infrastructure, Platform, Delivery, or Application Engineer perspective when the task calls for it, as a rule-text persona selected per task — never a permanent agent file, so there's no agent sprawl to maintain.
+- **Stronger evidence model** — added `CONFLICTING EVIDENCE` and `UNKNOWN` to the evidence labels (see "Why this exists" below).
+- **Stronger independent review** — a MATERIAL change with a MUST FIX finding now requires fix → re-run the affected validation → a **fresh** independent re-review confirming the finding is resolved, not just an edit and a test run, before the change can be called complete.
+- **Investigation continuity** — for work not tracked by an OpenSpec change, a small, capped per-repository file (objective, proven facts, evidence, decisions, active/rejected hypotheses with reasons, files changed, validation results, blockers, next action) survives context compaction and fresh sessions — never chain-of-thought, and current repository/runtime evidence always outranks what was saved. Rejected hypotheses stay rejected unless new evidence actually contradicting the original reason is stated, not silently re-proposed as still-open.
+- **SRE/CloudOps workflow composition** — troubleshooting, RCA, deployment, validation, audit, and documentation compose the existing playbooks, curated ECC agents/skills, repository-understanding, and MCP/CLI tool access; this shipped zero new agent or skill files.
+- **Clearer execution boundaries** — read-only discovery stays always allowed; nonprod mutation explicitly authorized by the task proceeds under existing permissions; production, IAM, data-destructive, or paid-resource changes require explicit authorization, separated from a merely-reversible file edit. (A further tier of deterministic, naming-pattern-based guards for production/IAM operations was designed but deliberately not built — heuristic production-detection by name risks false confidence; see [docs/FUTURE-SCOPE.md](docs/FUTURE-SCOPE.md).)
+- **Completion truth extended to builder work** — the existing Code / Tests / Reviewed / Merged / Deployed / Live-validated facts now explicitly cover infrastructure/platform/delivery work too, with a closed loop: a failed runtime validation routes to root-cause analysis, a fix, and a re-validation before any completion claim.
+- **Presentation support** — technical work can be turned into a Markdown/Mermaid presentation by default (portable, no plan/tool gate), or handed to an installed document-generation plugin for a bundled `.pptx`/`.docx` when the user wants one and it's actually present — the underlying technical truth is the same regardless of how it's presented; a native Claude Code output style may change tone, never that truth.
+- **Teach/Learn mode** — Groundwork can explain what was fixed, why it failed, and what evidence proved it, using only the actual evidence that session (or a recoverable investigation file) established — and says plainly when that evidence trail isn't available, rather than inventing a plausible-sounding story.
+
 ## Why this exists
 
 ECC ships dozens of agents and hundreds of skills (run `claude plugin details ecc@ecc` for the exact count — installed pinned to a tested ref since Groundwork 2.1, so the number only moves when Groundwork itself re-pins it; see [ARCHITECTURE.md](docs/ARCHITECTURE.md)) that are excellent once invoked — but nothing invokes them on its own. Left alone, a plain request to "add X" gets implemented without a plan, without tests, without review, and the final report says it's done regardless. OpenSpec gives you a real spec-driven change lifecycle, but only when you run `/opsx:*` — and even then, nothing stops an agent from claiming a change is complete with a failing test still in the suite. And neither one tells Claude *what a good design is*, *when to delegate*, or *how to pick a project back up next week*.
@@ -14,7 +31,7 @@ Groundwork closes exactly those gaps, and nothing else:
 
 1. **Route by risk, not by ceremony.** A one-line fix shouldn't get a spec. A production-facing change should. `rules/engineering-workflow.md` defines three tiers and what each one requires.
 2. **Design for the change you can see, not the one you imagine.** `rules/architecture-quality.md` gives the governing principle — the smallest design that satisfies today's requirement while keeping low-cost paths for foreseeable change — plus the questions to answer before material work and the rule for variation points (environments, providers, clusters, models, regions, tenants belong behind configuration, not hard-coded).
-3. **Evidence beats intuition, always.** Every material technical decision cites a real source; every completion claim shows the command and the result; validation climbs a ladder derived from the project's own tooling and ends at the real runtime when runtime matters. `rules/evidence-policy.md` sets the rules and the labels (VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / RUNTIME VALIDATION REQUIRED).
+3. **Evidence beats intuition, always.** Every material technical decision cites a real source; every completion claim shows the command and the result; validation climbs a ladder derived from the project's own tooling and ends at the real runtime when runtime matters. `rules/evidence-policy.md` sets the rules and the labels (VERIFIED / UNVERIFIED / ASSUMPTION / INFERENCE / CONFLICTING EVIDENCE / UNKNOWN / RUNTIME VALIDATION REQUIRED).
 4. **Delegation is Claude's decision, not the user's.** The workflow rule says when to stay in the main session, when to use a subagent, and when Claude Code's native Agent Teams are justified — you never have to say "create four agents".
 5. **Independent review is enforced, not requested.** `hooks/require_material_review.py` is a Stop hook that will not let a session end if a spec-driven change is fully implemented and nothing that looks like a reviewer — an ECC reviewer, a subagent, or an Agent Team reviewer teammate — ever ran against it. See [docs/VALIDATION.md](docs/VALIDATION.md).
 6. **Continuation comes from the repository.** `hooks/groundwork_session_snapshot.py` injects a deterministic snapshot at every session start — branch, dirty files, OpenSpec task progress, the verification commands the repo declares — and the workflow rule tells Claude how to rebuild a DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED picture from git, OpenSpec, docs, tests and code before touching anything.
@@ -211,9 +228,10 @@ groundwork/
 ├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
 ├── hooks/
 │   ├── block_protected_push.py        denies push to main/master/production + force-push
-│   ├── require_material_review.py     denies finishing a complete-but-unreviewed change (subagent, skill, or teammate reviewers)
-│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ harness version and profile) at session start
-│   └── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
+│   ├── require_material_review.py     denies finishing a MATERIAL change without a fresh independent review reporting Must-fix: 0
+│   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ investigation continuity, harness version, profile) at session start
+│   ├── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
+│   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
@@ -233,6 +251,8 @@ groundwork/
 └── docs/
     ├── ARCHITECTURE.md
     ├── VALIDATION.md                  real test results and live runs, including the failures on the way
+    ├── RELEASE-REPORT-2.0.md          Groundwork 2.0 release-readiness report: per-capability evidence, test results, known limitations
+    ├── RELEASE-REPORT-2.1.md          Groundwork 2.1 release report: same shape, this version's evidence
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
     ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated
