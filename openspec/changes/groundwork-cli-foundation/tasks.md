@@ -54,5 +54,6 @@
       validate --strict` re-confirmed valid.
 
 ## 6. Report
-- [x] 6.1 Commit, push, create draft PR (release-program-required 30-item report format below),
-      do not merge — subscribed PR to this session for CI/review monitoring.
+- [x] 6.1 Commit, push, create draft PR scoped to Phase 1's actual diff, do not merge — subscribed
+      PR to this session for CI/review monitoring. (The release program's full end-of-program
+      report format applies once all five phases are complete, not to a single phase's PR.)
