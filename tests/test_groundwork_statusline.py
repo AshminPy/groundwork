@@ -192,8 +192,9 @@ def test_missing_integrations_cache_shows_nothing_never_infers() -> None:
     finish()
 
 
-def test_stale_integrations_cache_shows_age_never_claims_live() -> None:
-    print("groundwork_statusline.py — a stale cached entry surfaces its age instead of looking live")
+def test_fresh_cached_integration_visibly_communicates_age() -> None:
+    print("groundwork_statusline.py — even a FRESH cached integration observation visibly shows its "
+          "age, so CACHED is never visually mistaken for LIVE")
     mod = load_module()
     with tempfile.TemporaryDirectory() as tmpdir:
         mod.CLAUDE_DIR = Path(tmpdir)
@@ -201,15 +202,57 @@ def test_stale_integrations_cache_shows_age_never_claims_live() -> None:
         mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
         mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
         mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        fresh_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30))  # 30s ago, well under STALE_AFTER_S
         _write_json(mod.INTEGRATIONS_CACHE_PATH, {
             "schema": 1,
             "integrations": {"GitHub": {"available": True, "configured": False, "connected": True,
-                                         "used": None, "summary": "CONNECTED",
-                                         "checked_at": "2020-01-01T00:00:00Z"}},
+                                         "used": None, "summary": "CONNECTED", "checked_at": fresh_ts}},
         })
         out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
-        check("stale entry's rendering includes a visible age annotation (parenthesized)",
-              "GitHub" in out and "(" in out and ")" in out, out)
+        check("fresh entry's rendering includes an age annotation (not bare 'GitHub ●' with nothing after it)",
+              "GitHub" in out and mod._age_label(30) in out, out)
+        check("fresh entry's age carries no stale marker ('!')",
+              "!" not in out.split("GitHub", 1)[1].split("│")[0], out)
+        plain_out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "plain_text": True})
+        check("fresh entry in plain-text mode also shows its age",
+              "GitHub" in plain_out and mod._age_label(30) in plain_out, plain_out)
+    finish()
+
+
+def test_stale_integrations_cache_remains_visibly_distinct_from_fresh() -> None:
+    print("groundwork_statusline.py — a stale cached entry stays visually distinguishable from a "
+          "merely-fresh one, not just a bigger number")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+
+        fresh_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _write_json(mod.INTEGRATIONS_CACHE_PATH, {
+            "schema": 1,
+            "integrations": {"GitHub": {"available": True, "configured": False, "connected": True,
+                                         "used": None, "summary": "CONNECTED", "checked_at": fresh_ts}},
+        })
+        fresh_out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+
+        _write_json(mod.INTEGRATIONS_CACHE_PATH, {
+            "schema": 1,
+            "integrations": {"GitHub": {"available": True, "configured": False, "connected": True,
+                                         "used": None, "summary": "CONNECTED", "checked_at": "2020-01-01T00:00:00Z"}},
+        })
+        stale_out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+
+        check("stale rendering carries a distinguishing marker ('!') the fresh rendering does not",
+              "!" in stale_out and "!" not in fresh_out, (fresh_out, stale_out))
+        check("stale age itself is shown (old checked_at yields a multi-day age)",
+              "d" in stale_out.split("GitHub", 1)[1], stale_out)
+
+        plain_stale = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "plain_text": True})
+        check("plain-text stale rendering is still distinguishable from fresh (marker survives plain_text)",
+              "!" in plain_stale, plain_stale)
     finish()
 
 
@@ -474,7 +517,8 @@ if __name__ == "__main__":
         test_full_smoke_stdin_to_stdout, test_rendering_compact_and_detailed,
         test_plain_text_fallback_has_no_unicode_symbols, test_integrations_section_hidden,
         test_missing_integrations_cache_shows_nothing_never_infers,
-        test_stale_integrations_cache_shows_age_never_claims_live,
+        test_fresh_cached_integration_visibly_communicates_age,
+        test_stale_integrations_cache_remains_visibly_distinct_from_fresh,
         test_malformed_and_missing_state_fails_safe,
         test_two_session_ids_never_leak_last_turn_state,
         test_session_with_no_record_degrades_cleanly,

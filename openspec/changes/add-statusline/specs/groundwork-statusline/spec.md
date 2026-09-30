@@ -18,15 +18,19 @@ The system SHALL classify every displayable field as exactly one of LIVE (suppli
 - **THEN** its rendering uses a documented, consistent visual convention that a live field does not use, so a reader cannot mistake it for the current, in-progress turn's state
 
 ### Requirement: Integration Catalog readiness is cache-only in the statusLine
-The statusLine process SHALL NOT invoke `claude mcp list`, `gh auth status`, or any other Integration Catalog probe. It SHALL read Integration Catalog readiness only from a pre-computed cache file. Each cached integration's readiness SHALL carry its own `checked_at` timestamp. If no cache file exists, or a given integration has no entry in it, the statusLine SHALL display no readiness information for that integration (or an explicit unknown/not-yet-refreshed indicator) rather than omitting it silently in a way indistinguishable from "not configured."
+The statusLine process SHALL NOT invoke `claude mcp list`, `gh auth status`, or any other Integration Catalog probe. It SHALL read Integration Catalog readiness only from a pre-computed cache file. Each cached integration's readiness SHALL carry its own `checked_at` timestamp. If no cache file exists, or a given integration has no entry in it, the statusLine SHALL display no readiness information for that integration (or an explicit unknown/not-yet-refreshed indicator) rather than omitting it silently in a way indistinguishable from "not configured." Every displayed integration readiness observation SHALL visibly communicate that it is a CACHED (not LIVE) observation, via a compact age indicator shown even while the entry is still fresh — not only once it crosses the staleness threshold — so CACHED readiness is never visually indistinguishable from a LIVE field. This indicator SHALL remain compact (no verbose per-entry labels such as "CACHED:").
 
 #### Scenario: No cache file exists yet
 - **WHEN** the Integration Catalog cache file does not exist (e.g. a fresh install that has never run install/configure/doctor)
 - **THEN** the statusLine displays no integration readiness, or an explicit "not yet refreshed" indicator, and never infers a readiness state
 
+#### Scenario: A fresh cache entry still shows it is cached
+- **WHEN** a cached integration's `checked_at` is recent (younger than the staleness threshold)
+- **THEN** the statusLine's rendering still shows a compact age indicator for that entry (e.g. an elapsed-time annotation), so it is never mistaken for a LIVE observation, while remaining visually distinct from a stale entry
+
 #### Scenario: Cache exists but is stale
 - **WHEN** a cached integration's `checked_at` is older than a documented staleness threshold
-- **THEN** the statusLine's rendering makes that age visible (e.g. an elapsed-time annotation), and never presents the cached value as current/live
+- **THEN** the statusLine's rendering makes that age visible (e.g. an elapsed-time annotation) AND carries an additional, distinct marker that a merely-fresh entry's rendering does not — so a stale entry never merely shows a bigger number — and never presents the cached value as current/live
 
 #### Scenario: Cache refresh happens only at existing lifecycle points
 - **WHEN** the Integration Catalog cache is refreshed

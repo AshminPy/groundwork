@@ -292,8 +292,17 @@ def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
         age_s = _cache_age_seconds(checked_at) if isinstance(checked_at, str) else None
         label = SUMMARY_PLAIN[summary] if plain else SUMMARY_SYMBOL[summary]
         text = f"{name} {label}"
-        if age_s is not None and age_s >= STALE_AFTER_S:
-            text += f" ({_age_label(age_s)})"
+        # Every cached observation shows its age — even fresh — so CACHED is never visually
+        # mistaken for LIVE (a fresh cache entry is still "connected as of a moment ago", not
+        # "connected right now"). A stale entry (>= STALE_AFTER_S) additionally gets a leading
+        # "!" on the age itself, so it stays distinguishable from a merely-fresh one at a glance,
+        # without a verbose "CACHED:"/"stale:" label.
+        if age_s is not None:
+            age_label = _age_label(age_s)
+            if age_s >= STALE_AFTER_S:
+                age_label = "!" + age_label
+            sep = " - " if plain else " · "
+            text += f"{sep}{age_label}"
         entries.append(text)
     if not entries:
         return None

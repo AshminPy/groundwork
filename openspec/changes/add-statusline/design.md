@@ -57,6 +57,9 @@ Per Context above, `groundwork_config.py init --force` unconditionally rewrites 
 **7. `statusLine` is merged into `settings.json` additively — set only if the key is absent.**
 Matches every existing `merge_settings.py` rule's philosophy (never clobber a user's own choice). A user who has already configured a custom `statusLine` keeps it untouched; Groundwork's own statusLine is offered only into an empty slot.
 
+**8. [Correction, post-implementation] A fresh cached Integration Catalog entry now visibly shows its age too, not only a stale one.**
+The first implementation only annotated a cached integration's rendering once it crossed the staleness threshold; a fresh entry (e.g. `GitHub ●`) carried no visible marker distinguishing it from a hypothetical LIVE reading. Owner review on PR #26 caught that this could visually imply CONNECTED/CONFIGURED/AVAILABLE is a live observation even though it always means "as of the last cached check." Corrected: `_fmt_integrations()` now appends a compact age (`· 4m` / `- 4m` in plain mode) to every cached entry, fresh or stale; a stale entry additionally gets a leading `!` on the age itself (`· !2h`) so it stays visually distinct from a merely-fresh one without a verbose per-entry label. No change to the underlying readiness model, the cache schema, or the refresh lifecycle (still install/configure/doctor-only, no scheduling).
+
 ## Data-source contract (summary; full field table in spec.md)
 
 | Timing | Fields | Source |
