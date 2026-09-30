@@ -50,11 +50,16 @@
       `doctor`/`list`/the stored result file/telemetry all correctly reported the new PARTIAL and
       BLOCKED run results afterward, with the readiness-time and run-result vocabularies kept
       visibly distinct as designed
-- [ ] 4.4 Independent fresh-context review — focus: incorrect routine state, bypassed
-      readiness/safety checks, duplicate execution engine, permission handling, unattended
-      execution hanging, destructive behavior, credential exposure, incorrect CLI dispatch,
-      configuration loss, materially inaccurate documentation. Fix MUST FIX only.
+- [x] 4.4 Independent fresh-context review — verdict **approve, 0 MUST FIX**. The loop-variable
+      shadowing risk named in the review brief was checked line-by-line and adversarially
+      reproduced (the reviewer deliberately reintroduced the bug in a scratch copy and confirmed
+      `test_doctor_name_filter` fails correctly against it — the test's differential design, not
+      an accident, catches this class of bug). No execution-engine duplication, no readiness/
+      safety bypass, no new writes to `config.json`/`settings.json`, `install.sh` confirmed
+      unchanged, documentation confirmed accurate against the real diff. One NICE TO HAVE (the
+      hand-written `--help` summary line can drift — an already-accepted Phase 2 precedent, not
+      new risk); no fix needed.
 
 ## 5. Report
-- [ ] 5.1 Commit, push `feat/groundwork-routine-cli-ux`, create a draft PR — do not merge, do not
-      start release work
+- [x] 5.1 Commit, push `feat/groundwork-routine-cli-ux`, create a draft PR — do not merge, do not
+      start release work. PR #34, draft.
