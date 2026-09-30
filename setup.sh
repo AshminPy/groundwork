@@ -49,6 +49,7 @@ ROUTINE_NAME=""
 BACKUP_PATH=""
 CONFIG_PY="$CLAUDE_DIR/groundwork/bin/groundwork_config.py"
 ROUTINES_PY="$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
+INTEGRATIONS_PY="$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -689,6 +690,14 @@ verify_install() {
 verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to verify_install()
   if [ ! -f "$CLAUDE_DIR/groundwork/config.json" ]; then
     line "Capabilities" "NOT CONFIGURED" "no config.json — nothing selected (./setup.sh --configure to set one up)"
+    # The Integration Catalog reports real, config-independent observations too (e.g. a CLI binary
+    # actually on PATH) — it must still render here, not only once config.json exists (found live:
+    # this whole branch used to `return` before ever reaching it).
+    if [ -f "$INTEGRATIONS_PY" ]; then
+      say ""
+      say "  -- Integrations --"
+      python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+    fi
     return
   fi
   local cfg="$CLAUDE_DIR/groundwork/config.json"
@@ -728,6 +737,13 @@ for name, s in cfg.get('skills', {}).items():
     # one place; this just indents and prints it. `|| true` — a routine-status failure must not
     # abort the rest of --doctor (same discipline as the Capabilities section above).
     python3 "$ROUTINES_PY" doctor 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+  fi
+  if [ -f "$INTEGRATIONS_PY" ]; then
+    say ""
+    say "  -- Integrations --"
+    # Read-only: the Integration Catalog's own `list` output, indented — same fail-safe discipline
+    # as the Routines section above (a catalog-probe failure must not abort the rest of --doctor).
+    python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
   fi
 }
 
