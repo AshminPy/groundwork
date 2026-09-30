@@ -32,7 +32,13 @@
 - **What security boundary exists?** No credential of any kind; the GitHub Releases API is called
   unauthenticated (public repo, same as the existing release-verification workflow); no ref other
   than a real, published, non-draft, non-prerelease release tag is ever accepted; a fetched
-  archive's members are validated against path traversal before extraction; `--no-install-prereqs`
+  archive's members are validated against path traversal before extraction and every symlink/
+  hardlink/device member is rejected outright — this session's own independent review found and
+  live-reproduced a real escape (a symlink member created early in tar order made a later member
+  write through it to an arbitrary path outside the extraction directory, including being able to
+  substitute an attacker-controlled `setup.sh`), fixed by restricting `_safe_extract` to plain
+  files/directories only, re-verified against the exact reproduction, with a regression test added
+  (`tests/test_groundwork_update.py::test_safe_extract_rejects_path_traversal`); `--no-install-prereqs`
   is always passed so no OS package is ever installed by this code, and no `sudo` is invoked.
 - **Scaling/cost implications?** One unauthenticated GitHub API call per `--check`/`update`
   invocation, run by the user on demand — no scheduled polling, no added load.

@@ -210,6 +210,38 @@ def test_safe_extract_rejects_path_traversal() -> None:
                 check(f"member '{bad_name}' leaves no file outside the dest dir",
                       not (Path(dest).parent / "evil.txt").exists() and not (Path(dest).parent / "evil").exists())
 
+    # A symlink member is rejected outright, not just path-checked: the path check alone only
+    # validates where a member is *created*, not what a symlink then *points to* once extracted —
+    # a symlink created early in tar order can make a later, path-valid-looking member (e.g.
+    # "link/payload") write through it to an arbitrary location outside dest, since at validation
+    # time (before extraction) no symlink exists on disk yet for resolve() to follow. A real,
+    # independently-reproduced escape found by this change's own independent review, not a
+    # theoretical concern — this regression test is the PoC that review used, kept as a test.
+    with tempfile.TemporaryDirectory() as outside_dir:
+        escape_target = Path(outside_dir) / "sensitive"
+        escape_target.mkdir()
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            link = tarfile.TarInfo(name="link")
+            link.type = tarfile.SYMTYPE
+            link.linkname = str(escape_target)  # absolute — the proven-live PoC shape
+            tf.addfile(link)
+            data = b"malicious payload"
+            info = tarfile.TarInfo(name="link/escaped.py")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        buf.seek(0)
+        with tempfile.TemporaryDirectory() as dest:
+            with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+                raised = False
+                try:
+                    mod._safe_extract(tf, Path(dest))
+                except ValueError:
+                    raised = True
+                check("a symlink archive member is rejected before extraction, never silently followed", raised)
+        check("the symlink member writes nothing through to its target outside dest",
+              not (escape_target / "escaped.py").exists(), escape_target)
+
     # A well-formed archive (the normal case) still extracts cleanly.
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:

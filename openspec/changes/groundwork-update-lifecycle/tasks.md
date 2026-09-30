@@ -59,11 +59,14 @@
       update; `groundwork rollback` restored the complete pre-update installation (VERSION back to
       2.1.0, unrelated settings key intact), not just the VERSION file; no leftover temp
       extraction directory after either run
-- [ ] 4.4 Independent fresh-context review focused on the material-risk list (wrong release
-      source, unsafe version resolution, arbitrary-ref/code execution, path traversal, subprocess
-      injection, credential exposure, config/settings loss, partial/broken update,
-      `CLAUDE_CONFIG_DIR` breakage, rollback corruption, duplicated installer logic, materially
-      inaccurate docs) — fix MUST FIX only
+- [x] 4.4 Independent fresh-context review focused on the material-risk list — found 1 MUST FIX:
+      a symlink archive member bypassed `_safe_extract`'s path-traversal guard (proven live: a
+      symlink member created early in tar order let a later member write through it to an
+      arbitrary path outside the extraction directory, including substituting `setup.sh` itself).
+      Fixed by rejecting any non-regular-file/non-directory tar member outright in `_safe_extract`;
+      fix re-verified against the exact reproduction; regression test added; full suite (104) and
+      `openspec validate --strict` re-run green; a confirmation review dispatched to verify the fix
+      is sound and closes the vulnerability class, not just the one reproduction.
 
 ## 5. Report
 - [ ] 5.1 Commit, push `feat/groundwork-update-lifecycle`, create a draft PR — do not merge, do

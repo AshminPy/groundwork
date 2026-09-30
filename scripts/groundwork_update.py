@@ -139,9 +139,19 @@ def _top_changelog_version(path: Path):
 def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
     """Rejects any archive member whose resolved path would land outside dest (path traversal /
     "zip-slip"), before extracting anything. GitHub's own tarballs are well-formed, but a release
-    tarball is still content fetched over the network — verified defensively, not assumed safe."""
+    tarball is still content fetched over the network — verified defensively, not assumed safe.
+
+    Symlink/hardlink members are rejected outright, not just path-checked: the path check alone
+    only validates where a member is *created*, not what a symlink member then *points to* once
+    extracted — a symlink created early in tar order can make a later, path-valid-looking member
+    (e.g. "link/payload") actually write through that symlink to an arbitrary location outside
+    dest (a real, independently-reproduced escape caught in this change's own review, not a
+    theoretical concern). Restricting to plain files/directories removes that entire class."""
     dest = dest.resolve()
     for member in tf.getmembers():
+        if not (member.isfile() or member.isdir()):
+            raise ValueError(f"refusing to extract non-regular archive member "
+                              f"(symlink/hardlink/device/fifo/etc.): {member.name}")
         target = (dest / member.name).resolve()
         if target != dest and dest not in target.parents:
             raise ValueError(f"refusing to extract archive member outside the target directory: {member.name}")
