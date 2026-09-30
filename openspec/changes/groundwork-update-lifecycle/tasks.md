@@ -69,5 +69,6 @@
       is sound and closes the vulnerability class, not just the one reproduction.
 
 ## 5. Report
-- [ ] 5.1 Commit, push `feat/groundwork-update-lifecycle`, create a draft PR — do not merge, do
-      not start Phase 4, do not create the next Groundwork release
+- [x] 5.1 Commit, push `feat/groundwork-update-lifecycle`, create a draft PR — do not merge, do
+      not start Phase 4, do not create the next Groundwork release. PR #33, draft. A confirmation
+      review after the MUST FIX above reported Must-fix: 0, approve.
