@@ -318,6 +318,35 @@ def test_interrupted_session_shows_previous_completed_turn_not_partial_state() -
     finish()
 
 
+def test_last_turn_never_shows_bare_unknown() -> None:
+    print("groundwork_statusline.py — playbook=='unknown' AND execution_mode=='unknown' (the common "
+          "case for a tool-using turn with no Harness-metadata footer) never renders as a bare '~unknown'")
+    mod = load_module()
+    fields = {"playbook": "unknown", "execution_mode": "unknown", "tests_run": False}
+    out = mod._fmt_last_turn(fields, plain=False, show_validation=True)
+    check("no last-turn text is rendered when both playbook and execution_mode are 'unknown'",
+          out is None, out)
+
+    fields_mixed = {"playbook": "IMPLEMENT", "execution_mode": "unknown", "tests_run": False}
+    out_mixed = mod._fmt_last_turn(fields_mixed, plain=False, show_validation=True)
+    check("a known playbook still renders even when execution_mode is 'unknown'",
+          out_mixed is not None and "unknown" not in out_mixed and "IMPLEMENT" in out_mixed, out_mixed)
+    finish()
+
+
+def test_git_status_no_commits_yet_reports_real_branch() -> None:
+    print("groundwork_statusline.py — a brand-new repo with zero commits ('## No commits yet on "
+          "<branch>') reports the real branch name, never a mis-parsed 'No'")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import subprocess
+        subprocess.run(["git", "init", "-q", "-b", "main", tmpdir], check=True)
+        result = mod._git_status(tmpdir)
+        check("branch is the real name ('main'), never the mis-parsed word 'No'",
+              result is not None and result[0] == "main" and result[0] != "No", result)
+    finish()
+
+
 def test_git_status_clean_and_dirty() -> None:
     print("groundwork_statusline.py — git branch/dirty via a single fast subprocess call")
     mod = load_module()
@@ -450,6 +479,7 @@ if __name__ == "__main__":
         test_two_session_ids_never_leak_last_turn_state,
         test_session_with_no_record_degrades_cleanly,
         test_interrupted_session_shows_previous_completed_turn_not_partial_state,
+        test_last_turn_never_shows_bare_unknown, test_git_status_no_commits_yet_reports_real_branch,
         test_git_status_clean_and_dirty, test_git_status_missing_or_timeout_omits_field_never_hangs,
         test_unavailable_fields_never_appear, test_execution_time_is_fast,
         test_no_expensive_subprocess_names_appear_in_source,

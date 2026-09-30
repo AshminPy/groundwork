@@ -158,7 +158,14 @@ def _git_status(cwd: Optional[str]):
         if not lines or not lines[0].startswith("##"):
             return None
         header = lines[0][3:]
-        branch = header.split("...")[0].split(" ")[0].strip()
+        # An unborn/empty repo (no commits yet) prints "## No commits yet on <branch>", not
+        # "## <branch>...<upstream>" — naively splitting that would misparse "No" as the branch
+        # name (a false LIVE field, live-reproduced during review). Handle it explicitly.
+        no_commits_prefix = "No commits yet on "
+        if header.startswith(no_commits_prefix):
+            branch = header[len(no_commits_prefix):].strip()
+        else:
+            branch = header.split("...")[0].split(" ")[0].strip()
         if not branch:
             return None
         dirty = len(lines) > 1
@@ -260,7 +267,7 @@ def _fmt_last_turn(fields: dict, plain: bool, show_validation: bool) -> Optional
     if playbook and playbook != "unknown":
         parts.append(playbook)
     mode = fields.get("execution_mode")
-    if mode and mode != "single_agent":
+    if mode and mode not in ("single_agent", "unknown"):
         parts.append({"subagents": "subagent", "agent_team": "agent team"}.get(mode, mode))
     if show_validation and fields.get("tests_run") is True:
         parts.append("tests run")
