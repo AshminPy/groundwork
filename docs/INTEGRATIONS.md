@@ -30,7 +30,7 @@ Both Anthropic (`anthropic.com/engineering/code-execution-with-mcp`, 2025-11-04)
 
 Connect only what a task genuinely needs, prefer a vendor-official server when one exists, prefer a narrow CLI/API call over a broad MCP mutation tool when the MCP tool is a thin pass-through anyway (Spacelift's `mutate`, Prometheus generally), and treat any domain marked "verify before adoption" above as exactly that — researched enough to know it exists and roughly what it does, not verified enough to install blind.
 
-## Querying live status (Integration Catalog, 2.1)
+## Querying live status (Integration Catalog, 2.2)
 
 Everything above is static research, true regardless of what's installed on any given machine. For live, per-machine readiness — read-only, no credentials touched — use the Integration Catalog:
 

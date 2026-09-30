@@ -8,7 +8,9 @@ Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) —
 
 ## Version history
 
-**Groundwork 2.1** (current) added context engineering, capability resolution, scheduled Routines, a setup-time capability configurator, and ECC version pinning, on the same small-footprint model below — see [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) and [CHANGELOG.md](CHANGELOG.md) for full detail.
+**Groundwork 2.2** (current) added the Integration Catalog (a structured, code-defined catalog of external-system integrations with independent truthful `available`/`configured`/`connected`/`used` observations) and statusLine (a Claude Code `statusLine` command rendering Groundwork-specific state under a strict, enforced LIVE / LAST-COMPLETED-TURN / CACHED / UNAVAILABLE data-source contract) — see [docs/RELEASE-REPORT-2.2.md](docs/RELEASE-REPORT-2.2.md) and [CHANGELOG.md](CHANGELOG.md) for full detail.
+
+**Groundwork 2.1** added context engineering, capability resolution, scheduled Routines, a setup-time capability configurator, and ECC version pinning, on the same small-footprint model below — see [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) and [CHANGELOG.md](CHANGELOG.md) for full detail.
 
 **Groundwork 2.0 — what shipped** moved from a lightweight engineering harness to a more complete evidence-first SRE/CloudOps workflow, on the same small-footprint model: rule text and composition first, new files only when nothing existing can satisfy the requirement. Full detail, live-validation evidence and exact test/task status: [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE-REPORT-2.0.md](docs/RELEASE-REPORT-2.0.md).
 
