@@ -187,6 +187,9 @@ case ":${PATH}:" in
     echo "Run:  source \"$CLAUDE_DIR/groundwork/env\""
     echo "...or open a new terminal — then 'groundwork --help' will work." ;;
 esac
+if [ "${#PATH_RC_TOUCHED[@]}" -gt 0 ]; then
+  echo "Updated to load it automatically in new shells: ${PATH_RC_TOUCHED[*]}"
+fi
 echo ""
 echo "Next steps:"
 echo "  1. In any project you want spec-driven MATERIAL work in, run: openspec init --tools claude"

@@ -46,7 +46,13 @@ Per the Next Release Program's own phase boundaries and exclusion list:
 
 - `groundwork integrations *`, `groundwork routines *` subtrees — Phase 2 / Phase 4.
 - `groundwork update` / `groundwork update --check` / `groundwork update --version` /
-  `groundwork rollback` — Phase 3 (version/update lifecycle requires its own design gate).
+  `groundwork rollback` — Phase 3 (version/update lifecycle requires its own design gate). Per an
+  explicit owner amendment, the Update Discovery / release-notification requirement that Phase 3
+  must satisfy has been *investigated* (not implemented) and recorded in `design.md` DECISION 4:
+  authoritative source, refresh cadence, the SessionStart-must-stay-network-free constraint and why
+  the Stop-hook lifecycle is the right place for the actual check, the dedup mechanism, and where a
+  disable toggle would fit the existing `config.json` model. No code for this ships in Phase 1; the
+  CLI name stays `groundwork` (no `gw` alias is installed, per the amendment).
 - Any command not already backed by real, existing Groundwork functionality (no `groundwork
   integrations install`, no arbitrary MCP installer, no credential manager).
 - Terminal Copilot, voice control, custom Groundwork theme, Integration Usage analytics, MCP/CLI

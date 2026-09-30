@@ -218,3 +218,113 @@ separately surfaced — `./setup.sh --uninstall` cannot forward `--agent-teams` 
 — is a pre-existing, unrelated bug in flag-forwarding, not a git-autonomy/protected-branch gap;
 noted here for completeness but left out of this change's scope (it doesn't affect Phase 1's
 CLI work and fixing it would broaden this PR beyond its stated purpose).
+
+## DECISION 4 — Update Discovery / Release Notification: investigated now, implemented in Phase 3
+
+Scope note: this DECISION is written into the *existing* `groundwork-cli-foundation` OpenSpec
+change per explicit owner instruction (amendment to the Next Release Program — "update the
+EXISTING Next Release OpenSpec with this requirement... do NOT create another OpenSpec"). It
+documents the investigation the amendment required *before* implementation; the code itself is
+Phase 3 (version/update lifecycle) scope and is **not implemented in this Phase 1 change** — Phase
+1's own acceptance criteria (above) govern what ships on this branch, and Phase 3 does not begin
+until Phase 1's and Phase 2's acceptance criteria hold (release-program phase-gating, unchanged by
+this amendment).
+
+EVIDENCE:
+- Authoritative source: GitHub Releases, `GET /repos/AshminPy/groundwork/releases/latest`. This is
+  the mechanism Groundwork's own v2.2.0 release already uses (`docs/RELEASE-REPORT-2.2.md`: an
+  annotated tag published as a non-draft, non-prerelease GitHub Release). Verified live against the
+  real `AshminPy/groundwork` repo: `gh api repos/AshminPy/groundwork/releases/latest` and `gh api
+  repos/AshminPy/groundwork/releases` both correctly return the real `v2.2.0` release with
+  `"draft":false,"prerelease":false` — confirming the endpoint's actual behavior directly (official
+  docs at `docs.github.com` are network-egress-blocked in this environment, `{"error_type":
+  "EGRESS_BLOCKED","domain":"docs.github.com"}`; evidence-policy.md ranks runtime evidence above
+  documentation regardless, so this is not a gap). `/releases/latest` itself already excludes
+  drafts and prereleases per its observed behavior, so no client-side filtering is needed beyond
+  that call.
+- SessionStart must stay network-free: `hooks/groundwork_session_snapshot.py`'s own docstring
+  states the hook's design constraints verbatim — "every git call has a 3 s timeout; no network;
+  no writes... fail-open: any unexpected error → no output, exit 0" (confirmed by direct read,
+  lines ~26-29). Any update-notification mechanism that put a network call on SessionStart would
+  violate a constraint this codebase has already and deliberately established for that hook.
+- Stop hook is the existing best-effort background-work lifecycle point: `merge_settings.py`
+  already registers two Stop-hook entries — `require_material_review.py` and
+  `groundwork_telemetry.py` (`timeout=10`) — so a `timeout`-bounded, non-blocking Stop hook is an
+  established pattern in this codebase, not a new mechanism.
+- Cache-plus-staleness is an established pattern, not a new one: `scripts/groundwork_integrations.py`
+  writes `$CLAUDE_CONFIG_DIR/groundwork/integrations/cache.json` via `_write_cache()` (temp-file +
+  `os.replace`), recording a `checked_at` timestamp per observation;
+  `scripts/groundwork_statusline.py` defines `STALE_AFTER_S = 15 * 60` plus `_cache_age_seconds()`/
+  `_age_label()` helpers that parse `"%Y-%m-%dT%H:%M:%SZ"` timestamps to decide whether a cached
+  value is still fresh enough to trust. The same shape (a small JSON cache under
+  `$CLAUDE_CONFIG_DIR/groundwork/`, a `checked_at` field, an age threshold) fits an update-check
+  cache with no new pattern introduced.
+- SessionStart fires more than once per session: `docs/ARCHITECTURE.md`/`docs/TROUBLESHOOTING.md`
+  both state it fires "on every SessionStart (startup, resume, clear, compact, fork)" — confirmed
+  by direct doc read, and consistent with the hook's own JSON input carrying a `source` field
+  (`docs/VALIDATION.md`'s worked example: `{"hook_event_name":"SessionStart","source":"startup",...}`).
+  This is the direct evidence for why "dedupe within a session" (the amendment's own requirement)
+  is a real constraint, not a hypothetical one, and it yields a dedup mechanism that needs no new
+  state: gate the notification on `source == "startup"` only, so `resume`/`clear`/`compact`/`fork`
+  within the same session never re-show it. This keeps the SessionStart hook's existing "no writes"
+  constraint intact — no session-id marker file is needed.
+- Config model precedent: `scripts/groundwork_config.py`'s schema (read directly, full file) has no
+  existing section for a simple system-level on/off toggle unrelated to a routine's
+  identity/access/scope/schedule — `routines.*` entries are all shaped around exactly that
+  (`jira_eod`, `pr_followup`, etc., each with `access`/`scope`/`posting`/`schedule`). The closest
+  existing shape is `skills`, a flat top-level dict of plain booleans
+  (`{"teaching": false, "task_observer": false, "security_review": true}`) with no per-item
+  identity/access/scope. A `disable update notifications` toggle does not fit `routines` (it is not
+  identity/access/scope-shaped) but fits the `skills`-shaped pattern directly.
+
+WHY: SessionStart-does-the-network-call was the design this amendment explicitly asked to be
+investigated rather than assumed ("investigate whether SessionStart is the right integration
+point... before implementing it"); the codebase's own pre-existing SessionStart hook already
+documents why that would be wrong (no-network is a stated design constraint, not an unstated
+convention). Splitting the mechanism into a Stop-hook writer (network, rate-limited, best-effort,
+non-blocking) and a SessionStart-hook reader (cache-only, matching the existing snapshot hook's own
+constraints) reuses two lifecycle points Groundwork already hooks into for comparable purposes,
+rather than adding a new hook type, a daemon, or a second release mechanism (both explicitly
+disallowed by the amendment).
+
+Refresh interval: no existing Groundwork precedent covers a multi-hour/multi-day cadence —
+`STALE_AFTER_S = 15 * 60` in `groundwork_statusline.py` is a freshness threshold for
+live-ish integration-health data, not an analog for release-check cadence (GitHub releases do not
+ship multiple times per day). ASSUMPTION, not evidence-backed: a 24-hour refresh interval, matching
+common CLI update-checker cadence (e.g. `npm`, `rustup`) and cheap enough to add negligible GitHub
+API load for a best-effort, non-blocking Stop-hook check. What would change this: if Groundwork
+starts shipping multiple releases per day, or the owner states a different preferred cadence.
+
+TRADEOFFS: a release published between a Stop-hook check and the next SessionStart up to 24h later
+is not surfaced until the following refresh — acceptable for a non-blocking, best-effort notice
+about a stable release, not acceptable if this were ever repurposed as a security-advisory channel
+(it should not be; a security advisory needs its own, more urgent mechanism, out of scope here).
+Gating the notification on `source == "startup"` means a long-running session that started before a
+new release shipped won't be told about it until its next real restart — acceptable for the stated
+purpose (surface it, don't chase the user with it) per the amendment's own "cached discovery,
+non-blocking failures" framing.
+
+VALIDATION METHOD (deferred to Phase 3 implementation): unit tests for the cache
+read/write/staleness logic (mirroring `tests/test_groundwork_integrations.py`'s existing pattern);
+a real, rate-limited `gh api repos/AshminPy/groundwork/releases/latest` call exercised in a
+controlled test/dev run (not mocked-only, per evidence-policy.md §5 — mocks never prove runtime
+success); a real SessionStart hook invocation with a pre-seeded stale/fresh/missing cache file,
+proving the notification appears only when the cache says a newer version exists and only on
+`source == "startup"`.
+
+UNCERTAINTY:
+- RUNTIME VALIDATION REQUIRED: the exact GitHub Releases API response shape for a repository with
+  zero releases, or for a rate-limited/unauthenticated call from a machine with no `gh` auth, has
+  not been exercised — Phase 3 implementation must handle "no releases yet" and "check failed"
+  as explicit non-error, non-blocking, "never falsely report up-to-date" states (the amendment's
+  own requirement), not assume the happy path.
+- ASSUMPTION: the 24-hour refresh interval above, stated with its rationale; revisit if evidence
+  emerges that a different cadence fits better.
+- INFERENCE: `source == "startup"` as the sole dedup gate is inferred from the documented SessionStart
+  `source` values and the hook's own "no writes" constraint; Phase 3 implementation should confirm
+  by direct runtime test (feeding each `source` value into the hook) rather than assuming the
+  inference holds exactly as reasoned here.
+- Where the `skills`-shaped config toggle would live exactly (e.g. `updates.notify_on_new_release`
+  as a new top-level `config.json` key, analogous to `skills`) is a Phase 3 implementation detail,
+  not decided further here — the investigation's conclusion is only that it fits the `skills`
+  pattern, not `routines`.

@@ -34,7 +34,25 @@
 - [x] 5.1 `python3 -m pytest tests -q` (84 passed: 80 pre-existing + 4 new in tests/test_groundwork_cli.py)
 - [x] 5.2 `openspec validate groundwork-cli-foundation --strict`
 - [x] 5.3 Runtime: real `install.sh` in a disposable `$CLAUDE_CONFIG_DIR`/`$HOME` → `groundwork --help`/`version`/`doctor` work → real `uninstall.sh` → clean removal, verified by inspection not assumption (28/28 checks in tests/test_groundwork_cli.py, all real subprocess calls)
-- [ ] 5.4 Independent fresh-context review; fix MUST FIX; re-validate; fresh confirmation review
+- [x] 5.4 Independent fresh-context review — verdict **approve, 0 MUST FIX** (real re-derivation of
+      every load-bearing claim: dotfile-safety regression re-reproduced with before/after `md5sum`
+      on a clean run, `groundwork doctor`/`setup.sh --doctor` byte-identity re-reproduced
+      independently, PATH idempotency/uninstall-symmetry/real-shell-PATH-resolution re-reproduced,
+      `openspec validate --strict`, scope-diff check, 5 edge cases incl. symlinked/CRLF/
+      not-at-EOF/unwritable rc files, `test_push_guard` 25/25 re-run, secret-pattern grep). Two
+      NICE TO HAVE findings (not MUST FIX) — fixed anyway since both were cheap, real
+      correctness/UX gaps: (a) `install.sh`'s `PATH_RC_TOUCHED` array was populated but never
+      read — wired into the completion message (lists which rc files were updated); (b)
+      `uninstall.sh`'s marker-block removal left a stray trailing blank line when the block sat at
+      true end-of-file — replaced the two-pass duplicate-blank-collapse hack with a single-pass
+      one-line-lookback awk that drops exactly the blank separator line `install.sh`'s own
+      `echo ""` adds immediately before the marker, symmetric with what was added. Re-validated
+      for real: a disposable `$HOME`/`$CLAUDE_CONFIG_DIR` sandbox exercising all three rc files
+      through one install+uninstall cycle, covering all three shapes (marker at true EOF, marker
+      in an originally-empty file, marker followed by later user content) — each restored exactly
+      byte-for-byte to its pre-install content; full suite re-run green (84 passed); `openspec
+      validate --strict` re-confirmed valid.
 
 ## 6. Report
-- [ ] 6.1 Deliver the Phase 1 report per the release program's required format (items 1-30, scoped to what Phase 1 actually touches), commit, push, create draft PR, do not merge
+- [x] 6.1 Commit, push, create draft PR (release-program-required 30-item report format below),
+      do not merge — subscribed PR to this session for CI/review monitoring.

@@ -80,18 +80,27 @@ GW_ENV_MARK_END="# <<< groundwork CLI PATH <<<"
 for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
   if [ -f "$rc" ] && grep -qF "$GW_ENV_MARK_BEGIN" "$rc" 2>/dev/null; then
     tmp="$(mktemp)"
+    # Single pass with a one-line lookback: drops exactly the blank separator line install.sh's
+    # own `echo ""` adds immediately before the marker block (present whether that block sits at
+    # true end-of-file or is followed by later content), without touching any other blank line
+    # already in the file.
     awk -v begin="$GW_ENV_MARK_BEGIN" -v end="$GW_ENV_MARK_END" '
-      $0 == begin { skip=1; next }
-      $0 == end { skip=0; next }
+      function flush() { if (have_pending) { print pending; have_pending = 0 } }
+      $0 == begin {
+        if (have_pending && pending == "") { have_pending = 0 } else { flush() }
+        skip = 1
+        next
+      }
+      $0 == end { skip = 0; next }
       skip { next }
-      { print }
+      {
+        flush()
+        pending = $0
+        have_pending = 1
+      }
+      END { flush() }
     ' "$rc" > "$tmp"
-    # Also drop the blank line install.sh adds immediately before the marker block, if present
-    # as the new trailing blank line left after removal, to avoid accumulating blank lines across
-    # repeated install/uninstall cycles.
-    awk 'BEGIN{prev=""} { if (!(NR>1 && $0=="" && prev=="")) print; prev=$0 }' "$tmp" > "$tmp.2"
-    mv "$tmp.2" "$rc"
-    rm -f "$tmp"
+    mv "$tmp" "$rc"
   fi
 done
 # Python leaves a compiled cache behind for each hook it has run; clean up just Groundwork's own
