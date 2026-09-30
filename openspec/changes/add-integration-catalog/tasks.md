@@ -8,19 +8,19 @@
 ## 2. Truthful state determination and probes
 
 - [ ] 2.1 Implement bounded, non-mutating probe helpers (`_probe_cli_version`, `_probe_cli_auth`, `_probe_mcp_listed`) matching the timeout/safe-fail pattern already used by `groundwork_routines.py`'s `check_access()` (subprocess + explicit timeout + except-safe), written fresh in this file per design.md Decision 3 (no cross-import from `hooks/`).
-- [ ] 2.2 Implement `determine_state(entry)` returning exactly one of `AVAILABLE` / `CONFIGURED` / `CONNECTED` / `NOT CONFIGURED` per the order and independence rules in design.md Decision 4.
-- [ ] 2.3 Add tests: presence-only never yields `CONNECTED`; a mocked successful check yields `CONNECTED`; a mocked failed/erroring/timed-out check never yields `CONNECTED`; missing config yields `NOT CONFIGURED`/`AVAILABLE` correctly, not a crash. Verify: `python3 -m pytest tests/test_groundwork_integrations.py -k state -q`.
+- [ ] 2.2 Implement `determine_observation(entry) -> IntegrationObservation` computing `available`/`configured`/`connected` as three independent booleans (not a linear lifecycle) per design.md Decision 4, plus `summary_state(observation) -> str` deriving the display-only label (`CONNECTED` > `CONFIGURED` > `AVAILABLE` > `NOT CONFIGURED`, highest true wins) without persisting it.
+- [ ] 2.3 Add tests covering the specific combinations: (available=F,configured=F,connected=F)->`NOT CONFIGURED`; (T,F,F)->`AVAILABLE`; (F,T,F)->`CONFIGURED` with `available` still reported `False`; (T,T,F)->`CONFIGURED`; (T,T,T)->`CONNECTED`. Also: presence-only never sets `connected=True`; a mocked successful check sets `connected=True`; a mocked failed/erroring/timed-out check never sets `connected=True`; missing/malformed config yields `configured=False` safely, not a crash. Verify: `python3 -m pytest tests/test_groundwork_integrations.py -k state -q`.
 
 ## 3. CLI commands
 
-- [ ] 3.1 Implement `list` (table: Integration | Access | State) and `show <name>` (purpose, capabilities, approved mechanisms, trust/access characteristics, configuration requirements, current state) using argparse, matching `groundwork_config.py`'s CLI shape.
+- [ ] 3.1 Implement `list` (table: Integration | Access | State, State = the derived summary label) and `show <name>` (purpose, capabilities, approved mechanisms, trust/access characteristics, configuration requirements, the three raw `available`/`configured`/`connected` booleans shown individually, plus the summary label) using argparse, matching `groundwork_config.py`'s CLI shape.
 - [ ] 3.2 Implement the Routines-dependency line in `show`, reading `groundwork_routines.py`'s own routine configuration deterministically (no inference for playbooks); handle an unknown integration name in `show` with a clean "not known" message, no traceback.
 - [ ] 3.3 Add tests: `list` output formatting (one row per catalog entry); `show` output for a known integration includes all required fields; `show` for an unknown name reports not-known without crashing; Routines-dependency line only lists a Routine when its stored config explicitly declares that mechanism; a scan of all command output against credential/token/password/API-key/secret-shaped patterns finds nothing. Verify: `python3 -m pytest tests/test_groundwork_integrations.py -k "cli or secret" -q`.
 
-## 4. USED state from existing telemetry
+## 4. `used` observation from existing telemetry
 
-- [ ] 4.1 Implement a read-only lookup of the most recent telemetry record(s) (`groundwork_telemetry.py`'s existing JSONL output) for a `USED` signal per integration; when telemetry is absent or inconclusive, report `USED: unknown` rather than guessing.
-- [ ] 4.2 Add a test with a fixture telemetry file confirming `USED` reflects a real recent record, and confirming `USED: unknown` when no telemetry file exists. Verify: `python3 -m pytest tests/test_groundwork_integrations.py -k used -q`.
+- [ ] 4.1 Implement a read-only lookup of the most recent telemetry record(s) (`groundwork_telemetry.py`'s existing JSONL output) for a `used` signal per integration (`True`/`False`/`None` for unknown) — kept separate from the three readiness booleans, never merged into `summary_state()`.
+- [ ] 4.2 Add a test with a fixture telemetry file confirming `used=True` reflects a real recent record, `used=False` when telemetry reliably shows no invocation, and `used=None` (reported as `unknown`) when no telemetry file exists or the record is inconclusive. Verify: `python3 -m pytest tests/test_groundwork_integrations.py -k used -q`.
 
 ## 5. Install and doctor wiring
 
