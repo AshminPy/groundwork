@@ -4,8 +4,8 @@
 - [x] 1.1 Re-verify current official Claude Code docs for `outputStyle` settings.json syntax and Concise style behavior (done in design.md DECISION 1; confirm no change since)
 - [x] 1.2 Extend `rules/output-contract.md` with the mid-turn quiet-narration principle, preserving every named carve-out
 - [x] 1.3 Add `outputStyle: "Concise"` additive merge to `scripts/merge_settings.py` (set only if absent)
-- [x] 1.4 Add symmetric removal to `scripts/unmerge_settings.py` (remove only if value matches what Groundwork set)
-- [x] 1.5 Tests: fresh install sets it; existing preference preserved; upgrade preserves; uninstall removes only Groundwork's own value
+- [x] 1.4 Add symmetric removal to `scripts/unmerge_settings.py` (remove only when a sidecar ownership record confirms Groundwork itself set the value AND it still matches — not value-equality alone; see DECISION 5, added after a post-merge independent review caught the value-equality gap)
+- [x] 1.5 Tests: fresh install sets it; existing preference preserved; upgrade preserves; uninstall removes only Groundwork's own value; a pre-existing value equal to Groundwork's default (the exact reported collision) survives install → uninstall unchanged; a user's post-install change survives uninstall and clears the stale ownership record
 
 ## 2. Routine readiness
 - [x] 2.1 Add `readiness_state(name, cfg)` to `scripts/groundwork_routines.py`, pure function over existing `_doctor_rows()`/`check_access()` data
@@ -24,3 +24,4 @@
 - [x] 4.4 Runtime: `setup.sh --routines` on a real config shows the new readiness lines
 - [x] 4.5 Runtime: one safe (READY) routine run for real; one deliberately-unready scenario caught before execution
 - [x] 4.6 Independent fresh-context review; fix MUST FIX; re-validate; fresh confirmation review (1 MUST FIX found and fixed — `readiness_state()` falsely READY for GitHub-dependent routines; fresh confirmation review: approve, Must-fix: 0)
+- [x] 4.7 A second independent review (post-merge-readiness, against the full PR diff) found 1 further MUST FIX — `unmerge_settings.py` could delete a pre-existing user `outputStyle: "Concise"` it never created, since value-equality alone cannot prove ownership. Fixed with a small ownership-sidecar file (DECISION 5); regression tests added for the exact collision plus the required retained cases; re-ran `pytest tests -q` (80 passed) and `openspec validate --strict` (valid); independently reproduced with real file I/O outside pytest for both the bug scenario and the legitimate-cleanup scenario.

@@ -14,6 +14,16 @@ removed on unmerge — a permissions.deny rule that is also one of Groundwork's 
 pluginConfigs["ecc@ecc"].options.hook_profile == "standard". Re-add it afterwards if you
 want to keep it. The merge side never duplicates or overwrites such a value.
 
+outputStyle is the one exception to that stateless limitation: "Concise" is a plain
+built-in style name a user could plausibly have already chosen before installing
+Groundwork, unlike the other keys above (Groundwork's own absolute script paths and
+deny/env values a user is unlikely to coincidentally duplicate). outputStyle is removed
+only when the sidecar file merge_settings.py writes next to settings.json
+(<settings.json>.groundwork-owned.json) confirms Groundwork itself set it AND the current
+value still matches that record — never from value-equality alone. A pre-existing
+outputStyle == "Concise" that predates Groundwork (no sidecar record) always survives
+unmerge unchanged.
+
 Usage: python3 unmerge_settings.py [--agent-teams] [path to settings.json]
 """
 import json
@@ -32,8 +42,11 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     OUTPUT_STYLE_VALUE,
     STATUSLINE_VALUE,
     TELEMETRY_CMD,
+    ownership_path,
     parse_args,
+    read_owned,
     write_atomic,
+    write_owned,
 )
 
 
@@ -60,8 +73,11 @@ def remove_hook(hooks: dict, event: str, target_command: str, removed: list) -> 
         hooks.pop(event, None)
 
 
-def unmerge(data: dict, agent_teams: bool = False) -> list[str]:
-    """Remove Groundwork-owned entries from a settings dict in place; return what was removed."""
+def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = False) -> list[str]:
+    """Remove Groundwork-owned entries from a settings dict in place; return what was removed.
+    owns_output_style defaults to False (no proof of ownership -> never delete) — the caller
+    (main()) passes True only when the sidecar ownership record confirms Groundwork itself set
+    outputStyle and the current value still matches it."""
     removed: list = []
 
     hooks = data.get("hooks", {})
@@ -101,7 +117,7 @@ def unmerge(data: dict, agent_teams: bool = False) -> list[str]:
         del data["statusLine"]
         removed.append("statusLine")
 
-    if data.get("outputStyle") == OUTPUT_STYLE_VALUE:
+    if owns_output_style and data.get("outputStyle") == OUTPUT_STYLE_VALUE:
         del data["outputStyle"]
         removed.append("outputStyle")
 
@@ -128,9 +144,22 @@ def main() -> None:
         return
 
     data = json.loads(path.read_text().strip() or "{}")
-    removed = unmerge(data, agent_teams=agent_teams)
+
+    owned_path = ownership_path(path)
+    owned = read_owned(owned_path)
+    owns_output_style = "outputStyle" in owned and data.get("outputStyle") == owned["outputStyle"]
+    removed = unmerge(data, agent_teams=agent_teams, owns_output_style=owns_output_style)
 
     write_atomic(path, json.dumps(data, indent=2) + "\n")
+
+    if "outputStyle" in owned:
+        # The ownership record's job ends with this pass: either it was just consumed (removed
+        # above), or the current value no longer matches it (the user changed it since install,
+        # so it is now stale and no longer describes anything Groundwork controls). Either way,
+        # forget it rather than leave a stale claim of ownership behind.
+        del owned["outputStyle"]
+        write_owned(owned_path, owned)
+
     if removed:
         print(f"Updated {path}:")
         for r in removed:

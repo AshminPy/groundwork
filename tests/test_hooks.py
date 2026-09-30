@@ -780,8 +780,9 @@ def test_settings_merge() -> None:
         check("upgrade: a user's outputStyle change after install survives a later merge re-run",
               load(upgrade)["outputStyle"] == "Proactive", load(upgrade))
 
-        # unmerge only removes statusLine/outputStyle if they still equal exactly what merge set (same
-        # documented stateless-limitation pattern as every other Groundwork-owned key in this file)
+        # unmerge only removes statusLine if it still equals exactly what merge set (the stateless
+        # value-equality pattern used by every other Groundwork-owned key in this file). outputStyle
+        # is different — see the ownership-marker cases below.
         sl_roundtrip = tmp / "statusline_roundtrip.json"
         sl_roundtrip.write_text("{}")
         run_script(MERGE, args=[str(sl_roundtrip)])
@@ -790,6 +791,8 @@ def test_settings_merge() -> None:
               "statusLine" not in load(sl_roundtrip), load(sl_roundtrip))
         check("unmerge removes Groundwork's own outputStyle when unchanged since merge",
               "outputStyle" not in load(sl_roundtrip), load(sl_roundtrip))
+        check("unmerge cleans up its own outputStyle-ownership sidecar file (no orphaned artifact)",
+              not (tmp / "statusline_roundtrip.json.groundwork-owned.json").exists())
 
         sl_kept = tmp / "statusline_user_kept.json"
         sl_kept.write_text(json.dumps({"statusLine": {"type": "command", "command": "my-own-statusline.sh"}}))
@@ -803,6 +806,39 @@ def test_settings_merge() -> None:
         run_script(UNMERGE, args=[str(style_kept)])
         check("unmerge never removes a user's own outputStyle (does not match what Groundwork sets)",
               load(style_kept).get("outputStyle") == "Learning", load(style_kept))
+
+        # MUST FIX regression (independent review of PR #29): a user's own PRE-EXISTING outputStyle
+        # that happens to equal Groundwork's own default ("Concise") must survive install -> uninstall
+        # unchanged. Before the ownership-marker fix, unmerge's plain value-equality check could not
+        # tell this apart from a Concise value Groundwork itself created, and deleted a preference
+        # Groundwork never set.
+        preexisting_concise = tmp / "preexisting_concise.json"
+        preexisting_concise.write_text(json.dumps({"outputStyle": "Concise"}))
+        run_script(MERGE, args=[str(preexisting_concise)])  # key already present -> merge leaves it alone
+        check("pre-existing user Concise survives install unchanged",
+              load(preexisting_concise).get("outputStyle") == "Concise", load(preexisting_concise))
+        check("install never records ownership for a pre-existing value (no sidecar written)",
+              not (tmp / "preexisting_concise.json.groundwork-owned.json").exists())
+        run_script(UNMERGE, args=[str(preexisting_concise)])
+        check("pre-existing user Concise survives uninstall unchanged (the MUST FIX)",
+              load(preexisting_concise).get("outputStyle") == "Concise", load(preexisting_concise))
+
+        # A Groundwork-created Concise that the user later changes to something else must survive
+        # a subsequent uninstall with the user's new value intact (ownership record is now stale —
+        # the current value no longer matches what Groundwork recorded — so unmerge leaves it alone).
+        changed_after_install = tmp / "changed_after_install.json"
+        changed_after_install.write_text("{}")
+        run_script(MERGE, args=[str(changed_after_install)])  # Groundwork sets Concise + records ownership
+        check("sidecar records ownership right after install",
+              load(Path(str(changed_after_install) + ".groundwork-owned.json")).get("outputStyle") == "Concise")
+        data_changed = load(changed_after_install)
+        data_changed["outputStyle"] = "Default"  # user changes it themselves after install
+        changed_after_install.write_text(json.dumps(data_changed))
+        run_script(UNMERGE, args=[str(changed_after_install)])
+        check("a user's outputStyle change after install survives uninstall",
+              load(changed_after_install).get("outputStyle") == "Default", load(changed_after_install))
+        check("the now-stale ownership record is forgotten by uninstall",
+              not (tmp / "changed_after_install.json.groundwork-owned.json").exists())
 
         # idempotent second run
         before = fresh.read_text()

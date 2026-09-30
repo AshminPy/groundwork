@@ -20,6 +20,17 @@ the file wholesale — only adds/updates the specific keys Groundwork owns:
   - outputStyle: set to the built-in "Concise" style ONLY if the key is entirely
     absent — a user's own configured outputStyle (any value) is never touched.
 
+outputStyle ownership: unlike statusLine (Groundwork's own absolute script path, which a
+user could not plausibly set independently), "Concise" is a plain built-in Claude Code
+style name a user could reasonably have already selected before ever installing
+Groundwork. Value-equality alone (the pattern every other key here uses) cannot tell
+"the user already had Concise" from "Groundwork set Concise" — so whenever merge() sets
+outputStyle because the key was absent, a small sidecar file next to settings.json
+(<settings.json>.groundwork-owned.json) records that Groundwork made that specific write.
+unmerge_settings.py only removes outputStyle when this sidecar confirms Groundwork set it
+AND the current value still matches — never from value-equality alone. This is not a
+general settings-ownership framework: it exists for this one collision-prone key.
+
 Usage: python3 merge_settings.py [--agent-teams] [path to settings.json]
        (default path: ~/.claude/settings.json)
 """
@@ -68,6 +79,32 @@ def write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".groundwork.tmp")
     tmp.write_text(text)
     os.replace(tmp, path)
+
+
+def ownership_path(settings_path: Path) -> Path:
+    """Sidecar file path for the outputStyle-ownership record, colocated next to the settings
+    file it tracks (never under CLAUDE_CONFIG_DIR/groundwork — that directory can be removed
+    entirely before unmerge runs during uninstall, and a per-directory location would also let
+    unrelated settings.json files share one record in tests). One settings.json, one sidecar."""
+    return settings_path.with_name(settings_path.name + ".groundwork-owned.json")
+
+
+def read_owned(owned_path: Path) -> dict:
+    if not owned_path.exists():
+        return {}
+    try:
+        data = json.loads(owned_path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_owned(owned_path: Path, owned: dict) -> None:
+    """Empty record -> delete the sidecar entirely, so uninstall leaves no stray file behind."""
+    if owned:
+        write_atomic(owned_path, json.dumps(owned, indent=2) + "\n")
+    elif owned_path.exists():
+        owned_path.unlink()
 
 
 def hook_entry(command: str, status_message: str, matcher: str | None = None, timeout: int | None = None) -> dict:
@@ -185,6 +222,14 @@ def main() -> None:
 
     changed = merge(data, agent_teams=agent_teams, profile=PROFILE_OPT["value"])
     write_atomic(path, json.dumps(data, indent=2) + "\n")
+
+    if any(c.startswith("outputStyle=") for c in changed):
+        # merge() just set outputStyle because the key was absent -> Groundwork owns this
+        # write; record it so unmerge can later prove ownership instead of guessing from value.
+        owned_path = ownership_path(path)
+        owned = read_owned(owned_path)
+        owned["outputStyle"] = data["outputStyle"]
+        write_owned(owned_path, owned)
 
     if changed:
         print(f"Updated {path}:")
