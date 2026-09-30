@@ -12,7 +12,12 @@ npm install -g @fission-ai/openspec@latest
 # then, per project that uses it:
 cd your-project && openspec update
 
-# Groundwork itself — recommended: the wrapper backs up ~/.claude first, then re-installs and verifies
+# Groundwork itself — preferred: no repo clone needed, works from any installed Groundwork
+groundwork update --check              # non-mutating: current vs. latest published release
+groundwork update                      # installs the latest published, stable GitHub Release
+groundwork update --version 2.3.0      # installs that exact published release
+
+# or, from a repo clone — the wrapper backs up ~/.claude first, then re-installs and verifies
 cd groundwork && git pull
 ./setup.sh                   # asks profile / Agent Teams / schedule again (answers are idempotent)
 ./setup.sh --non-interactive --profile work --schedule weekly   # scripted; add --agent-teams if you use it
@@ -22,7 +27,14 @@ cd groundwork && git pull
 ./install.sh --agent-teams   # same, plus opt in to Claude Code's experimental Agent Teams
 ```
 
-Every `./setup.sh` run leaves a new complete backup under `~/.claude-backups/groundwork-<timestamp>/` (owner-only, never overwritten). Check the result any time with `./setup.sh --verify`. Prerequisites that went missing (git, Node 20.19+, npm, Python 3.10+) are offered for installation by `setup.sh`; Claude Code itself is never installed by it.
+`groundwork update` never invents an installer of its own: it fetches the target release's source
+from GitHub (never `origin/main`, a branch, or an arbitrary commit — always a real, published,
+non-draft, non-prerelease release) and then runs *that* release's own `setup.sh --non-interactive`,
+explicitly re-passing the installation's current profile, report schedule, and Agent-Teams setting
+so they survive the non-interactive run unchanged. It never installs OS packages itself
+(`--no-install-prereqs` is always passed) and stores no credential of any kind.
+
+Every `./setup.sh` run — whether invoked directly or via `groundwork update` — leaves a new complete backup under `~/.claude-backups/groundwork-<timestamp>/` (owner-only, never overwritten). Check the result any time with `./setup.sh --verify` or `groundwork doctor`. Prerequisites that went missing (git, Node 20.19+, npm, Python 3.10+) are offered for installation by `setup.sh` when run directly; Claude Code itself is never installed by it.
 
 After upgrading ECC specifically, check `claude plugin details ecc@ecc` for changes to its hook list or context cost before assuming nothing else needs attention — see [docs/VALIDATION.md](VALIDATION.md) for what "normal" looks like.
 
@@ -36,9 +48,19 @@ Nothing else changes for a 1.0.0 install: the same keys are merged, plus the `ho
 
 **Back to exactly the `~/.claude` you had before Groundwork** (time machine):
 ```bash
+groundwork rollback                    # preferred — no repo clone needed
+groundwork rollback --version 2.2.0    # restores the backup taken right before 2.2.0 was installed
+
+# equivalent, from a repo clone:
 cd groundwork && ./setup.sh --rollback                                   # latest setup.sh backup
 cd groundwork && ./setup.sh --rollback ~/.claude-backups/groundwork-20260921-144500   # a specific one
 ```
+`groundwork rollback` dispatches to the same `setup.sh --rollback` mechanism described below — it
+introduces no new backup format or restore logic. `--version VERSION` looks up the specific backup
+whose `BACKUP-INFO.txt` records it was taken immediately before that version was installed (every
+`setup.sh`/`groundwork update` run already writes this); if no such backup exists, it refuses
+rather than restoring a different one.
+
 The current `~/.claude` is moved to `~/.claude-groundwork-disabled-<timestamp>/` first (never deleted), the launchd report job is removed, the backup is copied back and checked for readability, and the script prints exactly what it restored. It refuses to guess when two backups share a timestamp or when a backup was taken from a different config directory. Restart Claude Code afterwards. Anything written to `~/.claude` after the backup — newer telemetry, session history — is in the disabled copy, not lost.
 
 **Groundwork only, keep everything else as it is now** (eraser):

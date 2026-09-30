@@ -7,8 +7,10 @@ the installed copy of setup.sh's own `--doctor` mode so output is identical by c
 
 Phase 1 (openspec/changes/groundwork-cli-foundation/): --help, version, doctor.
 Phase 2 (openspec/changes/groundwork-integrations-cli/): integrations (list/show/refresh/doctor),
-a pure pass-through — see `cmd_integrations`. Later phases add routines/update/rollback subtrees —
-this file's dispatch table is where those get added, not a restructure.
+a pure pass-through — see `cmd_integrations`.
+Phase 3 (openspec/changes/groundwork-update-lifecycle/): update/rollback, also a pure pass-through
+to the installed groundwork_update.py — see `cmd_update`/`cmd_rollback`. Later phases add a
+routines subtree — this file's dispatch table is where that gets added, not a restructure.
 
 Installed as `$CLAUDE_CONFIG_DIR/groundwork/bin/groundwork` (no .py extension, executable bit
 set) by install.sh, and made reachable via PATH by the env-script mechanism install.sh also sets
@@ -38,6 +40,11 @@ INSTALLED_SETUP_SH = CLAUDE_DIR / "groundwork" / "bin" / "setup.sh"
 # of truth and can never drift from what this CLI documents. No business logic — not even the list
 # of subcommand names — is duplicated here.
 INSTALLED_INTEGRATIONS_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_integrations.py"
+# Phase 3 (openspec/changes/groundwork-update-lifecycle/): `update`/`rollback` are the same kind of
+# pure pass-through as `integrations` — every arg after the subcommand name is forwarded verbatim
+# to the installed groundwork_update.py, which owns all version/release/backup logic itself. No
+# installer or release logic is duplicated here.
+INSTALLED_UPDATE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_update.py"
 
 
 def _read_version() -> str | None:
@@ -76,6 +83,26 @@ def cmd_integrations(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_update(extra_argv: list[str]) -> int:
+    if not INSTALLED_UPDATE_PY.exists():
+        print(f"update: {INSTALLED_UPDATE_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_update.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_UPDATE_PY), "update", *extra_argv])
+    return result.returncode
+
+
+def cmd_rollback(extra_argv: list[str]) -> int:
+    if not INSTALLED_UPDATE_PY.exists():
+        print(f"rollback: {INSTALLED_UPDATE_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_update.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_UPDATE_PY), "rollback", *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -98,16 +125,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Integration Catalog: list/show/refresh/doctor (see 'groundwork integrations --help')",
         add_help=False,
     )
+    # Same reasoning as "integrations" above: listed only for `groundwork --help`'s summary; main()
+    # intercepts both names before this subparser ever runs.
+    sub.add_parser(
+        "update",
+        help="check for, or install, a published Groundwork release (see 'groundwork update --help')",
+        add_help=False,
+    )
+    sub.add_parser(
+        "rollback",
+        help="restore a prior installation from an existing backup (see 'groundwork rollback --help')",
+        add_help=False,
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # Handled before argparse ever sees it: everything after "integrations" (including "--help")
-    # must reach the installed script byte-for-byte, and argparse's REMAINDER cannot reliably do
-    # that across parser levels (see the comment in build_parser()).
+    # Handled before argparse ever sees it: everything after "integrations"/"update"/"rollback"
+    # (including "--help") must reach the installed script byte-for-byte, and argparse's REMAINDER
+    # cannot reliably do that across parser levels (see the comment in build_parser()).
     if argv and argv[0] == "integrations":
         return cmd_integrations(argv[1:])
+    if argv and argv[0] == "update":
+        return cmd_update(argv[1:])
+    if argv and argv[0] == "rollback":
+        return cmd_rollback(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

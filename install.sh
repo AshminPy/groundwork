@@ -124,14 +124,22 @@ chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
 # entry point (`groundwork --help`/`version`/`doctor`) that dispatches to existing functionality;
 # it does not reimplement it. `doctor` needs a copy of setup.sh itself alongside it so it can
 # invoke `--doctor` with byte-identical output to running ./setup.sh --doctor from the repo — that
-# mode is fully self-contained against $CLAUDE_DIR (confirmed by reading setup.sh: verify_install/
-# verify_capabilities never touch a $HERE-relative path), so the installed copy is safe to run
-# with --doctor only; its other modes (--setup/--configure/--rollback/--uninstall) depend on
-# $HERE-relative files not copied here and are never invoked from this location.
+# mode, and --rollback (see below), are fully self-contained against $CLAUDE_DIR (confirmed by
+# reading setup.sh: verify_install/verify_capabilities/run_rollback/latest_backup never touch a
+# $HERE-relative path), so the installed copy is safe to run with --doctor or --rollback; its other
+# modes (--setup/--configure/--uninstall) depend on $HERE-relative files not copied here and are
+# never invoked from this location.
 cp "$HERE/setup.sh" "$CLAUDE_DIR/groundwork/bin/setup.sh"
 chmod +x "$CLAUDE_DIR/groundwork/bin/setup.sh"
 cp "$HERE/scripts/groundwork_cli.py" "$CLAUDE_DIR/groundwork/bin/groundwork"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork"
+
+# Version/update lifecycle (Phase 3, openspec/changes/groundwork-update-lifecycle/) — `groundwork
+# update`/`rollback` dispatch here; this script fetches a published GitHub Release and re-invokes
+# the fetched tree's own setup.sh (never reimplementing installer logic), or dispatches rollback to
+# the installed setup.sh --rollback above. Stores no credentials, installs nothing itself.
+cp "$HERE/scripts/groundwork_update.py" "$CLAUDE_DIR/groundwork/bin/"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_update.py"
 
 # PATH registration — the exact idempotent-env-script pattern already used by uv/rustup (see
 # DECISION 2 in openspec/changes/groundwork-cli-foundation/design.md for the live evidence this
