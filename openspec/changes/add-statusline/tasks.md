@@ -48,4 +48,4 @@
 - [x] 7.2 `openspec validate add-statusline --strict`.
 - [x] 7.3 Measure actual statusLine execution time (e.g. `time python3 scripts/groundwork_statusline.py < fixture.json`) across at least: warm cache, missing cache, missing telemetry, large synthetic telemetry file — record real numbers, not an estimate.
 - [x] 7.4 Runtime validation: fresh install into a clean `CLAUDE_CONFIG_DIR`; upgrade install over an existing Groundwork setup (confirm unrelated existing `settings.json` entries are preserved); compact/detailed/plain-text rendering against real stdin-shaped JSON; dirty and clean real git states; two distinct synthetic `session_id`s against one real telemetry file.
-- [ ] 7.5 Dispatch an independent, fresh-context review against this OpenSpec change; fix only findings it reports as material (MUST FIX), and re-run affected validation after each fix.
+- [x] 7.5 Dispatch an independent, fresh-context review against this OpenSpec change; fix only findings it reports as material (MUST FIX), and re-run affected validation after each fix.
