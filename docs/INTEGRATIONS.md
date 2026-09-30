@@ -29,3 +29,36 @@ Both Anthropic (`anthropic.com/engineering/code-execution-with-mcp`, 2025-11-04)
 ## Recommendation, in one line per domain
 
 Connect only what a task genuinely needs, prefer a vendor-official server when one exists, prefer a narrow CLI/API call over a broad MCP mutation tool when the MCP tool is a thin pass-through anyway (Spacelift's `mutate`, Prometheus generally), and treat any domain marked "verify before adoption" above as exactly that — researched enough to know it exists and roughly what it does, not verified enough to install blind.
+
+## Querying live status (Integration Catalog, 2.1)
+
+Everything above is static research, true regardless of what's installed on any given machine. For live, per-machine readiness — read-only, no credentials touched — use the Integration Catalog:
+
+```bash
+python3 ~/.claude/groundwork/bin/groundwork_integrations.py list
+python3 ~/.claude/groundwork/bin/groundwork_integrations.py show github
+```
+
+It reports three **independent** truthful observations per integration, never collapsed into a forced lifecycle:
+
+- `available` — an approved mechanism is actually present (a CLI binary on PATH, or an MCP server listed by `claude mcp list`)
+- `configured` — non-secret Groundwork configuration references it (the active capability profile's `cloud`/`platform`/`integrations` lists)
+- `connected` — a real reachability/authentication check for that specific mechanism actually ran and succeeded (today: only the GitHub `gh` CLI mechanism has one — every other mechanism's `connected` stays `false` until a real check for it is implemented, never guessed)
+
+Separately, `used` (`true`/`false`/`unknown`) reads Groundwork's own existing telemetry — never new tracking. `list`/`show` derive one concise summary label (`CONNECTED` > `CONFIGURED` > `AVAILABLE` > `NOT CONFIGURED`) for display only; it is never itself the stored truth, and `show` always prints the three raw booleans alongside it. Folded into `./setup.sh --doctor` too. Full model and rationale: `openspec/changes/add-integration-catalog/design.md`.
+
+| Domain | Capability ids |
+|---|---|
+| GitHub | `github.repository.read`, `github.repository.write`, `github.pull_request.read` |
+| Spacelift | `spacelift.stack.read`, `spacelift.run.write` |
+| Jira | `jira.issue.read`, `jira.issue.write` |
+| Confluence | `confluence.page.read`, `confluence.page.write` |
+| AWS | `aws.resource.read`, `aws.resource.write` |
+| GCP | `gcp.resource.read`, `gcp.resource.write` |
+| Kubernetes | `kubernetes.resources.read`, `kubernetes.logs.read`, `kubernetes.events.read` |
+| Terraform | `terraform.plan.read`, `terraform.module.read` |
+| Observability — Grafana | `observability.dashboards.read`, `observability.dashboards.write` |
+| Observability — Datadog | `observability.metrics.read`, `observability.monitors.write` |
+| Observability — PagerDuty | `observability.incidents.read`, `observability.incidents.write` |
+| Observability — Sentry | `observability.issues.read` |
+| Observability — Prometheus | `observability.metrics.read` |

@@ -113,6 +113,13 @@ fi
 cp "$HERE/scripts/groundwork_config.py" "$HERE/scripts/groundwork_routines.py" "$CLAUDE_DIR/groundwork/bin/"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_config.py" "$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
 
+# Integration Catalog (Groundwork 2.1) — a structured, read-only catalog of known external-system
+# integrations and their truthfully-observed readiness (see docs/INTEGRATIONS.md). Installs
+# nothing itself and stores no credentials; dormant/NOT CONFIGURED for everything until a
+# config.json exists.
+cp "$HERE/scripts/groundwork_integrations.py" "$CLAUDE_DIR/groundwork/bin/"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
+
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 

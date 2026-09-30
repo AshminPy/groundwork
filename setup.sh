@@ -49,6 +49,7 @@ ROUTINE_NAME=""
 BACKUP_PATH=""
 CONFIG_PY="$CLAUDE_DIR/groundwork/bin/groundwork_config.py"
 ROUTINES_PY="$CLAUDE_DIR/groundwork/bin/groundwork_routines.py"
+INTEGRATIONS_PY="$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -728,6 +729,13 @@ for name, s in cfg.get('skills', {}).items():
     # one place; this just indents and prints it. `|| true` — a routine-status failure must not
     # abort the rest of --doctor (same discipline as the Capabilities section above).
     python3 "$ROUTINES_PY" doctor 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+  fi
+  if [ -f "$INTEGRATIONS_PY" ]; then
+    say ""
+    say "  -- Integrations --"
+    # Read-only: the Integration Catalog's own `list` output, indented — same fail-safe discipline
+    # as the Routines section above (a catalog-probe failure must not abort the rest of --doctor).
+    python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
   fi
 }
 

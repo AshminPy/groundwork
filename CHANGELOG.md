@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Tracked in `openspec/changes/add-integration-catalog/`; see that change's `tasks.md` for exact task status and `design.md` for the full model and rationale.
+
+- **Integration Catalog** (`scripts/groundwork_integrations.py`, new): a structured, code-defined catalog of the external-system integrations documented in `docs/INTEGRATIONS.md` (GitHub, Jira, Confluence, AWS, GCP, Kubernetes, Terraform, Spacelift, and five observability tools), each with its capability ids, approved access mechanism(s) (`mcp`/`cli`/`api`), and three **independent** truthful readiness observations — `available` (mechanism present), `configured` (non-secret Groundwork config references it), `connected` (a real reachability/auth check actually ran and succeeded; today only the GitHub `gh` CLI mechanism has one) — plus a separate task/session observation `used` (read from existing telemetry, never new tracking). A single display-only summary label (`CONNECTED` > `CONFIGURED` > `AVAILABLE` > `NOT CONFIGURED`) is derived for `list`/`show`'s concise output; it is never itself the stored truth, and any combination of the three booleans is preserved rather than forced into a lifecycle (configuration can exist for a mechanism that isn't currently present).
+- `groundwork_integrations.py list` / `show NAME` — read-only CLI, installed alongside the other three scripts; folded into `./setup.sh --doctor` as a new "-- Integrations --" section.
+- Evaluated and **rejected** `anaisbetts/mcp-installer` as an MCP installation backend (Claude-Desktop-only, no Claude Code integration, no uninstall/update, plaintext secrets on disk, unsandboxed arbitrary code execution via `npx`/`uvx`/`npm install`) — Groundwork continues to install nothing and store no credentials for any integration.
+- Documented explicitly (`docs/ARCHITECTURE.md`): Groundwork builds no custom MCP tool-loading/activation engine — Claude Code's native Tool Search already provides context-efficient, lazy MCP tool-schema loading; the catalog gives capability/access-mechanism *guidance* only and never claims to enforce per-task MCP activation.
+- `docs/INTEGRATIONS.md` extended with capability ids per domain and the new command; a deterministic test keeps the two from silently drifting apart, without any runtime Markdown parser in production code.
+- Tests: `tests/test_groundwork_integrations.py` (new, 131 checks) — catalog structural validity, all required available/configured/connected combinations, presence-never-implies-connected, a real successful/failed/timed-out check, malformed/missing config failing safe, the `used` observation's true/false/unknown cases, CLI output, no secret-shaped values ever emitted, and the doc-consistency check.
+
 ## 2.1.0 — 2026-09-28
 
 Context engineering, capability resolution, Routines, and a setup-time capability configurator. Tracked in `openspec/changes/groundwork-2.1-context-routines-ux/`; see that change's `tasks.md` for exact phase-by-phase status and `docs/VALIDATION.md` for evidence. Merged to `main` via PR [#22](https://github.com/AshminPy/groundwork/pull/22) (merge commit `e3d4b4f`), after 4 rounds of independent review, Must-fix: 0. Not tagged, not published as a GitHub release.
