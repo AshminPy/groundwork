@@ -136,15 +136,21 @@ one). It is the primary discoverable interface — a single entry point that dis
 functionality documented above, not a replacement for it:
 
 ```bash
-groundwork --help     # lists what's implemented
-groundwork version    # the installed Groundwork version
-groundwork doctor     # identical to ./setup.sh --doctor, callable from anywhere
+groundwork --help                    # lists what's implemented
+groundwork version                   # the installed Groundwork version
+groundwork doctor                    # identical to ./setup.sh --doctor, callable from anywhere
+groundwork integrations list         # the Integration Catalog: one line per integration
+groundwork integrations show NAME    # full detail for one integration
+groundwork integrations doctor NAME  # show's detail plus a reason for each observation
+groundwork integrations refresh      # re-run every probe and persist to the statusLine's cache
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
 working exactly as before — `groundwork` is an additional, smaller-surface way to reach a subset
-of it, not the only way. More subcommands (`groundwork integrations`, `groundwork routines`,
-`groundwork update`) are planned for later releases; only what's listed above exists today.
+of it, not the only way. `groundwork integrations` forwards its arguments verbatim to
+`groundwork_integrations.py` — see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full truth
+model. More subcommands (`groundwork routines`, `groundwork update`) are planned for later
+releases.
 
 Per project, once, if you want spec-driven work there:
 ```bash

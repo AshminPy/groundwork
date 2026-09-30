@@ -373,6 +373,68 @@ def test_show_command() -> None:
     finish()
 
 
+def test_doctor_command() -> None:
+    print("groundwork_integrations.py — doctor: adds a reason line per observation without changing "
+          "the observation itself (never disagrees with show), probes each mechanism exactly once")
+    mod = load_module()
+
+    class Args:
+        name = "github"
+
+    show_out = _capture(mod._cmd_show, Args())
+    doctor_out = _capture(mod._cmd_doctor, Args())
+    for label in ("Purpose", "Capabilities", "Approved access", "Configuration",
+                  "Available", "Configured", "Connected", "Used", "Summary state"):
+        check(f"doctor output includes '{label}'", label in doctor_out, doctor_out)
+    check("doctor includes at least one '- why' reason line", "- why" in doctor_out, doctor_out)
+
+    def state_line(out: str, label: str) -> str:
+        return next(l for l in out.splitlines() if l.strip().startswith(label))
+
+    for label in ("Available", "Configured", "Connected", "Summary state"):
+        check(f"doctor's '{label}' line matches show's (same underlying observation, narration only)",
+              state_line(doctor_out, label) == state_line(show_out, label),
+              f"show={state_line(show_out, label)!r} doctor={state_line(doctor_out, label)!r}")
+
+    # Each mechanism's connectivity check must run exactly once, not once inside an aggregate
+    # observation and again for the per-mechanism reason line (a real bug caught during this
+    # change's own review: doubling e.g. `gh auth status` calls).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        call_log = Path(tmpdir) / "calls.log"
+        gh_stub = Path(tmpdir) / "gh"
+        gh_stub.write_text(
+            f"#!/bin/sh\necho called >> {call_log}\n"
+            "echo 'github.com'\necho '  ✓ Logged in to github.com account someone (keyring)'\nexit 0\n"
+        )
+        gh_stub.chmod(gh_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(tmpdir)
+        try:
+            _capture(mod._cmd_doctor, Args())
+            calls = call_log.read_text().count("called") if call_log.exists() else 0
+            check("the gh CLI connectivity check runs exactly once per doctor invocation (not twice)",
+                  calls == 1, f"calls={calls}")
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+
+    class UnknownArgs:
+        name = "totally-not-a-real-integration"
+
+    old = sys.stdout
+    sys.stdout = StringIO()
+    try:
+        rc = mod._cmd_doctor(UnknownArgs())
+        out2 = sys.stdout.getvalue()
+    finally:
+        sys.stdout = old
+    check("doctor with an unknown integration name returns non-zero, no traceback", rc == 1, rc)
+    check("doctor with an unknown name reports 'not a known integration'", "not a known integration" in out2, out2)
+    finish()
+
+
 def test_routines_dependency_is_deterministic() -> None:
     print("groundwork_integrations.py — Used by Routines only lists a Routine whose stored config explicitly declares that mechanism")
     mod = load_module()
@@ -435,7 +497,7 @@ if __name__ == "__main__":
                test_failed_check_never_yields_connected,
                test_exit_zero_without_success_marker_never_yields_connected, test_timeout_never_yields_connected,
                test_malformed_or_missing_config_fails_safe, test_used_observation,
-               test_list_command, test_show_command, test_routines_dependency_is_deterministic,
+               test_list_command, test_show_command, test_doctor_command, test_routines_dependency_is_deterministic,
                test_no_secret_exposure, test_doc_consistency_with_integrations_md):
         try:
             fn()

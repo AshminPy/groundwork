@@ -32,11 +32,22 @@ Connect only what a task genuinely needs, prefer a vendor-official server when o
 
 ## Querying live status (Integration Catalog, 2.2)
 
-Everything above is static research, true regardless of what's installed on any given machine. For live, per-machine readiness — read-only, no credentials touched — use the Integration Catalog:
+Everything above is static research, true regardless of what's installed on any given machine. For live, per-machine readiness — read-only, no credentials touched — use the Integration Catalog, preferably through the stable `groundwork` CLI ([README.md](../README.md#the-groundwork-command)):
+
+```bash
+groundwork integrations list            # one row per integration: name, access, summary state
+groundwork integrations show github     # full detail for one integration
+groundwork integrations doctor github   # show's detail plus a one-line reason for each observation
+groundwork integrations refresh         # re-run every probe, persist to the statusLine's cache
+```
+
+The direct script keeps working unchanged too (`groundwork integrations` forwards every argument to
+it verbatim — no behavior difference either way):
 
 ```bash
 python3 ~/.claude/groundwork/bin/groundwork_integrations.py list
 python3 ~/.claude/groundwork/bin/groundwork_integrations.py show github
+python3 ~/.claude/groundwork/bin/groundwork_integrations.py doctor github
 ```
 
 It reports three **independent** truthful observations per integration, never collapsed into a forced lifecycle:
@@ -45,7 +56,7 @@ It reports three **independent** truthful observations per integration, never co
 - `configured` — non-secret Groundwork configuration references it (the active capability profile's `cloud`/`platform`/`integrations` lists)
 - `connected` — a real reachability/authentication check for that specific mechanism actually ran and succeeded (today: only the GitHub `gh` CLI mechanism has one — every other mechanism's `connected` stays `false` until a real check for it is implemented, never guessed)
 
-Separately, `used` (`true`/`false`/`unknown`) reads Groundwork's own existing telemetry — never new tracking. `list`/`show` derive one concise summary label (`CONNECTED` > `CONFIGURED` > `AVAILABLE` > `NOT CONFIGURED`) for display only; it is never itself the stored truth, and `show` always prints the three raw booleans alongside it. Folded into `./setup.sh --doctor` too. Full model and rationale: `openspec/changes/add-integration-catalog/design.md`.
+Separately, `used` (`true`/`false`/`unknown`) reads Groundwork's own existing telemetry — never new tracking. `list`/`show` derive one concise summary label (`CONNECTED` > `CONFIGURED` > `AVAILABLE` > `NOT CONFIGURED`) for display only; it is never itself the stored truth, and `show` always prints the three raw booleans alongside it. `doctor NAME` prints everything `show` does plus a one-line reason for each observation (why it's `YES`/`NO`/`UNKNOWN`) — narration only, computed from the exact same probes, never a second check. Folded into `./setup.sh --doctor` too. Full model and rationale: `openspec/changes/add-integration-catalog/design.md` (original catalog) and `openspec/changes/groundwork-integrations-cli/` (the `groundwork integrations` CLI surface and `doctor`).
 
 | Domain | Capability ids |
 |---|---|

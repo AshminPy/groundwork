@@ -34,6 +34,10 @@ the source of truth; `show` always prints the three raw booleans too.
 Usage:
   groundwork_integrations.py list          one row per catalog integration: name, access, summary state
   groundwork_integrations.py show NAME     full detail for one integration (case-insensitive name)
+  groundwork_integrations.py doctor NAME   show's detail plus a one-line reason for each observation
+                                            (why available/configured/connected/used is what it is) —
+                                            narrates the same observation `show` already computes, never
+                                            a second probe
 
 No dependency on `hooks/groundwork_shared.py`: `hooks/` and `scripts/` install to different
 directories post-install (~/.claude/hooks/ vs ~/.claude/groundwork/bin/), so a shared import between
@@ -345,12 +349,23 @@ def determine_used(entry: IntegrationEntry) -> Optional[bool]:
     return False  # a real recent record exists and does not list this integration's MCP server
 
 
+def _combine_observation(available_flags, connected_flags, configured: bool, used: Optional[bool]) -> IntegrationObservation:
+    """The one place the `any(...)` combination formula lives. determine_observation() and
+    _cmd_doctor() both call this rather than each writing their own `any()` — found during
+    independent review: doctor previously re-derived this formula inline, which would have let the
+    two silently drift if the combinator ever changed (e.g. to something other than `any`)."""
+    return IntegrationObservation(
+        available=any(available_flags), configured=configured, connected=any(connected_flags), used=used,
+    )
+
+
 def determine_observation(entry: IntegrationEntry, cfg: dict) -> IntegrationObservation:
-    available = any(_mechanism_available(m) for m in entry.mechanisms)
-    configured = _configured(entry, cfg)
-    connected = any(_mechanism_connected(m) for m in entry.mechanisms)
-    used = determine_used(entry)
-    return IntegrationObservation(available=available, configured=configured, connected=connected, used=used)
+    return _combine_observation(
+        [_mechanism_available(m) for m in entry.mechanisms],
+        [_mechanism_connected(m) for m in entry.mechanisms],
+        _configured(entry, cfg),
+        determine_used(entry),
+    )
 
 
 def summary_state(obs: IntegrationObservation) -> str:
@@ -475,6 +490,86 @@ def _cmd_show(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# `doctor NAME` — a narration layer only. Every reason below explains a boolean that
+# determine_observation() (unchanged, already covered by the tests above) already computed; no
+# probe is ever re-run here, so `doctor` can never disagree with `show`/`list` about the state
+# itself, only add a one-line "why".
+# ---------------------------------------------------------------------------------------------
+def _availability_reason(mech: AccessMechanism, available: bool) -> str:
+    if mech.type == "cli":
+        return f"'{mech.cli_binary}' {'found' if available else 'not found'} on PATH"
+    if mech.type == "mcp":
+        return (f"'{mech.mcp_server_name}' {'is' if available else 'is not'} listed by 'claude mcp list'"
+                + ("" if available else " (or 'claude' is not on PATH / did not respond)"))
+    return "no presence probe exists for this access type (e.g. a plain HTTP API)"
+
+
+def _connected_reason(mech: AccessMechanism, connected: bool) -> str:
+    if mech.cli_auth_cmd is None:
+        return "no real connectivity check is implemented for this mechanism yet — never guessed"
+    cmd = " ".join(mech.cli_auth_cmd)
+    return f"'{cmd}' {'confirmed a successful login' if connected else 'did not confirm a successful login'}"
+
+
+def _configured_reason(entry: IntegrationEntry, cfg: dict, configured: bool) -> str:
+    if entry.config_key is None:
+        return "this integration has no config.json key defined — configured is never set for it"
+    section, key = entry.config_key
+    if not cfg:
+        return "no config.json found (or it is empty) — falls back to not configured"
+    return f"'{key}' {'is' if configured else 'is not'} listed in config.json's '{section}' section"
+
+
+def _used_reason(entry: IntegrationEntry, used: Optional[bool]) -> str:
+    has_mcp = any(m.type == "mcp" for m in entry.mechanisms)
+    if not has_mcp:
+        return "no MCP mechanism — usage cannot be reliably attributed from telemetry for a CLI/API-only integration"
+    if used is None:
+        return "no telemetry records found yet" if not TELEMETRY_PATH.exists() else "the most recent telemetry record has no usable MCP server list"
+    return "found in the most recent telemetry record's MCP server list" if used else "not found in the most recent telemetry record's MCP server list"
+
+
+def _cmd_doctor(args) -> int:
+    entry = _BY_NAME.get(args.name.lower())
+    if entry is None:
+        print(f"'{args.name}' is not a known integration. Run 'groundwork_integrations.py list' for the catalog.")
+        return 1
+    cfg = _load_config()
+    # Probe each mechanism exactly once — the boolean feeds both the top-line YES/NO and its own
+    # "why" line, rather than calling determine_observation() and then re-probing for reasons
+    # (which would run every connectivity check, e.g. `gh auth status`, a second time). The
+    # combination formula itself still lives in exactly one place (_combine_observation, shared
+    # with determine_observation) — only the per-mechanism probing is done here, not the decision
+    # of how those booleans combine into available/connected.
+    avail_by_mech = [(m, _mechanism_available(m)) for m in entry.mechanisms]
+    conn_by_mech = [(m, _mechanism_connected(m)) for m in entry.mechanisms]
+    configured = _configured(entry, cfg)
+    used = determine_used(entry)
+    obs = _combine_observation(
+        [a for _, a in avail_by_mech], [c for _, c in conn_by_mech], configured, used,
+    )
+    routines = _routines_using(entry, cfg)
+    print(entry.name)
+    print(f"  Purpose ............ {entry.trust}")
+    print(f"  Capabilities ....... {', '.join(entry.capabilities)}")
+    print(f"  Approved access .... {', '.join(m.name for m in entry.mechanisms)}")
+    print(f"  Configuration ...... {entry.config_requirements}")
+    print(f"  Available .......... {'YES' if obs.available else 'NO'}")
+    for m, a in avail_by_mech:
+        print(f"    - why ............ {m.name}: {_availability_reason(m, a)}")
+    print(f"  Configured ......... {'YES' if obs.configured else 'NO'}")
+    print(f"    - why ............ {_configured_reason(entry, cfg, obs.configured)}")
+    print(f"  Connected .......... {'YES' if obs.connected else 'NO'}")
+    for m, c in conn_by_mech:
+        print(f"    - why ............ {m.name}: {_connected_reason(m, c)}")
+    print(f"  Used ............... {_used_label(obs.used)}")
+    print(f"    - why ............ {_used_reason(entry, obs.used)}")
+    print(f"  Summary state ...... {summary_state(obs)}")
+    print(f"  Used by Routines ... {', '.join(routines) if routines else '(none currently)'}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -486,8 +581,10 @@ def main() -> int:
         help="re-run every live probe and persist the results to the Integration Catalog cache "
              "(for scripts/groundwork_statusline.py — never run this from a scheduled/background job)",
     )
+    p_doctor = sub.add_parser("doctor", help="show's detail plus a one-line reason for each observation")
+    p_doctor.add_argument("name")
     args = ap.parse_args()
-    return {"list": _cmd_list, "show": _cmd_show, "refresh": _cmd_refresh}[args.cmd](args)
+    return {"list": _cmd_list, "show": _cmd_show, "refresh": _cmd_refresh, "doctor": _cmd_doctor}[args.cmd](args)
 
 
 if __name__ == "__main__":
