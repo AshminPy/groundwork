@@ -349,12 +349,23 @@ def determine_used(entry: IntegrationEntry) -> Optional[bool]:
     return False  # a real recent record exists and does not list this integration's MCP server
 
 
+def _combine_observation(available_flags, connected_flags, configured: bool, used: Optional[bool]) -> IntegrationObservation:
+    """The one place the `any(...)` combination formula lives. determine_observation() and
+    _cmd_doctor() both call this rather than each writing their own `any()` — found during
+    independent review: doctor previously re-derived this formula inline, which would have let the
+    two silently drift if the combinator ever changed (e.g. to something other than `any`)."""
+    return IntegrationObservation(
+        available=any(available_flags), configured=configured, connected=any(connected_flags), used=used,
+    )
+
+
 def determine_observation(entry: IntegrationEntry, cfg: dict) -> IntegrationObservation:
-    available = any(_mechanism_available(m) for m in entry.mechanisms)
-    configured = _configured(entry, cfg)
-    connected = any(_mechanism_connected(m) for m in entry.mechanisms)
-    used = determine_used(entry)
-    return IntegrationObservation(available=available, configured=configured, connected=connected, used=used)
+    return _combine_observation(
+        [_mechanism_available(m) for m in entry.mechanisms],
+        [_mechanism_connected(m) for m in entry.mechanisms],
+        _configured(entry, cfg),
+        determine_used(entry),
+    )
 
 
 def summary_state(obs: IntegrationObservation) -> str:
@@ -527,14 +538,17 @@ def _cmd_doctor(args) -> int:
     cfg = _load_config()
     # Probe each mechanism exactly once — the boolean feeds both the top-line YES/NO and its own
     # "why" line, rather than calling determine_observation() and then re-probing for reasons
-    # (which would run every connectivity check, e.g. `gh auth status`, a second time).
+    # (which would run every connectivity check, e.g. `gh auth status`, a second time). The
+    # combination formula itself still lives in exactly one place (_combine_observation, shared
+    # with determine_observation) — only the per-mechanism probing is done here, not the decision
+    # of how those booleans combine into available/connected.
     avail_by_mech = [(m, _mechanism_available(m)) for m in entry.mechanisms]
     conn_by_mech = [(m, _mechanism_connected(m)) for m in entry.mechanisms]
-    available = any(a for _, a in avail_by_mech)
-    connected = any(c for _, c in conn_by_mech)
     configured = _configured(entry, cfg)
     used = determine_used(entry)
-    obs = IntegrationObservation(available=available, configured=configured, connected=connected, used=used)
+    obs = _combine_observation(
+        [a for _, a in avail_by_mech], [c for _, c in conn_by_mech], configured, used,
+    )
     routines = _routines_using(entry, cfg)
     print(entry.name)
     print(f"  Purpose ............ {entry.trust}")

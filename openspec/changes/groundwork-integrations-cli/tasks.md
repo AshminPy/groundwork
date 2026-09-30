@@ -41,7 +41,17 @@
 - [x] 4.3 Real end-to-end runtime validation: disposable `$HOME`/`$CLAUDE_CONFIG_DIR` sandbox, real
       `install.sh`, `groundwork integrations list/show/doctor/refresh/--help` all exercised for
       real, not assumed
-- [ ] 4.4 Independent fresh-context review; fix MUST FIX only; re-validate
+- [x] 4.4 Independent fresh-context review — verdict **0 MUST FIX**. Verified live: the
+      `--help` bug claim reproduced in isolation (confirms DECISION 1's fix is real, not
+      assumed), `doctor`/`show` observations byte-matched in both a connected and
+      not-connected state, the `gh auth status` call-count fix confirmed via a stub binary
+      (exactly one call), truth model confirmed untouched by diff. One SHOULD FIX — the
+      `any(...)` combination formula was written in two places (inline in `_cmd_doctor` and in
+      `determine_observation`), a real "second independent computation" risk even though the two
+      were behaviorally identical today. Fixed by extracting `_combine_observation()` as the one
+      place the formula lives; both callers now share it while `_cmd_doctor` still probes each
+      mechanism exactly once (the earlier fix is preserved, not reverted). Re-validated: full
+      suite green (86 passed), `openspec validate --strict` valid.
 
 ## 5. Report
-- [ ] 5.1 Commit, push, create/update a draft PR — do not merge
+- [x] 5.1 Commit, push, create/update a draft PR — do not merge
