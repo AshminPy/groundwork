@@ -14,6 +14,8 @@
 #   - the four hook entries, the deny rules, and the env defaults this repo's
 #     install.sh added to settings.json (via scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
+#   - the groundwork CLI (bin/groundwork, bin/setup.sh, groundwork/env) and the marked
+#     PATH-registration block install.sh appended to ~/.bashrc / ~/.zshrc / ~/.profile
 #
 # Does NOT uninstall ECC or OpenSpec (they're independent, official projects —
 # use their own uninstall paths if you want them gone too, see README.md), and
@@ -64,11 +66,34 @@ fi
 rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
 rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/groundwork/VERSION" \
+      "$CLAUDE_DIR/groundwork/env" \
       "$CLAUDE_DIR/hooks/block_protected_push.py" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
       "$CLAUDE_DIR/hooks/groundwork_telemetry.py" \
       "$CLAUDE_DIR/hooks/groundwork_shared.py"
+# groundwork CLI PATH registration — remove exactly the marked block install.sh appended (same
+# exact-match limitation already documented elsewhere in this file: a byte-identical block a user
+# happened to add independently would also be removed). Never touches any other line in the file.
+GW_ENV_MARK_BEGIN="# >>> groundwork CLI PATH (added by Groundwork's install.sh) >>>"
+GW_ENV_MARK_END="# <<< groundwork CLI PATH <<<"
+for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+  if [ -f "$rc" ] && grep -qF "$GW_ENV_MARK_BEGIN" "$rc" 2>/dev/null; then
+    tmp="$(mktemp)"
+    awk -v begin="$GW_ENV_MARK_BEGIN" -v end="$GW_ENV_MARK_END" '
+      $0 == begin { skip=1; next }
+      $0 == end { skip=0; next }
+      skip { next }
+      { print }
+    ' "$rc" > "$tmp"
+    # Also drop the blank line install.sh adds immediately before the marker block, if present
+    # as the new trailing blank line left after removal, to avoid accumulating blank lines across
+    # repeated install/uninstall cycles.
+    awk 'BEGIN{prev=""} { if (!(NR>1 && $0=="" && prev=="")) print; prev=$0 }' "$tmp" > "$tmp.2"
+    mv "$tmp.2" "$rc"
+    rm -f "$tmp"
+  fi
+done
 # Python leaves a compiled cache behind for each hook it has run; clean up just Groundwork's own
 # entries by name (never the whole __pycache__ dir — it may hold other tools' cached modules too).
 rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \

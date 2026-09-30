@@ -119,6 +119,46 @@ chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_config.py" "$CLAUDE_DIR/groundwo
 # config.json exists.
 cp "$HERE/scripts/groundwork_integrations.py" "$CLAUDE_DIR/groundwork/bin/"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
+
+# groundwork CLI (Phase 1, openspec/changes/groundwork-cli-foundation/) — a single discoverable
+# entry point (`groundwork --help`/`version`/`doctor`) that dispatches to existing functionality;
+# it does not reimplement it. `doctor` needs a copy of setup.sh itself alongside it so it can
+# invoke `--doctor` with byte-identical output to running ./setup.sh --doctor from the repo — that
+# mode is fully self-contained against $CLAUDE_DIR (confirmed by reading setup.sh: verify_install/
+# verify_capabilities never touch a $HERE-relative path), so the installed copy is safe to run
+# with --doctor only; its other modes (--setup/--configure/--rollback/--uninstall) depend on
+# $HERE-relative files not copied here and are never invoked from this location.
+cp "$HERE/setup.sh" "$CLAUDE_DIR/groundwork/bin/setup.sh"
+chmod +x "$CLAUDE_DIR/groundwork/bin/setup.sh"
+cp "$HERE/scripts/groundwork_cli.py" "$CLAUDE_DIR/groundwork/bin/groundwork"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork"
+
+# PATH registration — the exact idempotent-env-script pattern already used by uv/rustup (see
+# DECISION 2 in openspec/changes/groundwork-cli-foundation/design.md for the live evidence this
+# was copied from, not invented): a small conditional-prepend script, sourced by one guarded,
+# marked line appended only to shell rc files that already exist. Never requires sudo, never
+# creates an rc file that doesn't already exist, never duplicates the line on re-install.
+GW_BIN_DIR="$CLAUDE_DIR/groundwork/bin"
+cat > "$CLAUDE_DIR/groundwork/env" <<ENVEOF
+#!/bin/sh
+# Groundwork CLI PATH registration — added by install.sh, removed by uninstall.sh.
+case ":\${PATH}:" in
+    *:"$GW_BIN_DIR":*)
+        ;;
+    *)
+        export PATH="$GW_BIN_DIR:\$PATH"
+        ;;
+esac
+ENVEOF
+GW_ENV_MARK_BEGIN="# >>> groundwork CLI PATH (added by Groundwork's install.sh) >>>"
+GW_ENV_MARK_END="# <<< groundwork CLI PATH <<<"
+PATH_RC_TOUCHED=()
+for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+  if [ -f "$rc" ] && ! grep -qF "$GW_ENV_MARK_BEGIN" "$rc" 2>/dev/null; then
+    { echo ""; echo "$GW_ENV_MARK_BEGIN"; echo "[ -f \"$CLAUDE_DIR/groundwork/env\" ] && . \"$CLAUDE_DIR/groundwork/env\""; echo "$GW_ENV_MARK_END"; } >> "$rc"
+    PATH_RC_TOUCHED+=("$rc")
+  fi
+done
 # One best-effort cache refresh so the statusLine (below) has real data from the first render —
 # never repeated on a timer; the only other refreshes are setup.sh's --configure/--doctor
 # (openspec/changes/add-statusline/design.md Decision 1: lifecycle-driven, not scheduled).
@@ -138,6 +178,15 @@ python3 "$HERE/scripts/merge_settings.py" "${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"}" 
 
 echo ""
 echo "== Groundwork installed. =="
+echo ""
+case ":${PATH}:" in
+  *:"$GW_BIN_DIR":*)
+    echo "The 'groundwork' command is ready: try 'groundwork --help'." ;;
+  *)
+    echo "The 'groundwork' command is installed but not yet on PATH in this shell."
+    echo "Run:  source \"$CLAUDE_DIR/groundwork/env\""
+    echo "...or open a new terminal — then 'groundwork --help' will work." ;;
+esac
 echo ""
 echo "Next steps:"
 echo "  1. In any project you want spec-driven MATERIAL work in, run: openspec init --tools claude"
