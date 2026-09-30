@@ -236,8 +236,9 @@ groundwork/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
 │   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
-│   ├── groundwork_integrations.py     Integration Catalog: capability ids, approved mechanisms, truthful available/configured/connected/used observations
-│   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams)
+│   ├── groundwork_integrations.py     Integration Catalog: capability ids, approved mechanisms, truthful available/configured/connected/used observations; `refresh` persists a cache for the statusLine
+│   ├── groundwork_statusline.py       Claude Code statusLine: LIVE/LAST-COMPLETED-TURN/CACHED/UNAVAILABLE data-source contract, session-isolated, never probes integrations itself
+│   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams, statusLine)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)
 │   └── migrate_legacy_rules.py        moves a pre-Groundwork rules/harness copy to a backup
 ├── tests/                             deterministic, no model calls: run any file directly or `python3 -m pytest tests -q`
@@ -248,7 +249,8 @@ groundwork/
 │   ├── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall, capabilities, doctor, routines)
 │   ├── test_groundwork_config.py      capability config (profiles, validation, fail-open, CLAUDE_CONFIG_DIR resolution)
 │   ├── test_groundwork_routines.py    Routines (safety contract, off-switches, scheduling, telemetry)
-│   └── test_groundwork_integrations.py Integration Catalog (state combinations, presence≠connected, no secret exposure, doc consistency)
+│   ├── test_groundwork_integrations.py Integration Catalog (state combinations, presence≠connected, no secret exposure, doc consistency)
+│   └── test_groundwork_statusline.py  statusLine (session isolation, cache-only integrations, fail-safe, measured execution time)
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md

@@ -587,6 +587,10 @@ apply_capabilities() {  # writes config.json from CAP_PROFILE, if one was chosen
   say "  capability profile: $CAP_PROFILE (edit $CLAUDE_DIR/groundwork/config.json to fine-tune, or run ./setup.sh --configure again)"
   configure_routines_interactive
   schedule_all_enabled_routines
+  # `configured` observations depend on config.json, just rewritten above — refresh the statusLine's
+  # Integration Catalog cache now so it reflects the new profile immediately (best-effort; a missing
+  # or slow probe here must never fail setup — openspec/changes/add-statusline/design.md Decision 1).
+  [ -f "$INTEGRATIONS_PY" ] && { python3 "$INTEGRATIONS_PY" refresh >/dev/null 2>&1 || true; }
 }
 
 validate_choices() {
@@ -696,7 +700,9 @@ verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to
     if [ -f "$INTEGRATIONS_PY" ]; then
       say ""
       say "  -- Integrations --"
-      python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+      # `refresh` (not `list`): same output, but also persists to the statusLine's cache — one of
+      # this feature's only three lifecycle-driven refresh points (openspec/changes/add-statusline).
+      python3 "$INTEGRATIONS_PY" refresh 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
     fi
     return
   fi
@@ -741,9 +747,9 @@ for name, s in cfg.get('skills', {}).items():
   if [ -f "$INTEGRATIONS_PY" ]; then
     say ""
     say "  -- Integrations --"
-    # Read-only: the Integration Catalog's own `list` output, indented — same fail-safe discipline
-    # as the Routines section above (a catalog-probe failure must not abort the rest of --doctor).
-    python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+    # `refresh` (not `list`): identical output, indented — same fail-safe discipline as the Routines
+    # section above — but also persists to the statusLine's cache as a side effect of this run.
+    python3 "$INTEGRATIONS_PY" refresh 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
   fi
 }
 

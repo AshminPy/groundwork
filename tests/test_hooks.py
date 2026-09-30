@@ -749,6 +749,32 @@ def test_settings_merge() -> None:
         check("fresh: four hook entries registered", len(cmds) == 4 and any("snapshot" in c for c in cmds) and any("telemetry" in c for c in cmds), r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))
         check("fresh: no agent-teams env by default", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in data["env"], json.dumps(data["env"]))
+        check("fresh: statusLine registered to Groundwork's own script",
+              data.get("statusLine", {}).get("command", "").endswith("groundwork_statusline.py"), data.get("statusLine"))
+
+        # an existing user-configured statusLine is never touched or replaced by merge
+        custom_sl = tmp / "custom_statusline.json"
+        custom_sl.write_text(json.dumps({"statusLine": {"type": "command", "command": "my-own-statusline.sh"}}))
+        run_script(MERGE, args=[str(custom_sl)])
+        check("user's own statusLine is left untouched by merge",
+              load(custom_sl)["statusLine"] == {"type": "command", "command": "my-own-statusline.sh"},
+              load(custom_sl))
+
+        # unmerge only removes statusLine if it still equals exactly what merge set (same documented
+        # stateless-limitation pattern as every other Groundwork-owned key in this file)
+        sl_roundtrip = tmp / "statusline_roundtrip.json"
+        sl_roundtrip.write_text("{}")
+        run_script(MERGE, args=[str(sl_roundtrip)])
+        run_script(UNMERGE, args=[str(sl_roundtrip)])
+        check("unmerge removes Groundwork's own statusLine when unchanged since merge",
+              "statusLine" not in load(sl_roundtrip), load(sl_roundtrip))
+
+        sl_kept = tmp / "statusline_user_kept.json"
+        sl_kept.write_text(json.dumps({"statusLine": {"type": "command", "command": "my-own-statusline.sh"}}))
+        run_script(UNMERGE, args=[str(sl_kept)])
+        check("unmerge never removes a user's own statusLine (does not match what Groundwork sets)",
+              load(sl_kept).get("statusLine") == {"type": "command", "command": "my-own-statusline.sh"},
+              load(sl_kept))
 
         # idempotent second run
         before = fresh.read_text()
