@@ -726,6 +726,8 @@ def _doctor_rows(cfg: dict | None = None) -> list:
         if not enabled:
             rows.append(row)
             continue
+        _, capability_reason = _capabilities_for(name, cfg)
+        row["capability_blocked_reason"] = capability_reason
         access_info = check_access(name, cfg) if name in ("jira_eod", "pr_followup") else None
         sched = rc.get("schedule", {})
         row["schedule"] = f"{sched.get('frequency', spec['default_schedule'])} {sched.get('time', '')}".strip()
@@ -753,11 +755,15 @@ def _doctor_rows(cfg: dict | None = None) -> list:
 def readiness_state(row: dict) -> dict:
     """Synthesizes a READY / READY (connectivity not verifiable) / BLOCKED / NOT ENABLED verdict
     for one routine from a `_doctor_rows()` row — a pure function over data Groundwork already
-    computes (enabled, access, available, connected), never a new probe or a readiness model
-    parallel to the Integration Catalog's own available/configured/connected distinctions (design.md
-    DECISION 3). A routine whose access mechanism has no real connectivity check today (jira_mcp,
-    cli, browser) is never called an unqualified READY — that would overclaim what was actually
-    verified."""
+    computes (enabled, capability_blocked_reason, access, available, connected), never a new probe
+    or a readiness model parallel to the Integration Catalog's own available/configured/connected
+    distinctions (design.md DECISION 3). `capability_blocked_reason` comes from `_capabilities_for()`
+    — the exact same function `build_command()` calls to decide whether to spawn `claude` at all —
+    so a routine can never be called READY here while `build_command()` would actually block it
+    (this includes weekly_status/work_digest's borrowed GitHub dependency on pr_followup's
+    configured access, not just jira_eod/pr_followup's own access). A routine whose access
+    mechanism has no real connectivity check today (jira_mcp, cli, browser) is never called an
+    unqualified READY either — that would overclaim what was actually verified."""
     name = row["routine"]
     if not row.get("enabled"):
         return {"routine": name, "state": "NOT ENABLED", "reason": None, "note": None}
@@ -766,19 +772,21 @@ def readiness_state(row: dict) -> dict:
         note = ("live-posting mode: no Jira access mechanism has a real connectivity check today "
                  "(design.md DECISION 4) — this routine's write step is not independently verified "
                  "as reachable before it runs")
+    capability_reason = row.get("capability_blocked_reason")
+    if capability_reason:
+        return {"routine": name, "state": "BLOCKED", "reason": capability_reason, "note": note}
     if "access" in row:
-        access, conn, avail = row.get("access"), row.get("connected"), row.get("available")
+        conn, avail = row.get("connected"), row.get("available")
         detail = row.get("access_detail", "")
-        if access == "unconfigured":
-            return {"routine": name, "state": "BLOCKED", "reason": detail or "access not configured", "note": note}
         if conn is False or avail is False:
             return {"routine": name, "state": "BLOCKED", "reason": detail, "note": note}
         if conn is True:
             return {"routine": name, "state": "READY", "reason": None, "note": note}
         return {"routine": name, "state": "READY (connectivity not verifiable)", "reason": detail, "note": note}
     # No access mechanism tracked for this routine at all (news, doc_drift, or weekly_status/
-    # work_digest — whose optional GitHub cross-reference readiness isn't independently checked
-    # here, mirroring _doctor_rows()'s own existing scope, not newly introduced by this function).
+    # work_digest with GitHub cross-referencing off or already past the capability_blocked_reason
+    # check above). Configuration-layer readiness is always checked via capability_blocked_reason;
+    # this branch only means no further connectivity-layer check exists for this routine today.
     return {"routine": name, "state": "READY", "reason": None, "note": note}
 
 

@@ -663,9 +663,16 @@ def test_readiness_state_classifications() -> None:
           mod.readiness_state({"routine": "news", "enabled": True, "mutates": False})["state"] == "READY")
 
     unconf = mod.readiness_state({"routine": "pr_followup", "enabled": True, "mutates": False,
-                                   "access": "unconfigured", "available": None, "connected": None, "access_detail": "not configured"})
+                                   "access": "unconfigured", "available": None, "connected": None, "access_detail": "not configured",
+                                   "capability_blocked_reason": "GitHub access not configured — run ./setup.sh --configure"})
     check("enabled routine with access unconfigured is BLOCKED with an actionable reason",
           unconf["state"] == "BLOCKED" and unconf["reason"], unconf)
+
+    borrowed = mod.readiness_state({"routine": "weekly_status", "enabled": True, "mutates": False,
+                                     "capability_blocked_reason": "weekly_status is configured to use GitHub, but no GitHub access is configured (configure pr_followup or run ./setup.sh --configure)"})
+    check("a routine with no 'access' field of its own but a capability_blocked_reason (weekly_status/"
+          "work_digest borrowing pr_followup's unconfigured GitHub access) is BLOCKED, never an unqualified READY",
+          borrowed["state"] == "BLOCKED" and "GitHub" in borrowed["reason"], borrowed)
 
     not_conn = mod.readiness_state({"routine": "pr_followup", "enabled": True, "mutates": False, "access": "gh_cli",
                                      "available": True, "connected": False, "access_detail": "not authenticated (run 'gh auth login')"})
@@ -740,7 +747,12 @@ def test_readiness_visible_in_list_and_doctor_output() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         cfgdir = Path(tmpdir) / "cfg"
         init_config(cfgdir, "sre-cloudops")
-        # pr_followup left unconfigured on purpose: exercises the BLOCKED path end-to-end.
+        # pr_followup left unconfigured on purpose: exercises the BLOCKED path end-to-end, for
+        # pr_followup itself AND for weekly_status/work_digest, which borrow pr_followup's
+        # configured GitHub access via _capabilities_for()'s own cross-reference (owner-visible
+        # regression: readiness_state() must never call a routine READY that build_command()
+        # would actually block — checked per-routine below, not just "BLOCKED" appearing anywhere
+        # in the text, which previously let weekly_status/work_digest's false READY slip through).
         os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
         try:
             cfg = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
@@ -755,6 +767,10 @@ def test_readiness_visible_in_list_and_doctor_output() -> None:
                                env={**os.environ})
             check("list output includes readiness= for every routine line",
                   r.stdout.count("readiness=") == 6, r.stdout)
+            for routine in ("pr_followup", "weekly_status", "work_digest"):
+                line = next((ln for ln in r.stdout.splitlines() if ln.startswith(f"{routine}:")), "")
+                check(f"{routine} (borrows pr_followup's unconfigured GitHub access) is BLOCKED, not READY",
+                      "readiness=BLOCKED" in line, line)
         finally:
             del os.environ["CLAUDE_CONFIG_DIR"]
     finish()
