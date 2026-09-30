@@ -80,6 +80,16 @@ def write_claude_stub(bindir: Path, behavior="echo", stdout_text=None) -> None:
         script.write_text("#!/usr/bin/env bash\nsleep 30\n")
     elif behavior == "result":
         script.write_text(f"#!/usr/bin/env bash\ncat <<'STUBEOF'\n{stdout_text}\nSTUBEOF\nexit 0\n")
+    elif behavior == "capture":
+        # Dumps its own argv (one arg per line, via $CAPTURE_ARGV_FILE) before returning a minimal
+        # valid ROUTINE RESULT — lets a test inspect the exact flags a real subprocess invocation
+        # received, without needing the real `claude` CLI.
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$@\" > \"$CAPTURE_ARGV_FILE\"\n"
+            "cat <<'STUBEOF'\nROUTINE RESULT\nStatus: COMPLETE\nSummary: stub\nSTUBEOF\n"
+            "exit 0\n"
+        )
     script.chmod(script.stat().st_mode | stat.S_IEXEC | 0o111)
 
 
@@ -642,6 +652,130 @@ def test_reconfigure_schedule_no_duplication() -> None:
     finish()
 
 
+def test_readiness_state_classifications() -> None:
+    print("groundwork_routines.py — readiness_state(): NOT ENABLED/READY/BLOCKED synthesized from existing _doctor_rows() data only")
+    mod = load_module()
+
+    check("disabled routine is NOT ENABLED, regardless of any other field",
+          mod.readiness_state({"routine": "news", "enabled": False, "mutates": False})["state"] == "NOT ENABLED")
+
+    check("enabled routine with no access mechanism tracked (news/doc_drift) is READY",
+          mod.readiness_state({"routine": "news", "enabled": True, "mutates": False})["state"] == "READY")
+
+    unconf = mod.readiness_state({"routine": "pr_followup", "enabled": True, "mutates": False,
+                                   "access": "unconfigured", "available": None, "connected": None, "access_detail": "not configured",
+                                   "capability_blocked_reason": "GitHub access not configured — run ./setup.sh --configure"})
+    check("enabled routine with access unconfigured is BLOCKED with an actionable reason",
+          unconf["state"] == "BLOCKED" and unconf["reason"], unconf)
+
+    borrowed = mod.readiness_state({"routine": "weekly_status", "enabled": True, "mutates": False,
+                                     "capability_blocked_reason": "weekly_status is configured to use GitHub, but no GitHub access is configured (configure pr_followup or run ./setup.sh --configure)"})
+    check("a routine with no 'access' field of its own but a capability_blocked_reason (weekly_status/"
+          "work_digest borrowing pr_followup's unconfigured GitHub access) is BLOCKED, never an unqualified READY",
+          borrowed["state"] == "BLOCKED" and "GitHub" in borrowed["reason"], borrowed)
+
+    not_conn = mod.readiness_state({"routine": "pr_followup", "enabled": True, "mutates": False, "access": "gh_cli",
+                                     "available": True, "connected": False, "access_detail": "not authenticated (run 'gh auth login')"})
+    check("access configured but connected=False (real check failed) is BLOCKED with the real detail",
+          not_conn["state"] == "BLOCKED" and "not authenticated" in not_conn["reason"], not_conn)
+
+    conn = mod.readiness_state({"routine": "pr_followup", "enabled": True, "mutates": False, "access": "gh_cli",
+                                 "available": True, "connected": True, "access_detail": "authenticated"})
+    check("access configured and connected=True (real check passed) is an unqualified READY",
+          conn["state"] == "READY", conn)
+
+    unverif = mod.readiness_state({"routine": "jira_eod", "enabled": True, "mutates": True, "access": "jira_mcp",
+                                    "available": True, "connected": None, "access_detail": "MCP server configured"})
+    check("access configured but no real connectivity check exists (jira_mcp) is never an unqualified READY",
+          unverif["state"] == "READY (connectivity not verifiable)" and unverif["state"] != "READY", unverif)
+
+    live = mod.readiness_state({"routine": "jira_eod", "enabled": True, "mutates": True, "posting": "automatic",
+                                 "access": "jira_mcp", "available": True, "connected": None, "access_detail": "MCP server configured"})
+    check("jira_eod in automatic posting mode carries an explicit note about the unverifiable write step",
+          live["note"] is not None and "not independently verified" in live["note"], live)
+
+    dry = mod.readiness_state({"routine": "jira_eod", "enabled": True, "mutates": True, "posting": "dry_run",
+                                "access": "jira_mcp", "available": True, "connected": None, "access_detail": "MCP server configured"})
+    check("jira_eod in dry_run posting mode (the default) carries no live-posting note",
+          dry["note"] is None, dry)
+    finish()
+
+
+def test_build_command_always_fails_closed_for_every_routine() -> None:
+    print("groundwork_routines.py — every routine's real invocation always fails closed, never depends on interactive approval")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        cfgdir = tmp / "cfg"
+        bindir = tmp / "bin"
+        argv_file = tmp / "argv.txt"
+        init_config(cfgdir, "sre-cloudops")
+        set_routine(cfgdir, "jira_eod", "site=https://x.atlassian.net", "identity=me@x.com", "access=jira_mcp", "mcp_server=atlassian")
+        set_routine(cfgdir, "pr_followup", "identity=me", "access=gh_cli")
+        set_routine(cfgdir, "doc_drift", "enabled=true")  # disabled by default under sre-cloudops; enable so every routine actually runs
+        write_claude_stub(bindir, behavior="capture")
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfgdir), "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+               "CAPTURE_ARGV_FILE": str(argv_file)}
+        for name in mod.ROUTINES:
+            if argv_file.exists():
+                argv_file.unlink()
+            r = subprocess.run(["python3", str(SCRIPT), "run", name, "--repo", str(REPO_ROOT), "--timeout", "10"],
+                               capture_output=True, text=True, timeout=20, env=env)
+            try:
+                result = json.loads(r.stdout)
+            except Exception:
+                result = {"stdout": r.stdout, "stderr": r.stderr}
+            check(f"{name}: fully-configured routine is not BLOCKED (this test exercises the real command, not the blocked path)",
+                  result.get("status") != "blocked", result)
+            check(f"{name}: the stub actually captured an invocation (the real command ran)", argv_file.exists(), result)
+            if not argv_file.exists():
+                continue
+            cmd = argv_file.read_text().splitlines()
+            check(f"{name}: command includes --permission-mode dontAsk",
+                  "--permission-mode" in cmd and cmd[cmd.index("--permission-mode") + 1] == "dontAsk", cmd)
+            check(f"{name}: command includes --permission-prompts none",
+                  "--permission-prompts" in cmd and cmd[cmd.index("--permission-prompts") + 1] == "none", cmd)
+            bypass_flags = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--bare"}
+            check(f"{name}: command never includes a blanket permission-bypass flag",
+                  not (bypass_flags & set(cmd)), cmd)
+    finish()
+
+
+def test_readiness_visible_in_list_and_doctor_output() -> None:
+    print("groundwork_routines.py — readiness is surfaced in both `list` and `doctor` output (setup.sh --routines / --doctor)")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfgdir = Path(tmpdir) / "cfg"
+        init_config(cfgdir, "sre-cloudops")
+        # pr_followup left unconfigured on purpose: exercises the BLOCKED path end-to-end, for
+        # pr_followup itself AND for weekly_status/work_digest, which borrow pr_followup's
+        # configured GitHub access via _capabilities_for()'s own cross-reference (owner-visible
+        # regression: readiness_state() must never call a routine READY that build_command()
+        # would actually block — checked per-routine below, not just "BLOCKED" appearing anywhere
+        # in the text, which previously let weekly_status/work_digest's false READY slip through).
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        try:
+            cfg = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+            rows = mod._doctor_rows(cfg)
+            text = mod.format_doctor_text(rows)
+            check("doctor text includes a Readiness line for an enabled routine",
+                  "Readiness ............" in text, text)
+            check("doctor text marks the unconfigured pr_followup routine BLOCKED, not READY",
+                  "BLOCKED" in text, text)
+
+            r = subprocess.run(["python3", str(SCRIPT), "list"], capture_output=True, text=True, timeout=30,
+                               env={**os.environ})
+            check("list output includes readiness= for every routine line",
+                  r.stdout.count("readiness=") == 6, r.stdout)
+            for routine in ("pr_followup", "weekly_status", "work_digest"):
+                line = next((ln for ln in r.stdout.splitlines() if ln.startswith(f"{routine}:")), "")
+                check(f"{routine} (borrows pr_followup's unconfigured GitHub access) is BLOCKED, not READY",
+                      "readiness=BLOCKED" in line, line)
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+    finish()
+
+
 if __name__ == "__main__":
     for fn in (test_module_level_registry_and_result_parsing, test_capabilities_for_never_grants_beyond_configured_access,
                test_capabilities_for_configured_jira_and_github, test_github_mcp_tools_are_real_and_read_only,
@@ -652,7 +786,9 @@ if __name__ == "__main__":
                test_result_storage_separate_from_telemetry, test_result_retention_bounded,
                test_check_access_never_asserts_connected_without_checking, test_doctor_rows_and_formatting,
                test_schedule_routine, test_cli_list_reflects_new_schema,
-               test_prompts_reference_configured_scope_not_generic, test_reconfigure_schedule_no_duplication):
+               test_prompts_reference_configured_scope_not_generic, test_reconfigure_schedule_no_duplication,
+               test_readiness_state_classifications, test_build_command_always_fails_closed_for_every_routine,
+               test_readiness_visible_in_list_and_doctor_output):
         try:
             fn()
         except AssertionError:

@@ -677,6 +677,7 @@ def _cmd_schedule(args) -> int:
 def _cmd_list(_args) -> int:
     cfg = gcfg.load_config()
     last = _last_runs()
+    rows_by_name = {r["routine"]: r for r in _doctor_rows(cfg)}
     for name, spec in ROUTINES.items():
         rc = cfg.get("routines", {}).get(name, {})
         enabled = rc.get("enabled", False)
@@ -684,7 +685,11 @@ def _cmd_list(_args) -> int:
         sched_txt = f"{sched.get('frequency', spec['default_schedule'])} {sched.get('time', '')}".strip()
         lr = last.get(name)
         lr_txt = f"last run: {lr.get('status')} ({lr.get('started_at')})" if lr else "never run"
-        print(f"{name}: enabled={enabled} mutates={spec['mutates']} schedule={sched_txt} — {lr_txt}")
+        readiness = readiness_state(rows_by_name[name])
+        state_txt = readiness["state"]
+        if readiness["reason"]:
+            state_txt += f" ({readiness['reason']})"
+        print(f"{name}: enabled={enabled} mutates={spec['mutates']} schedule={sched_txt} readiness={state_txt} — {lr_txt}")
     return 0
 
 
@@ -721,6 +726,8 @@ def _doctor_rows(cfg: dict | None = None) -> list:
         if not enabled:
             rows.append(row)
             continue
+        _, capability_reason = _capabilities_for(name, cfg)
+        row["capability_blocked_reason"] = capability_reason
         access_info = check_access(name, cfg) if name in ("jira_eod", "pr_followup") else None
         sched = rc.get("schedule", {})
         row["schedule"] = f"{sched.get('frequency', spec['default_schedule'])} {sched.get('time', '')}".strip()
@@ -743,6 +750,44 @@ def _doctor_rows(cfg: dict | None = None) -> list:
         row["last_run"] = lr.get("status") if lr else None
         rows.append(row)
     return rows
+
+
+def readiness_state(row: dict) -> dict:
+    """Synthesizes a READY / READY (connectivity not verifiable) / BLOCKED / NOT ENABLED verdict
+    for one routine from a `_doctor_rows()` row — a pure function over data Groundwork already
+    computes (enabled, capability_blocked_reason, access, available, connected), never a new probe
+    or a readiness model parallel to the Integration Catalog's own available/configured/connected
+    distinctions (design.md DECISION 3). `capability_blocked_reason` comes from `_capabilities_for()`
+    — the exact same function `build_command()` calls to decide whether to spawn `claude` at all —
+    so a routine can never be called READY here while `build_command()` would actually block it
+    (this includes weekly_status/work_digest's borrowed GitHub dependency on pr_followup's
+    configured access, not just jira_eod/pr_followup's own access). A routine whose access
+    mechanism has no real connectivity check today (jira_mcp, cli, browser) is never called an
+    unqualified READY either — that would overclaim what was actually verified."""
+    name = row["routine"]
+    if not row.get("enabled"):
+        return {"routine": name, "state": "NOT ENABLED", "reason": None, "note": None}
+    note = None
+    if row.get("mutates") and row.get("posting") == "automatic":
+        note = ("live-posting mode: no Jira access mechanism has a real connectivity check today "
+                 "(design.md DECISION 4) — this routine's write step is not independently verified "
+                 "as reachable before it runs")
+    capability_reason = row.get("capability_blocked_reason")
+    if capability_reason:
+        return {"routine": name, "state": "BLOCKED", "reason": capability_reason, "note": note}
+    if "access" in row:
+        conn, avail = row.get("connected"), row.get("available")
+        detail = row.get("access_detail", "")
+        if conn is False or avail is False:
+            return {"routine": name, "state": "BLOCKED", "reason": detail, "note": note}
+        if conn is True:
+            return {"routine": name, "state": "READY", "reason": None, "note": note}
+        return {"routine": name, "state": "READY (connectivity not verifiable)", "reason": detail, "note": note}
+    # No access mechanism tracked for this routine at all (news, doc_drift, or weekly_status/
+    # work_digest with GitHub cross-referencing off or already past the capability_blocked_reason
+    # check above). Configuration-layer readiness is always checked via capability_blocked_reason;
+    # this branch only means no further connectivity-layer check exists for this routine today.
+    return {"routine": name, "state": "READY", "reason": None, "note": note}
 
 
 def _connectivity_label(row: dict) -> str:
@@ -769,6 +814,13 @@ def format_doctor_text(rows: list) -> str:
             lines.append("  Configuration ........ DISABLED")
             continue
         lines.append("  Configuration ........ PASS")
+        readiness = readiness_state(row)
+        state_txt = readiness["state"]
+        if readiness["reason"]:
+            state_txt += f" ({readiness['reason']})"
+        lines.append(f"  Readiness ............ {state_txt}")
+        if readiness["note"]:
+            lines.append(f"    note: {readiness['note']}")
         if "site" in row:
             lines.append(f"  Jira site ............ {row['site'] or '(not set)'}")
             lines.append(f"  Identity ............. {'configured' if row.get('identity') else 'not configured'}")

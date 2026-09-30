@@ -2,6 +2,9 @@
 
 Progressive disclosure: the reader must understand the result from the main response alone; engineers find traceability below it. The investigation may be deep — the write-up is not. This changes presentation only; routing, tiers, OpenSpec use, hooks, evidence rules and completion criteria are untouched.
 
+## Quiet execution (mid-turn, before the final response)
+Layer 1 already forbids narrating commands/files/hypotheses in the final response; this extends the same principle to the turn itself. Do not narrate routine read-only investigation as it happens — no "I'll read...", "Now I'll check...", "Next I'll..." for each read, search, or check. Perform the necessary reads, searches, tests and evidence checks exactly as thoroughly as before — quieter execution is not less verification. Still surface, as it happens rather than only in the final response: a request for user input or approval, a permission/approval gate, a blocker, a failure, conflicting evidence, a security concern, a destructive or mutating action, unexpected repository state that materially changes the task, and genuinely long-running work where progress information is useful. When in doubt whether an update clears that bar, it usually doesn't — but never go fully silent on something the user needs to know before the final response arrives.
+
 ## Layer 1 — Main response (always)
 Lead with the result. Write for the person reading, not the system that did the work: translate evidence into meaning ("verified that all existing critical files remained unchanged", not "SHA-256 baseline 9/9 unchanged"; "all 12 routing tests selected the expected task type", not "12/12 headless scenarios passed"; "a test-command issue was found and fixed; all tests now pass", not "pipe masked exit 1").
 Default shape — the selected playbook's Output Format names the exact headings for its category:

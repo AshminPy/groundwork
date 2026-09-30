@@ -68,7 +68,10 @@ def test_router_and_playbooks() -> None:
                    "## Harness metadata", "HARNESS METADATA", "never as bullets", "never invented", "This block is what the telemetry hook records",
                    "## Checklist style", "`[x]` completed or verified", "`[ ]` pending", "`[!]` an important risk",
                    "`[-]` not applicable", "no emojis or decorative symbols", "never on every sentence",
-                   "never to imply failure", "Heading `Technical details`", "Heading `Evidence & references`"):
+                   "never to imply failure", "Heading `Technical details`", "Heading `Evidence & references`",
+                   "Do not narrate routine read-only investigation", "quieter execution is not less verification",
+                   "permission/approval gate", "a blocker", "a security concern", "destructive or mutating action",
+                   "genuinely long-running work where progress information is useful"):
         check(f"output contract contains: {needle[:40]}", needle in contract)
     for cat in CATEGORIES:
         check(f"router lists {cat.upper()}", f"| {cat.upper()} |" in router)
