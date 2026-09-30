@@ -677,6 +677,7 @@ def _cmd_schedule(args) -> int:
 def _cmd_list(_args) -> int:
     cfg = gcfg.load_config()
     last = _last_runs()
+    rows_by_name = {r["routine"]: r for r in _doctor_rows(cfg)}
     for name, spec in ROUTINES.items():
         rc = cfg.get("routines", {}).get(name, {})
         enabled = rc.get("enabled", False)
@@ -684,7 +685,11 @@ def _cmd_list(_args) -> int:
         sched_txt = f"{sched.get('frequency', spec['default_schedule'])} {sched.get('time', '')}".strip()
         lr = last.get(name)
         lr_txt = f"last run: {lr.get('status')} ({lr.get('started_at')})" if lr else "never run"
-        print(f"{name}: enabled={enabled} mutates={spec['mutates']} schedule={sched_txt} — {lr_txt}")
+        readiness = readiness_state(rows_by_name[name])
+        state_txt = readiness["state"]
+        if readiness["reason"]:
+            state_txt += f" ({readiness['reason']})"
+        print(f"{name}: enabled={enabled} mutates={spec['mutates']} schedule={sched_txt} readiness={state_txt} — {lr_txt}")
     return 0
 
 
@@ -745,6 +750,38 @@ def _doctor_rows(cfg: dict | None = None) -> list:
     return rows
 
 
+def readiness_state(row: dict) -> dict:
+    """Synthesizes a READY / READY (connectivity not verifiable) / BLOCKED / NOT ENABLED verdict
+    for one routine from a `_doctor_rows()` row — a pure function over data Groundwork already
+    computes (enabled, access, available, connected), never a new probe or a readiness model
+    parallel to the Integration Catalog's own available/configured/connected distinctions (design.md
+    DECISION 3). A routine whose access mechanism has no real connectivity check today (jira_mcp,
+    cli, browser) is never called an unqualified READY — that would overclaim what was actually
+    verified."""
+    name = row["routine"]
+    if not row.get("enabled"):
+        return {"routine": name, "state": "NOT ENABLED", "reason": None, "note": None}
+    note = None
+    if row.get("mutates") and row.get("posting") == "automatic":
+        note = ("live-posting mode: no Jira access mechanism has a real connectivity check today "
+                 "(design.md DECISION 4) — this routine's write step is not independently verified "
+                 "as reachable before it runs")
+    if "access" in row:
+        access, conn, avail = row.get("access"), row.get("connected"), row.get("available")
+        detail = row.get("access_detail", "")
+        if access == "unconfigured":
+            return {"routine": name, "state": "BLOCKED", "reason": detail or "access not configured", "note": note}
+        if conn is False or avail is False:
+            return {"routine": name, "state": "BLOCKED", "reason": detail, "note": note}
+        if conn is True:
+            return {"routine": name, "state": "READY", "reason": None, "note": note}
+        return {"routine": name, "state": "READY (connectivity not verifiable)", "reason": detail, "note": note}
+    # No access mechanism tracked for this routine at all (news, doc_drift, or weekly_status/
+    # work_digest — whose optional GitHub cross-reference readiness isn't independently checked
+    # here, mirroring _doctor_rows()'s own existing scope, not newly introduced by this function).
+    return {"routine": name, "state": "READY", "reason": None, "note": note}
+
+
 def _connectivity_label(row: dict) -> str:
     conn, avail = row.get("connected"), row.get("available")
     if conn is True:
@@ -769,6 +806,13 @@ def format_doctor_text(rows: list) -> str:
             lines.append("  Configuration ........ DISABLED")
             continue
         lines.append("  Configuration ........ PASS")
+        readiness = readiness_state(row)
+        state_txt = readiness["state"]
+        if readiness["reason"]:
+            state_txt += f" ({readiness['reason']})"
+        lines.append(f"  Readiness ............ {state_txt}")
+        if readiness["note"]:
+            lines.append(f"    note: {readiness['note']}")
         if "site" in row:
             lines.append(f"  Jira site ............ {row['site'] or '(not set)'}")
             lines.append(f"  Identity ............. {'configured' if row.get('identity') else 'not configured'}")

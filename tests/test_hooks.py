@@ -751,6 +751,8 @@ def test_settings_merge() -> None:
         check("fresh: no agent-teams env by default", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in data["env"], json.dumps(data["env"]))
         check("fresh: statusLine registered to Groundwork's own script",
               data.get("statusLine", {}).get("command", "").endswith("groundwork_statusline.py"), data.get("statusLine"))
+        check("fresh: outputStyle set to the built-in Concise style",
+              data.get("outputStyle") == "Concise", data.get("outputStyle"))
 
         # an existing user-configured statusLine is never touched or replaced by merge
         custom_sl = tmp / "custom_statusline.json"
@@ -760,14 +762,34 @@ def test_settings_merge() -> None:
               load(custom_sl)["statusLine"] == {"type": "command", "command": "my-own-statusline.sh"},
               load(custom_sl))
 
-        # unmerge only removes statusLine if it still equals exactly what merge set (same documented
-        # stateless-limitation pattern as every other Groundwork-owned key in this file)
+        # an existing user-configured outputStyle (any value, including a non-Concise one) is never
+        # touched or replaced by merge — same additive-only rule as every other Groundwork-owned key
+        custom_style = tmp / "custom_output_style.json"
+        custom_style.write_text(json.dumps({"outputStyle": "Explanatory"}))
+        run_script(MERGE, args=[str(custom_style)])
+        check("user's own outputStyle preference is left untouched by merge (fresh install semantics apply only when absent)",
+              load(custom_style)["outputStyle"] == "Explanatory", load(custom_style))
+
+        # upgrade: merge re-run on an already-customized file must not clobber the user's later change
+        upgrade = tmp / "upgrade_output_style.json"
+        run_script(MERGE, args=[str(upgrade)])  # first install: sets Concise
+        data_up = load(upgrade)
+        data_up["outputStyle"] = "Proactive"  # user changes it themselves after install
+        upgrade.write_text(json.dumps(data_up))
+        run_script(MERGE, args=[str(upgrade)])  # upgrade re-run must not revert the user's choice
+        check("upgrade: a user's outputStyle change after install survives a later merge re-run",
+              load(upgrade)["outputStyle"] == "Proactive", load(upgrade))
+
+        # unmerge only removes statusLine/outputStyle if they still equal exactly what merge set (same
+        # documented stateless-limitation pattern as every other Groundwork-owned key in this file)
         sl_roundtrip = tmp / "statusline_roundtrip.json"
         sl_roundtrip.write_text("{}")
         run_script(MERGE, args=[str(sl_roundtrip)])
         run_script(UNMERGE, args=[str(sl_roundtrip)])
         check("unmerge removes Groundwork's own statusLine when unchanged since merge",
               "statusLine" not in load(sl_roundtrip), load(sl_roundtrip))
+        check("unmerge removes Groundwork's own outputStyle when unchanged since merge",
+              "outputStyle" not in load(sl_roundtrip), load(sl_roundtrip))
 
         sl_kept = tmp / "statusline_user_kept.json"
         sl_kept.write_text(json.dumps({"statusLine": {"type": "command", "command": "my-own-statusline.sh"}}))
@@ -775,6 +797,12 @@ def test_settings_merge() -> None:
         check("unmerge never removes a user's own statusLine (does not match what Groundwork sets)",
               load(sl_kept).get("statusLine") == {"type": "command", "command": "my-own-statusline.sh"},
               load(sl_kept))
+
+        style_kept = tmp / "output_style_user_kept.json"
+        style_kept.write_text(json.dumps({"outputStyle": "Learning"}))
+        run_script(UNMERGE, args=[str(style_kept)])
+        check("unmerge never removes a user's own outputStyle (does not match what Groundwork sets)",
+              load(style_kept).get("outputStyle") == "Learning", load(style_kept))
 
         # idempotent second run
         before = fresh.read_text()

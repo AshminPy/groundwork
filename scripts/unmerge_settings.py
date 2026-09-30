@@ -29,6 +29,7 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     PUSH_CMD,
     REVIEW_CMD,
     SNAPSHOT_CMD,
+    OUTPUT_STYLE_VALUE,
     STATUSLINE_VALUE,
     TELEMETRY_CMD,
     parse_args,
@@ -99,6 +100,10 @@ def unmerge(data: dict, agent_teams: bool = False) -> list[str]:
     if data.get("statusLine") == STATUSLINE_VALUE:
         del data["statusLine"]
         removed.append("statusLine")
+
+    if data.get("outputStyle") == OUTPUT_STYLE_VALUE:
+        del data["outputStyle"]
+        removed.append("outputStyle")
 
     plugin_configs = data.get("pluginConfigs", {})
     ecc = plugin_configs.get("ecc@ecc", {})

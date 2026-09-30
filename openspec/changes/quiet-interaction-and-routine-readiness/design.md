@@ -1,0 +1,60 @@
+# Design — Quiet interaction + routine readiness
+
+## Architecture-quality §2 answers (MATERIAL tier: touches settings.json, a rule file, and the routines execution/scheduling surface)
+
+- **What is likely to change?** Which output style is "the quiet one" (Concise today; Claude Code could rename/replace it) — kept as a string constant, one place. Which routines exist and their `mutates`/access shape — already a data-driven dict (`ROUTINES`), unchanged by this work. What counts as READY per access mechanism — kept as one small pure function over existing fields, not spread across call sites.
+- **How would another instance be added?** A 7th routine only needs an entry in `ROUTINES` plus (if it needs external access) an entry in `_capabilities_for()` — unchanged, already the existing extension point. `readiness_state()` reads generically from `_doctor_rows()`'s existing per-routine fields, so a new routine gets a readiness verdict for free without touching the synthesis function, unless it introduces a genuinely new access mechanism (which would need one more branch, same as `check_access()` already requires today).
+- **Which manual operational steps can reasonably be automated?** None newly identified — scheduling itself is already automated (`launchd`); this change is about *telling the truth before* scheduling, not automating more.
+- **What fails if a dependency is unavailable, and how is that surfaced?** An unset/too-old Claude Code for `Concise` — degrades to Default style silently (Claude Code's own documented behavior for an unrecognized style value); no crash, no Groundwork-side detection needed. A routine with unconfigured/unconnected access — already fails closed today (`BLOCKED`, no subprocess); this change only makes that visible *before* scheduling instead of only after a run.
+- **How will an operator observe/troubleshoot this?** `setup.sh --routines` now prints an explicit READY/BLOCKED line per routine with the actionable reason, reusing the existing doctor-row rendering path (`format_doctor_text()`), not a new UI.
+- **How will it be tested?** Unit tests for `readiness_state()` against constructed `_doctor_rows()`-shaped input (every access/connected/mutates combination), a structural regression test on `build_command()`'s flags, and settings-merge tests mirroring the existing `statusLine` additive-merge test pattern. Runtime: install fresh, confirm `outputStyle` set; run a real routine and inspect the actual `claude` invocation's flags.
+- **What security boundary exists?** No new one. `outputStyle` is a presentation-only setting (Claude Code's own docs: "an output style gives Claude instructions to follow... doesn't guarantee that something always happens or never happens" — never a permission/security control). The routines change adds no new tool grant, only a truthful label over existing grants.
+- **Scaling/cost implications?** None — both changes are O(1) per routine, no new subprocess, no new network call, no new file.
+
+## DECISION 1 — Use the built-in Concise output style, not a custom one
+
+EVIDENCE: `code.claude.com/docs/en/output-styles` (fetched live, 2026-09-30): built-in styles "keep [Default's] instructions and add" their own — unlike a *custom* style, which drops Claude Code's built-in software-engineering instructions unless `keep-coding-instructions: true` is set. Concise's own documented behavior: "Responses lead with the result and leave out preamble, narration, and recaps... It does the engineering work as thoroughly as in the Default style... Claude still writes at full length in: anything you ask for; anything you need in order to act safely: error reports, failing test output, security warnings, and confirmations for destructive actions." Requires Claude Code v2.1.237+.
+
+WHY: A custom Groundwork style would have to reimplement Concise's own carve-outs from scratch (and keep them in sync with upstream changes) for no benefit over just using the shipped one. Groundwork's own `output-contract.md` already anticipated this exact mechanism: "a native Claude Code output style may change tone, format and audience framing, never this file's evidence, validation or completion-status rules" — built-in Concise satisfies that constraint by construction (it doesn't touch Default's instructions, only adds to them).
+
+TRADEOFFS: Groundwork doesn't control Concise's exact wording/behavior going forward — it's Anthropic's to evolve. Accepted: the alternative (a custom style) would need ongoing maintenance to track the same safety carve-outs Concise already gets for free.
+
+VALIDATION METHOD: fresh install sets `outputStyle: "Concise"`; `/output-style` (or reading `settings.json`) confirms it; a real routine question run through this session's own Claude Code compared before/after.
+
+UNCERTAINTY: ASSUMPTION — setting `outputStyle: "Concise"` on a Claude Code version older than v2.1.237 degrades gracefully to Default rather than erroring, based on the documented pattern for a misspelled style name ("gives you the Default style"); not separately confirmed for a *valid-but-not-yet-shipped* name on an old client. Low risk either way (worst case: silently no-op), not gated in code because the same install.sh version floor (`>= 2.1`, matching ECC's own requirement) already accepts versions where this could theoretically no-op — noted here, not solved, since gating on a specific sub-version for one presentation setting is disproportionate to the risk.
+
+## DECISION 2 — Extend output-contract.md's existing narration rule to mid-turn, rather than adding a new rule file or a hook
+
+EVIDENCE: `rules/output-contract.md` line 3 and Layer 1 already say the final response must have "no narration of commands run, files inspected or hypotheses considered." `rules/task-routing.md` §5 references this same contract. No existing rule addresses text generated *during* the turn, before the final response — confirmed by grep across `rules/`.
+
+WHY: This is a scope extension of an existing, already-correct principle, not a new mechanism. A hook cannot suppress the assistant's own generated text (hooks operate on tool-call lifecycle events, confirmed against `code.claude.com/docs/en/hooks`); the official docs' own feature-choice table draws this line explicitly (hooks for "something that has to happen every time, without exception," styles for "every response in a certain voice, length, or format").
+
+TRADEOFFS: An instruction, not a guarantee — Concise output style is the actual enforcement mechanism; this rule addition is a second, complementary layer for Default-style sessions and Concise-unaware future clients. Deliberately worded to preserve every carve-out in the original request (user input, permission, blocker, failure, conflicting evidence, security concern, destructive/mutating action, materially-changed state, genuinely long-running progress) — verified word-for-word against the request before writing it.
+
+VALIDATION METHOD: test that the new sentence exists in `output-contract.md` and preserves every named carve-out; a real question run through this session, read for narration.
+
+UNCERTAINTY: none material — this is textual, not behavioral in a way that can silently regress.
+
+## DECISION 3 — Routine readiness is a synthesis function over existing data, not a new permission model
+
+EVIDENCE: `scripts/groundwork_routines.py`'s `_doctor_rows()` already computes `enabled`, `access`, `available`, `connected`, `access_detail` per routine, and `check_access()` already does the real, safe, read-only connectivity checks (`gh auth status`, `claude mcp list`). `build_command()` already unconditionally sets `--permission-mode dontAsk --permission-prompts none` for every routine (confirmed by direct code read) and returns `(None, blocked_reason)` — never spawning `claude` — whenever `_capabilities_for()` reports an unconfigured access mechanism.
+
+WHY: The Integration Catalog and routines' own doctor machinery already model exactly the CONFIGURED/AVAILABLE/CONNECTED distinctions the brief asks for; building a second framework would duplicate it and risk the two silently drifting apart (the same risk `groundwork_shared.py`'s `TEST_CMD` sharing already exists to avoid elsewhere in this codebase). The only genuinely missing piece is a single derived verdict (`READY`/`BLOCKED`/`NOT ENABLED`) with an actionable reason, surfaced where a user already looks (`setup.sh --routines`).
+
+TRADEOFFS: `readiness_state()` cannot express external-authorization certainty Groundwork doesn't actually have — for `jira_mcp`/`cli`/`browser` access, `connected` is structurally `None` today (no real check exists), so those routines get an honest `READY (connectivity not verifiable)` rather than a false `READY`. This is a true statement about the current system, not a gap this change silently papers over.
+
+VALIDATION METHOD: unit tests over every `(enabled, access, available, connected, mutates)` combination that actually occurs across the 6 shipped routines; one live `setup.sh --routines` run showing the new verdict line for a real config.
+
+UNCERTAINTY: RUNTIME VALIDATION REQUIRED — whether `--permission-prompts none` genuinely denies-not-hangs for a tool call outside `--allowedTools`, under the actual installed Claude Code version, in a real unattended (non-interactive, no TTY) invocation. The structural regression test proves the flags are always passed; it cannot prove Claude Code's own runtime behavior for them beyond what's documented (`code.claude.com/docs/en/cli-reference`: `--permission-prompts <target>`, `"none"` = "denied automatically"). Live-tested to the extent safely possible in this sandbox (§ Runtime Validation in tasks.md); a real launchd-scheduled unattended firing with no human present is inherently unobservable from this session and is called out explicitly as a known limitation in the final report.
+
+## DECISION 4 — Do not narrow jira_eod's tool grant; document the limitation instead
+
+EVIDENCE: `_jira_tools()` grants `mcp__{server}__*` (full wildcard) for `jira_mcp` access and `mcp__Claude_Browser__*`/`mcp__claude-in-chrome__*` for `browser` access — both broad. Unlike GitHub (`GITHUB_MCP_READ_TOOLS`, a hardcoded list of exact read-only tool names for one specific, well-known official server, `github/github-mcp-server`), the Jira MCP server is user-configured (`rc.get("mcp_server")` — an arbitrary string), so Groundwork cannot know its exact tool names ahead of time the way it does for GitHub.
+
+WHY: `--allowedTools` (per `code.claude.com/docs/en/cli-reference` and `iam`/permissions docs) supports exact tool names or server-level wildcards, not a Groundwork-invented finer grain Claude Code doesn't expose. Fabricating a narrower-looking grant that doesn't actually correspond to a real restriction would violate the brief's own instruction: "If Claude Code cannot safely express the required granularity, do not fake it."
+
+TRADEOFFS: `jira_eod` in `posting: automatic` mode remains the one routine where unattended safety rests on the model following its own prompt instructions (draft → post → read back to verify) rather than a tool-level guarantee — same as before this change. What changes is that this is now stated plainly in the readiness output and in documentation, not implied to be safer than it is.
+
+VALIDATION METHOD: n/a (a documented limitation, not a behavior to test).
+
+UNCERTAINTY: none — this is an honest statement of current capability, confirmed by reading the actual code.

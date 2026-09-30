@@ -17,6 +17,8 @@ the file wholesale — only adds/updates the specific keys Groundwork owns:
   - pluginConfigs["ecc@ecc"].options.hook_profile: set to "standard" only if unset.
   - statusLine: set to Groundwork's statusline script ONLY if the key is entirely
     absent — a user's own configured statusLine is never touched or replaced.
+  - outputStyle: set to the built-in "Concise" style ONLY if the key is entirely
+    absent — a user's own configured outputStyle (any value) is never touched.
 
 Usage: python3 merge_settings.py [--agent-teams] [path to settings.json]
        (default path: ~/.claude/settings.json)
@@ -32,6 +34,10 @@ SNAPSHOT_CMD = "python3 ~/.claude/hooks/groundwork_session_snapshot.py"
 TELEMETRY_CMD = "python3 ~/.claude/hooks/groundwork_telemetry.py"
 STATUSLINE_CMD = "python3 ~/.claude/groundwork/bin/groundwork_statusline.py"
 STATUSLINE_VALUE = {"type": "command", "command": STATUSLINE_CMD}
+# Built-in Claude Code output style (code.claude.com/docs/en/output-styles) that leads with the
+# result and drops preamble/narration/recaps, while keeping full detail for anything needed to act
+# safely (errors, failing tests, security warnings, destructive-action confirmations). Case-sensitive.
+OUTPUT_STYLE_VALUE = "Concise"
 
 GROUNDWORK_DENY = [
     "Bash(sudo *)",
@@ -159,6 +165,10 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
     if "statusLine" not in data:
         data["statusLine"] = dict(STATUSLINE_VALUE)
         changed.append(f"statusLine={STATUSLINE_CMD}")
+
+    if "outputStyle" not in data:
+        data["outputStyle"] = OUTPUT_STYLE_VALUE
+        changed.append(f"outputStyle={OUTPUT_STYLE_VALUE}")
 
     return changed
 
