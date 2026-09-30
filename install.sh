@@ -119,6 +119,17 @@ chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_config.py" "$CLAUDE_DIR/groundwo
 # config.json exists.
 cp "$HERE/scripts/groundwork_integrations.py" "$CLAUDE_DIR/groundwork/bin/"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py"
+# One best-effort cache refresh so the statusLine (below) has real data from the first render —
+# never repeated on a timer; the only other refreshes are setup.sh's --configure/--doctor
+# (openspec/changes/add-statusline/design.md Decision 1: lifecycle-driven, not scheduled).
+python3 "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py" refresh >/dev/null 2>&1 || true
+
+# statusLine (Groundwork 2.1) — a Claude Code `statusLine` command rendering Groundwork-specific
+# state (capability profile, last-completed-turn playbook/validation, cached Integration Catalog
+# readiness, live git branch/dirty). Reads only cached/local data; never probes integrations
+# itself (see docs/ARCHITECTURE.md and openspec/changes/add-statusline/).
+cp "$HERE/scripts/groundwork_statusline.py" "$CLAUDE_DIR/groundwork/bin/"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_statusline.py"
 
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"

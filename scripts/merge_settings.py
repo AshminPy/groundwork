@@ -15,6 +15,8 @@ the file wholesale — only adds/updates the specific keys Groundwork owns:
     the key is absent (Agent Teams are experimental and change how ordinary
     delegation behaves — see docs/en/agent-teams — so they are opt-in, never silent).
   - pluginConfigs["ecc@ecc"].options.hook_profile: set to "standard" only if unset.
+  - statusLine: set to Groundwork's statusline script ONLY if the key is entirely
+    absent — a user's own configured statusLine is never touched or replaced.
 
 Usage: python3 merge_settings.py [--agent-teams] [path to settings.json]
        (default path: ~/.claude/settings.json)
@@ -28,6 +30,8 @@ PUSH_CMD = "python3 ~/.claude/hooks/block_protected_push.py"
 REVIEW_CMD = "python3 ~/.claude/hooks/require_material_review.py"
 SNAPSHOT_CMD = "python3 ~/.claude/hooks/groundwork_session_snapshot.py"
 TELEMETRY_CMD = "python3 ~/.claude/hooks/groundwork_telemetry.py"
+STATUSLINE_CMD = "python3 ~/.claude/groundwork/bin/groundwork_statusline.py"
+STATUSLINE_VALUE = {"type": "command", "command": STATUSLINE_CMD}
 
 GROUNDWORK_DENY = [
     "Bash(sudo *)",
@@ -151,6 +155,10 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
     if "hook_profile" not in ecc_config:
         ecc_config["hook_profile"] = "standard"
         changed.append("pluginConfigs['ecc@ecc'].options.hook_profile=standard")
+
+    if "statusLine" not in data:
+        data["statusLine"] = dict(STATUSLINE_VALUE)
+        changed.append(f"statusLine={STATUSLINE_CMD}")
 
     return changed
 

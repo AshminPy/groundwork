@@ -47,6 +47,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
@@ -58,6 +59,12 @@ TELEMETRY_PATH = (
     Path(os.path.expanduser(os.environ.get("GROUNDWORK_TELEMETRY_PATH", "")))
     if os.environ.get("GROUNDWORK_TELEMETRY_PATH")
     else Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")) / "groundwork" / "telemetry" / "events.jsonl"
+)
+# Cache written by `refresh` and read (never written) by scripts/groundwork_statusline.py — see
+# openspec/changes/add-statusline/design.md Decision 1/2: refreshed only at existing lifecycle
+# points (install, configure, explicit refresh / `--doctor`), never by a scheduled/background job.
+INTEGRATIONS_CACHE_PATH = (
+    Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")) / "groundwork" / "integrations" / "cache.json"
 )
 
 CLI_AUTH_TIMEOUT_S = 10   # matches check_access()'s `gh auth status` timeout precedent
@@ -385,21 +392,64 @@ def _routines_using(entry: IntegrationEntry, cfg: dict) -> list:
     return sorted(out)
 
 
+def _write_cache(rows: list) -> None:
+    """Atomically persist this run's observations, one entry per integration, each with its own
+    checked_at — written via temp-file + os.replace so a reader never sees a partial file mid-write
+    (matches scripts/merge_settings.py's write_atomic() pattern)."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    payload = {
+        "schema": 1,
+        "integrations": {
+            name: {
+                "available": obs.available,
+                "configured": obs.configured,
+                "connected": obs.connected,
+                "used": obs.used,
+                "summary": summary_state(obs),
+                "checked_at": now,
+            }
+            for name, obs in rows
+        },
+    }
+    path = INTEGRATIONS_CACHE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".groundwork.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
 # ---------------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------------
-def _cmd_list(_args) -> int:
-    cfg = _load_config()
-    rows = []
-    for entry in CATALOG:
-        obs = determine_observation(entry, cfg)
-        rows.append((entry.name, _access_label(entry), summary_state(obs)))
+def _compute_observations(cfg: dict) -> list:
+    return [(entry.name, determine_observation(entry, cfg)) for entry in CATALOG]
+
+
+def _print_list_table(observations: list) -> None:
+    rows = [(name, _access_label(_BY_NAME[name.lower()]), summary_state(obs)) for name, obs in observations]
     name_w = max(len(r[0]) for r in rows) + 2
     access_w = max(len(r[1]) for r in rows) + 2
     print(f"{'Integration':<{name_w}}{'Access':<{access_w}}State")
     print("-" * (name_w + access_w + 12))
     for name, access, state in rows:
         print(f"{name:<{name_w}}{access:<{access_w}}{state}")
+
+
+def _cmd_list(_args) -> int:
+    cfg = _load_config()
+    _print_list_table(_compute_observations(cfg))
+    return 0
+
+
+def _cmd_refresh(_args) -> int:
+    """Runs the exact same live probes `list` does, prints the identical table, and additionally
+    persists the results to the Integration Catalog cache for scripts/groundwork_statusline.py to
+    read later — never invoked by the statusLine itself, only from install/configure/doctor/manual
+    lifecycle points (openspec/changes/add-statusline/design.md Decision 1)."""
+    cfg = _load_config()
+    observations = _compute_observations(cfg)
+    _print_list_table(observations)
+    _write_cache(observations)
     return 0
 
 
@@ -431,8 +481,13 @@ def main() -> int:
     sub.add_parser("list", help="list every catalog integration with its access mechanism(s) and state")
     p_show = sub.add_parser("show", help="show full detail for one integration")
     p_show.add_argument("name")
+    sub.add_parser(
+        "refresh",
+        help="re-run every live probe and persist the results to the Integration Catalog cache "
+             "(for scripts/groundwork_statusline.py — never run this from a scheduled/background job)",
+    )
     args = ap.parse_args()
-    return {"list": _cmd_list, "show": _cmd_show}[args.cmd](args)
+    return {"list": _cmd_list, "show": _cmd_show, "refresh": _cmd_refresh}[args.cmd](args)
 
 
 if __name__ == "__main__":
