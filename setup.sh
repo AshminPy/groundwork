@@ -690,6 +690,14 @@ verify_install() {
 verify_capabilities() {  # Groundwork 2.1: capability/Routines rows, additive to verify_install()
   if [ ! -f "$CLAUDE_DIR/groundwork/config.json" ]; then
     line "Capabilities" "NOT CONFIGURED" "no config.json — nothing selected (./setup.sh --configure to set one up)"
+    # The Integration Catalog reports real, config-independent observations too (e.g. a CLI binary
+    # actually on PATH) — it must still render here, not only once config.json exists (found live:
+    # this whole branch used to `return` before ever reaching it).
+    if [ -f "$INTEGRATIONS_PY" ]; then
+      say ""
+      say "  -- Integrations --"
+      python3 "$INTEGRATIONS_PY" list 2>/dev/null | while IFS= read -r row; do say "  $row"; done || true
+    fi
     return
   fi
   local cfg="$CLAUDE_DIR/groundwork/config.json"

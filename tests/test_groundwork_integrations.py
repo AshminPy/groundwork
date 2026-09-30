@@ -9,6 +9,7 @@ Run: python3 tests/test_groundwork_integrations.py   (or: python3 -m pytest test
 import importlib.util
 import json
 import os
+import shlex
 import stat
 import sys
 import tempfile
@@ -47,13 +48,15 @@ def load_module():
     return mod
 
 
-def _stub_bin(dirpath: Path, name: str, exit_code: int, sleep_s: float = 0) -> None:
+def _stub_bin(dirpath: Path, name: str, exit_code: int, sleep_s: float = 0, stdout_text: str = "") -> None:
     """Writes an executable shell stub standing in for a real CLI binary — same technique
     test_groundwork_routines.py uses for gh/claude, prepended onto PATH by the caller."""
     script = dirpath / name
     body = "#!/bin/sh\n"
     if sleep_s:
         body += f"sleep {sleep_s}\n"
+    if stdout_text:
+        body += f"echo {shlex.quote(stdout_text)}\n"
     body += f"exit {exit_code}\n"
     script.write_text(body)
     script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -147,13 +150,13 @@ def test_successful_real_check_yields_connected() -> None:
     print("groundwork_integrations.py — a real check that succeeds sets connected=True")
     mod = load_module()
     with tempfile.TemporaryDirectory() as tmpdir:
-        _stub_bin(Path(tmpdir), "gh", 0)
+        _stub_bin(Path(tmpdir), "gh", 0, stdout_text="github.com\n  ✓ Logged in to github.com account someone (keyring)")
         old_path = os.environ.get("PATH")
         os.environ["PATH"] = tmpdir
         try:
             github = next(e for e in mod.CATALOG if e.name == "GitHub")
             cli_mech = next(m for m in github.mechanisms if m.type == "cli")
-            check("gh present and 'gh auth status' stub succeeds => connected True",
+            check("gh present, exit 0, and output confirms 'Logged in to' => connected True",
                   mod._mechanism_connected(cli_mech) is True)
             cfg = {}
             mod._mcp_list_cache, mod._mcp_list_attempted = "", True
@@ -202,6 +205,32 @@ def test_failed_check_never_yields_connected() -> None:
             os.environ.pop("PATH", None)
         else:
             os.environ["PATH"] = old_path
+    finish()
+
+
+def test_exit_zero_without_success_marker_never_yields_connected() -> None:
+    print("groundwork_integrations.py — exit code 0 alone is never proof; a real environment was "
+          "observed where 'gh auth status' exits 0 while printing a login failure "
+          "(an env-supplied GH_TOKEN it cannot validate) — that must never read as connected")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Reproduces the exact real-world text observed live: exit 0, but the tool's own output
+        # says the login check failed.
+        _stub_bin(Path(tmpdir), "gh", 0,
+                  stdout_text="github.com\n  X Failed to log in to github.com using token (GH_TOKEN)\n"
+                              "  - Active account: true\n  - The token in GH_TOKEN is invalid.")
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = tmpdir
+        try:
+            github = next(e for e in mod.CATALOG if e.name == "GitHub")
+            cli_mech = next(m for m in github.mechanisms if m.type == "cli")
+            check("exit 0 with a failure message and no 'Logged in to' marker => connected stays False",
+                  mod._mechanism_connected(cli_mech) is False)
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
     finish()
 
 
@@ -403,7 +432,8 @@ def test_doc_consistency_with_integrations_md() -> None:
 if __name__ == "__main__":
     for fn in (test_catalog_structural_validity, test_summary_state_combinations,
                test_presence_alone_never_yields_connected, test_successful_real_check_yields_connected,
-               test_failed_check_never_yields_connected, test_timeout_never_yields_connected,
+               test_failed_check_never_yields_connected,
+               test_exit_zero_without_success_marker_never_yields_connected, test_timeout_never_yields_connected,
                test_malformed_or_missing_config_fails_safe, test_used_observation,
                test_list_command, test_show_command, test_routines_dependency_is_deterministic,
                test_no_secret_exposure, test_doc_consistency_with_integrations_md):

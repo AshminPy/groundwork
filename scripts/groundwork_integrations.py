@@ -71,6 +71,9 @@ class AccessMechanism:
     cli_binary: Optional[str] = None                  # presence check target for a "cli" mechanism
     mcp_server_name: Optional[str] = None              # presence-in-`claude mcp list` target for "mcp"
     cli_auth_cmd: Optional[Tuple[str, ...]] = None      # a REAL connectivity check; only set where one is safely known
+    cli_success_marker: Optional[str] = None            # required substring in cli_auth_cmd's output; exit code 0 alone is not proof
+    # (`gh auth status` was observed, live, to exit 0 while printing "Failed to log in ... token is invalid" —
+    # an env-supplied GH_TOKEN it cannot validate. Exit code alone is not a trustworthy success signal for it.)
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,10 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
         capabilities=("github.repository.read", "github.repository.write", "github.pull_request.read"),
         mechanisms=(
             AccessMechanism("mcp", "GitHub MCP", mcp_server_name="github"),
-            AccessMechanism("cli", "gh CLI", cli_binary="gh", cli_auth_cmd=("gh", "auth", "status")),
+            AccessMechanism(
+                "cli", "gh CLI", cli_binary="gh", cli_auth_cmd=("gh", "auth", "status"),
+                cli_success_marker="Logged in to",
+            ),
         ),
         trust="Vendor/official (github/github-mcp-server); full read/write including destructive — scope with --read-only/--toolsets",
         config_requirements="OAuth, PAT, or GitHub App for the MCP server; `gh auth login` for the CLI",
@@ -268,7 +274,13 @@ def _mechanism_connected(mech: AccessMechanism) -> bool:
         return False  # no real check implemented for this mechanism — never guess
     try:
         r = subprocess.run(list(mech.cli_auth_cmd), capture_output=True, text=True, timeout=CLI_AUTH_TIMEOUT_S)
-        return r.returncode == 0
+        if r.returncode != 0:
+            return False
+        if mech.cli_success_marker is None:
+            return True
+        # Exit code 0 alone is not proof: require the tool's own explicit success confirmation too
+        # (see cli_success_marker's docstring — gh auth status can exit 0 on a failed check).
+        return mech.cli_success_marker in (r.stdout or "") + (r.stderr or "")
     except Exception:
         return False  # timeout, missing binary, or any other error: fail safe, never CONNECTED
 
