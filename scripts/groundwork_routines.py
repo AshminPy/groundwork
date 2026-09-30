@@ -711,42 +711,47 @@ ACCESS_LABELS = {"jira_mcp": "Jira MCP", "gh_cli": "gh CLI", "github_mcp": "GitH
                  "cli": "CLI", "browser": "Browser", "unconfigured": "not configured"}
 
 
-def _doctor_rows(cfg: dict | None = None) -> list:
+def _doctor_rows(cfg: dict | None = None, name: str | None = None) -> list:
     """Structured per-routine readiness data — the CONFIGURED/AVAILABLE/CONNECTED/VERIFIED
     distinctions (owner requirement §16), never exposing secrets (there are none in config.json
-    to expose). Returns one dict per routine, in ROUTINES order; kept separate from `_cmd_doctor`'s
-    own text formatting so tests can assert on structured fields directly, not printed strings."""
+    to expose). Returns one dict per routine, in ROUTINES order (or a single-element list when
+    `name` narrows to one routine — the filter skips other routines before any of their checks
+    run, so `groundwork routines doctor NAME` never pays the cost of, or has the side effects of,
+    probing routines nobody asked about); kept separate from `_cmd_doctor`'s own text formatting
+    so tests can assert on structured fields directly, not printed strings."""
     cfg = cfg if cfg is not None else gcfg.load_config()
     last = _last_runs()
     rows = []
-    for name, spec in ROUTINES.items():
-        rc = cfg.get("routines", {}).get(name, {})
+    for rname, spec in ROUTINES.items():
+        if name is not None and rname != name:
+            continue
+        rc = cfg.get("routines", {}).get(rname, {})
         enabled = rc.get("enabled", False)
-        row = {"routine": name, "enabled": enabled, "mutates": spec["mutates"]}
+        row = {"routine": rname, "enabled": enabled, "mutates": spec["mutates"]}
         if not enabled:
             rows.append(row)
             continue
-        _, capability_reason = _capabilities_for(name, cfg)
+        _, capability_reason = _capabilities_for(rname, cfg)
         row["capability_blocked_reason"] = capability_reason
-        access_info = check_access(name, cfg) if name in ("jira_eod", "pr_followup") else None
+        access_info = check_access(rname, cfg) if rname in ("jira_eod", "pr_followup") else None
         sched = rc.get("schedule", {})
         row["schedule"] = f"{sched.get('frequency', spec['default_schedule'])} {sched.get('time', '')}".strip()
-        if name == "jira_eod":
+        if rname == "jira_eod":
             row["site"] = rc.get("site", "")
             row["identity"] = rc.get("identity", "")
             row["scope"] = rc.get("scope", {}).get("type", "")
             row["posting"] = rc.get("posting", "dry_run")
-        elif name == "pr_followup":
+        elif rname == "pr_followup":
             row["identity"] = rc.get("identity", "")
             row["scope"] = ",".join(rc.get("scope", {}).get("repositories", []))
-        elif name == "news":
+        elif rname == "news":
             row["topics"] = rc.get("topics", [])
         if access_info:
             row["access"] = access_info["access"]
             row["available"] = access_info["available"]
             row["connected"] = access_info["connected"]
             row["access_detail"] = access_info["detail"]
-        lr = last.get(name)
+        lr = last.get(rname)
         row["last_run"] = lr.get("status") if lr else None
         rows.append(row)
     return rows
@@ -842,8 +847,8 @@ def format_doctor_text(rows: list) -> str:
     return "\n".join(lines)
 
 
-def _cmd_doctor(_args) -> int:
-    print(format_doctor_text(_doctor_rows()))
+def _cmd_doctor(args) -> int:
+    print(format_doctor_text(_doctor_rows(name=getattr(args, "name", None))))
     return 0
 
 
@@ -865,7 +870,9 @@ def main() -> int:
     sub.add_parser("list", help="list configured routines and last-run status")
     p_latest = sub.add_parser("latest", help="print the most recent stored result for a routine")
     p_latest.add_argument("name", choices=sorted(ROUTINES))
-    sub.add_parser("doctor", help="print one JSON line per routine with readiness detail (for setup.sh --doctor)")
+    p_doctor = sub.add_parser("doctor", help="print readiness detail for every routine (for setup.sh --doctor), "
+                                              "or for just one when a name is given")
+    p_doctor.add_argument("name", nargs="?", choices=sorted(ROUTINES), default=None)
     args = ap.parse_args()
     return {"run": _cmd_run, "schedule": _cmd_schedule, "list": _cmd_list,
             "latest": _cmd_latest, "doctor": _cmd_doctor}[args.cmd](args)

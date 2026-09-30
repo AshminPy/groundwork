@@ -137,6 +137,19 @@ Two separate places, by design:
 
 ## Commands
 
+Preferred, via the `groundwork` CLI (Phase 4, `openspec/changes/groundwork-routine-cli-ux/`) — a
+pure pass-through to the same script below, so both forms produce byte-identical output:
+
+```
+groundwork routines list                                            # every routine, one line each
+groundwork routines run <name> [--dry-run] [--repo PATH] [--offline-work "..."]
+groundwork routines doctor [<name>]                                 # all routines, or just one
+groundwork routines schedule <name> <daily|weekly|monthly|disabled> [--hour H] [--minute M]
+```
+
+Direct script invocation still works unchanged, and is the only way to reach `latest` (full detail
+for one routine's most recent stored result), which the `groundwork` CLI does not expose:
+
 ```
 ./setup.sh --configure               # menu: change profile / reconfigure one routine / cancel
 ./setup.sh --doctor                   # read-only: core health + configured capabilities + every Routine's real detail
@@ -146,7 +159,7 @@ python3 ~/.claude/groundwork/bin/groundwork_routines.py run <name> [--dry-run] [
 python3 ~/.claude/groundwork/bin/groundwork_routines.py schedule <name> <daily|weekly|monthly|disabled> [--hour H] [--minute M]
 python3 ~/.claude/groundwork/bin/groundwork_routines.py list
 python3 ~/.claude/groundwork/bin/groundwork_routines.py latest <name>
-python3 ~/.claude/groundwork/bin/groundwork_routines.py doctor
+python3 ~/.claude/groundwork/bin/groundwork_routines.py doctor [<name>]
 python3 ~/.claude/groundwork/bin/groundwork_config.py get <routine> <dotted.key>
 python3 ~/.claude/groundwork/bin/groundwork_config.py set <routine> key=value [key=value ...]
 ```

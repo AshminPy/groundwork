@@ -148,6 +148,11 @@ groundwork update                    # installs the latest published, stable rel
 groundwork update --version 2.3.0    # installs that exact published release
 groundwork rollback                  # restores the most recent backup (same as ./setup.sh --rollback)
 groundwork rollback --version 2.2.0  # restores the backup taken right before 2.2.0 was installed
+groundwork routines list             # every routine: enabled/mutates/schedule/readiness/last-run
+groundwork routines run pr_followup  # run one routine now (same fail-closed path scheduling uses)
+groundwork routines doctor           # readiness detail for every routine
+groundwork routines doctor jira_eod  # readiness detail for just one routine
+groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
@@ -155,8 +160,9 @@ working exactly as before — `groundwork` is an additional, smaller-surface way
 of it, not the only way. `groundwork integrations` forwards its arguments verbatim to
 `groundwork_integrations.py` — see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full truth
 model. `groundwork update`/`rollback` never reimplement the installer — see
-[docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. A `groundwork routines`
-subcommand is planned for a later release.
+[docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
+forwards to the existing Routines execution/scheduling engine unchanged — see
+[docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
 
 Per project, once, if you want spec-driven work there:
 ```bash

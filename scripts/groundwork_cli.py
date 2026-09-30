@@ -9,8 +9,9 @@ Phase 1 (openspec/changes/groundwork-cli-foundation/): --help, version, doctor.
 Phase 2 (openspec/changes/groundwork-integrations-cli/): integrations (list/show/refresh/doctor),
 a pure pass-through — see `cmd_integrations`.
 Phase 3 (openspec/changes/groundwork-update-lifecycle/): update/rollback, also a pure pass-through
-to the installed groundwork_update.py — see `cmd_update`/`cmd_rollback`. Later phases add a
-routines subtree — this file's dispatch table is where that gets added, not a restructure.
+to the installed groundwork_update.py — see `cmd_update`/`cmd_rollback`.
+Phase 4 (openspec/changes/groundwork-routine-cli-ux/): routines (list/run/doctor/schedule), also a
+pure pass-through to the installed groundwork_routines.py — see `cmd_routines`.
 
 Installed as `$CLAUDE_CONFIG_DIR/groundwork/bin/groundwork` (no .py extension, executable bit
 set) by install.sh, and made reachable via PATH by the env-script mechanism install.sh also sets
@@ -45,6 +46,13 @@ INSTALLED_INTEGRATIONS_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_inte
 # to the installed groundwork_update.py, which owns all version/release/backup logic itself. No
 # installer or release logic is duplicated here.
 INSTALLED_UPDATE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_update.py"
+# Phase 4 (openspec/changes/groundwork-routine-cli-ux/): `routines` is the same kind of pure
+# pass-through as `integrations`/`update` — every arg after "routines" is forwarded verbatim to the
+# installed groundwork_routines.py, which already has its own complete, tested list/run/schedule/
+# doctor CLI (installed unconditionally since Groundwork 2.1, unchanged by this phase except
+# `doctor` gaining an optional routine-name filter inside that script itself). No routine
+# execution, readiness, or scheduling logic is duplicated here.
+INSTALLED_ROUTINES_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_routines.py"
 
 
 def _read_version() -> str | None:
@@ -103,6 +111,16 @@ def cmd_rollback(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_routines(extra_argv: list[str]) -> int:
+    if not INSTALLED_ROUTINES_PY.exists():
+        print(f"routines: {INSTALLED_ROUTINES_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_routines.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_ROUTINES_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -137,20 +155,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="restore a prior installation from an existing backup (see 'groundwork rollback --help')",
         add_help=False,
     )
+    sub.add_parser(
+        "routines",
+        help="Routines: list/run/doctor/schedule (see 'groundwork routines --help')",
+        add_help=False,
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # Handled before argparse ever sees it: everything after "integrations"/"update"/"rollback"
-    # (including "--help") must reach the installed script byte-for-byte, and argparse's REMAINDER
-    # cannot reliably do that across parser levels (see the comment in build_parser()).
+    # Handled before argparse ever sees it: everything after "integrations"/"update"/"rollback"/
+    # "routines" (including "--help") must reach the installed script byte-for-byte, and argparse's
+    # REMAINDER cannot reliably do that across parser levels (see the comment in build_parser()).
     if argv and argv[0] == "integrations":
         return cmd_integrations(argv[1:])
     if argv and argv[0] == "update":
         return cmd_update(argv[1:])
     if argv and argv[0] == "rollback":
         return cmd_rollback(argv[1:])
+    if argv and argv[0] == "routines":
+        return cmd_routines(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

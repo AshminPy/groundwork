@@ -526,6 +526,91 @@ def test_doctor_rows_and_formatting() -> None:
     finish()
 
 
+def test_doctor_name_filter() -> None:
+    print("groundwork_routines.py — doctor NAME (Phase 4, groundwork-routine-cli-ux): narrows to "
+          "one routine without changing its data or re-probing routines nobody asked about")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfgdir = Path(tmpdir) / "cfg"
+        init_config(cfgdir, "sre-cloudops")
+        set_routine(cfgdir, "jira_eod", "site=https://x.atlassian.net", "identity=me@x.com",
+                    "access=jira_mcp", "mcp_server=atlassian")
+        set_routine(cfgdir, "pr_followup", "identity=me", "access=gh_cli")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        try:
+            cfg = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+
+            # Backward compatibility: bare doctor() is completely unaffected — this is the exact
+            # call setup.sh --doctor's verify_capabilities() already makes (setup.sh:745), and it
+            # must keep returning all six routines exactly as before this change.
+            all_rows = mod._doctor_rows(cfg)
+            check("bare _doctor_rows(cfg) (no name) still covers all six routines",
+                  {r["routine"] for r in all_rows} == set(mod.ROUTINES), {r["routine"] for r in all_rows})
+
+            # Narrowing to one routine returns exactly that routine, with byte-identical field
+            # values to what the unfiltered call already computed for it — a pure filter, not a
+            # second, independently-computed view that could disagree.
+            for target in ("jira_eod", "pr_followup", "news"):
+                filtered = mod._doctor_rows(cfg, name=target)
+                check(f"_doctor_rows(cfg, name='{target}') returns exactly one row", len(filtered) == 1, filtered)
+                expected = next(r for r in all_rows if r["routine"] == target)
+                check(f"_doctor_rows(cfg, name='{target}')'s row is identical to the unfiltered row",
+                      filtered[0] == expected, (filtered[0], expected))
+
+            # No side effect on routines nobody asked about: filtering to jira_eod must never run
+            # pr_followup's real gh_cli connectivity check (a live `gh auth status` subprocess call)
+            # — the same "probe only what's asked" property Phase 2's `groundwork integrations
+            # doctor NAME` already established, now proven here too via a call-counting stub.
+            with tempfile.TemporaryDirectory() as bindir_s:
+                bindir = Path(bindir_s)
+                call_log = bindir / "calls.log"
+                gh_stub = bindir / "gh"
+                gh_stub.write_text(f"#!/bin/sh\necho called >> {call_log}\necho 'github.com'\n"
+                                    "echo '  ✓ Logged in to github.com account someone (keyring)'\nexit 0\n")
+                gh_stub.chmod(gh_stub.stat().st_mode | stat.S_IEXEC | 0o111)
+                old_path = os.environ.get("PATH")
+                os.environ["PATH"] = str(bindir)
+                try:
+                    mod._doctor_rows(cfg, name="jira_eod")
+                    calls_after_jira_only = call_log.read_text().count("called") if call_log.exists() else 0
+                    check("filtering to jira_eod never invokes pr_followup's gh_cli connectivity check",
+                          calls_after_jira_only == 0, f"calls={calls_after_jira_only}")
+
+                    mod._doctor_rows(cfg, name="pr_followup")
+                    calls_after_pr = call_log.read_text().count("called") if call_log.exists() else 0
+                    check("filtering to pr_followup itself still runs its real gh_cli connectivity check",
+                          calls_after_pr == 1, f"calls={calls_after_pr}")
+                finally:
+                    if old_path is None:
+                        os.environ.pop("PATH", None)
+                    else:
+                        os.environ["PATH"] = old_path
+
+            # CLI level: `doctor NAME` output is byte-identical to rendering just that routine's
+            # own row through the exact same formatter `doctor` (all routines) already uses —
+            # narration of the same data, never a second, independently-computed view.
+            expected_jira_text = mod.format_doctor_text([r for r in all_rows if r["routine"] == "jira_eod"])
+            single_out = subprocess.run(["python3", str(SCRIPT), "doctor", "jira_eod"], capture_output=True,
+                                        text=True, timeout=30, env={**os.environ})
+            check("`doctor jira_eod` exits 0", single_out.returncode == 0, single_out.stderr)
+            check("`doctor jira_eod` output is byte-identical to format_doctor_text() on just its own row",
+                  single_out.stdout.strip() == expected_jira_text.strip(),
+                  (expected_jira_text, single_out.stdout))
+            check("`doctor jira_eod` output does not also print another routine's label",
+                  "News" not in single_out.stdout and "PR Follow-up" not in single_out.stdout, single_out.stdout)
+
+            # An unrecognized routine name is rejected the same way run/schedule/latest already
+            # reject one (argparse's own `choices=sorted(ROUTINES)`), not a bespoke error path.
+            bad = subprocess.run(["python3", str(SCRIPT), "doctor", "not-a-real-routine"],
+                                 capture_output=True, text=True, timeout=30, env={**os.environ})
+            check("`doctor` with an unknown routine name exits non-zero", bad.returncode != 0, bad.returncode)
+            check("`doctor` with an unknown routine name reports it as an invalid choice, no traceback",
+                  "invalid choice" in bad.stderr and "Traceback" not in bad.stderr, bad.stderr)
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+    finish()
+
+
 def test_schedule_routine() -> None:
     print("groundwork_routines.py schedule — reuses the launchd/cron pattern, accepts hour+minute")
     mod = load_module()
@@ -785,6 +870,7 @@ if __name__ == "__main__":
                test_run_routine_blocked_before_any_subprocess, test_semantic_status_from_routine_result_block,
                test_result_storage_separate_from_telemetry, test_result_retention_bounded,
                test_check_access_never_asserts_connected_without_checking, test_doctor_rows_and_formatting,
+               test_doctor_name_filter,
                test_schedule_routine, test_cli_list_reflects_new_schema,
                test_prompts_reference_configured_scope_not_generic, test_reconfigure_schedule_no_duplication,
                test_readiness_state_classifications, test_build_command_always_fails_closed_for_every_routine,
