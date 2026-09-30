@@ -23,4 +23,4 @@
 - [x] 4.3 Runtime: fresh install shows `outputStyle: Concise`; a real question run through this session compared before/after (settings-merge mechanism fully runtime-verified; the narration-comparison portion requires a real Claude Code terminal session started with the setting active — not obtainable from within this already-running sandbox session, so left as RUNTIME VALIDATION REQUIRED and reported as such)
 - [x] 4.4 Runtime: `setup.sh --routines` on a real config shows the new readiness lines
 - [x] 4.5 Runtime: one safe (READY) routine run for real; one deliberately-unready scenario caught before execution
-- [ ] 4.6 Independent fresh-context review; fix MUST FIX; re-validate; fresh confirmation review
+- [x] 4.6 Independent fresh-context review; fix MUST FIX; re-validate; fresh confirmation review (1 MUST FIX found and fixed — `readiness_state()` falsely READY for GitHub-dependent routines; fresh confirmation review: approve, Must-fix: 0)
