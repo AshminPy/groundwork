@@ -348,12 +348,19 @@ def test_routines_dependency_is_deterministic() -> None:
     print("groundwork_integrations.py — Used by Routines only lists a Routine whose stored config explicitly declares that mechanism")
     mod = load_module()
     github = next(e for e in mod.CATALOG if e.name == "GitHub")
+    jira = next(e for e in mod.CATALOG if e.name == "Jira")
     kubernetes = next(e for e in mod.CATALOG if e.name == "Kubernetes")
     cfg = {"routines": {"pr_followup": {"access": "gh_cli"}, "jira_eod": {"access": "jira_mcp"}}}
     check("pr_followup (access=gh_cli) is listed for GitHub", "pr_followup" in mod._routines_using(github, cfg), cfg)
     check("jira_eod is not listed for GitHub", "jira_eod" not in mod._routines_using(github, cfg), cfg)
+    check("jira_eod (access=jira_mcp) is listed for Jira", "jira_eod" in mod._routines_using(jira, cfg), cfg)
     check("Kubernetes has no routine_access_values declared, so nothing is ever inferred for it",
           mod._routines_using(kubernetes, cfg) == [], mod._routines_using(kubernetes, cfg))
+
+    for access_value in ("cli", "browser"):
+        cfg_alt = {"routines": {"jira_eod": {"access": access_value}}}
+        check(f"jira_eod (access={access_value}) is also listed for Jira",
+              "jira_eod" in mod._routines_using(jira, cfg_alt), cfg_alt)
     finish()
 
 

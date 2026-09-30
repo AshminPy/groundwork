@@ -129,7 +129,7 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
         trust="Vendor/official (atlassian/atlassian-mcp-server, GA 2026-02-04); delete/admin ops off by default",
         config_requirements="OAuth 2.1 (default) or an API token",
         config_key=("integrations", "jira"),
-        routine_access_values=("jira_mcp",),
+        routine_access_values=("jira_mcp", "cli", "browser"),
     ),
     IntegrationEntry(
         name="Confluence",
