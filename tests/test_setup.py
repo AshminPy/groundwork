@@ -88,6 +88,16 @@ class Box:
         self.cfg = root / name
         self.backups = root / "backups"
         self.agents = root / "launch-agents"
+        # Groundwork CLI foundation (openspec/changes/groundwork-cli-foundation/): install.sh's
+        # PATH-registration step writes into $HOME/.bashrc, .zshrc, .profile directly (not
+        # CLAUDE_CONFIG_DIR-relative) — found live, the hard way, when this class's own HOME-less
+        # env let a Box-driven install.sh run append a real marked block into this sandbox's
+        # actual ~/.bashrc/.zshrc/.profile. HOME must be isolated the same way CLAUDE_CONFIG_DIR
+        # already is. Confirmed safe: grepping setup.sh/install.sh/uninstall.sh for every other
+        # $HOME reference shows none depends on the real HOME once CLAUDE_CONFIG_DIR and
+        # GROUNDWORK_BACKUP_DIR (both already overridden below) are set.
+        self.home = root / "home"
+        self.home.mkdir(parents=True, exist_ok=True)
         bin_dir = root / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         (bin_dir / "claude").write_text('#!/usr/bin/env bash\ncase "$1" in --version) echo "2.1.258 (Claude Code)";; plugin) echo "ecc@ecc";; *) exit 0;; esac\n')
@@ -96,6 +106,7 @@ class Box:
         for f in ("claude", "openspec", "npm"):
             os.chmod(bin_dir / f, 0o755)
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(self.cfg),
+                        HOME=str(self.home),
                         GROUNDWORK_BACKUP_DIR=str(self.backups), GROUNDWORK_LAUNCH_AGENTS_DIR=str(self.agents),
                         GROUNDWORK_NO_LAUNCHCTL="1", NODE_USE_SYSTEM_CA="0", GROUNDWORK_SETUP_SKIP_TESTS="1",
                         # Forces the launchd scheduling path deterministically regardless of the CI
@@ -204,8 +215,7 @@ def test_setup() -> None:
         os.chmod(clean / "python3", 0o755)
         for stub in ("npm", "openspec"):
             shutil.copy(tmp / "f" / "bin" / stub, clean / stub)
-        no_claude = dict(f.env, PATH=f"{clean}:/usr/bin:/bin", HOME=str(tmp / "f" / "home"))
-        (tmp / "f" / "home").mkdir()
+        no_claude = dict(f.env, PATH=f"{clean}:/usr/bin:/bin", HOME=str(f.home))
         r = subprocess.run(["bash", str(SETUP), "--non-interactive"], capture_output=True, text=True, env=no_claude, timeout=60)
         check("missing prerequisite: fails clearly, nothing changed, no backup made", r.returncode == 1 and "Missing prerequisites" in r.stdout and not f.backups.exists() and not (f.cfg / "groundwork" / "VERSION").exists(), r.stdout + r.stderr)
 
@@ -312,7 +322,6 @@ def test_setup() -> None:
                 elif st == "claude":
                     mk("claude", "#!/usr/bin/env bash\n" + claude_stub)
             b.env["PATH"] = f"{clean}:{tools}:{filtered_sysbin()}"
-            b.env["HOME"] = str(root / "home"); (root / "home").mkdir()
             b.env["GROUNDWORK_OS"] = os_kind
             return b, root
 

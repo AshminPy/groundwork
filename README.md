@@ -128,6 +128,24 @@ Other modes:
 
 If setup fails after the backup was taken, it prints the failure, the backup path and the rollback command; your previous configuration is never deleted.
 
+### The `groundwork` command
+
+After `./setup.sh` (or `./install.sh`) finishes, the **`groundwork`** command is on your `PATH`
+(open a new terminal, or run the `source` command install prints if you want it in your current
+one). It is the primary discoverable interface — a single entry point that dispatches to the same
+functionality documented above, not a replacement for it:
+
+```bash
+groundwork --help     # lists what's implemented
+groundwork version    # the installed Groundwork version
+groundwork doctor     # identical to ./setup.sh --doctor, callable from anywhere
+```
+
+Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
+working exactly as before — `groundwork` is an additional, smaller-surface way to reach a subset
+of it, not the only way. More subcommands (`groundwork integrations`, `groundwork routines`,
+`groundwork update`) are planned for later releases; only what's listed above exists today.
+
 Per project, once, if you want spec-driven work there:
 ```bash
 cd your-project

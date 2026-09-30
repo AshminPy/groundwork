@@ -114,7 +114,14 @@ def test_install_copies_playbooks() -> None:
         for f in ("claude", "openspec"):
             os.chmod(bin_dir / f, 0o755)
         agents_dir = cfg.parent / "launch-agents"
-        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(cfg), NODE_USE_SYSTEM_CA="0",
+        # Groundwork CLI foundation: install.sh now also writes PATH-registration lines into
+        # $HOME/.bashrc/.zshrc/.profile directly — HOME must be isolated here too (found live:
+        # this exact test, unguarded, appended a real marked block into this sandbox's actual
+        # dotfiles before this fix).
+        home_dir = tmp / "home"
+        home_dir.mkdir()
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(cfg), HOME=str(home_dir),
+                   NODE_USE_SYSTEM_CA="0",
                    GROUNDWORK_LAUNCH_AGENTS_DIR=str(agents_dir), GROUNDWORK_NO_LAUNCHCTL="1",
                    # Forces the launchd scheduling path deterministically regardless of the CI
                    # host's real platform (production-code override in groundwork_report.py's
@@ -165,6 +172,8 @@ def test_install_node_version_check() -> None:
         (cfg / "settings.json").write_text("{}")
 
         agents_dir = tmp / "launch-agents"
+        home_dir = tmp / "home"
+        home_dir.mkdir()
 
         def stubbed_env(node_version: str) -> tuple[dict, Path]:
             bin_dir = tmp / f"bin-{node_version.replace('.', '_')}"
@@ -190,6 +199,7 @@ def test_install_node_version_check() -> None:
             # a real com.groundwork.report launchd job under their real ~/Library/LaunchAgents
             # (found by independent review, M3 — confirmed by simulation, not hypothetical).
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CLAUDE_CONFIG_DIR=str(cfg),
+                       HOME=str(home_dir),
                        NODE_USE_SYSTEM_CA="0", GROUNDWORK_LAUNCH_AGENTS_DIR=str(agents_dir),
                        GROUNDWORK_NO_LAUNCHCTL="1", GROUNDWORK_OS="linux")
             return env, bin_dir
