@@ -26,10 +26,18 @@ downloaded.
 Never stores credentials, never requires sudo, never installs OS packages (always passes
 `--no-install-prereqs` to the fetched setup.sh — a missing hard prerequisite is reported and left
 for the user, exactly as setup.sh already does on its own). Update preserves the installation's
-current profile/schedule/Agent-Teams choices by reading them before mutating and passing them back
-explicitly to setup.sh --non-interactive, rather than trusting its own interactive-mode defaults
-(one of which, --schedule, silently resets to "weekly" with no flag given — confirmed by reading
-setup.sh's choose_schedule() directly, not assumed).
+current telemetry profile (env.GROUNDWORK_PROFILE)/schedule/Agent-Teams choices by reading them
+before mutating and passing them back explicitly to setup.sh --non-interactive, rather than
+trusting its own interactive-mode defaults (one of which, --schedule, silently resets to "weekly"
+with no flag given — confirmed by reading setup.sh's choose_schedule() directly, not assumed).
+
+This is distinct from config.json's *capability* profile (sre-cloudops/platform-engineering/etc.,
+set via setup.sh --capability-profile): update never passes --capability-profile to the fetched
+setup.sh, so apply_capabilities() (which does a destructive `groundwork_config.py init --force`)
+never runs and config.json is simply never touched — not because it is re-applied. If a future
+change ever adds --capability-profile here, it must read the CURRENT config.json profile back
+first (the same pattern used for the telemetry profile above), never guess or default it, or a
+`groundwork update` run would silently overwrite a user's routine/integration configuration.
 """
 import argparse
 import io

@@ -8,7 +8,14 @@ Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) —
 
 ## Version history
 
-**Groundwork 2.2** (current) added the Integration Catalog (a structured, code-defined catalog of external-system integrations with independent truthful `available`/`configured`/`connected`/`used` observations) and statusLine (a Claude Code `statusLine` command rendering Groundwork-specific state under a strict, enforced LIVE / LAST-COMPLETED-TURN / CACHED / UNAVAILABLE data-source contract) — see [docs/RELEASE-REPORT-2.2.md](docs/RELEASE-REPORT-2.2.md) and [CHANGELOG.md](CHANGELOG.md) for full detail.
+**Groundwork 2.3** (current) added the `groundwork` CLI (`--help`/`version`/`doctor`/
+`integrations`/`update`/`rollback`/`routines` — a single, discoverable command that dispatches to
+Groundwork's existing functionality, reimplementing none of it), self-update/rollback to a real
+published release, and Routines readiness/quiet-interaction refinements — see
+[docs/RELEASE-REPORT-2.3.md](docs/RELEASE-REPORT-2.3.md) and [CHANGELOG.md](CHANGELOG.md) for full
+detail.
+
+**Groundwork 2.2** added the Integration Catalog (a structured, code-defined catalog of external-system integrations with independent truthful `available`/`configured`/`connected`/`used` observations) and statusLine (a Claude Code `statusLine` command rendering Groundwork-specific state under a strict, enforced LIVE / LAST-COMPLETED-TURN / CACHED / UNAVAILABLE data-source contract) — see [docs/RELEASE-REPORT-2.2.md](docs/RELEASE-REPORT-2.2.md) and [CHANGELOG.md](CHANGELOG.md) for full detail.
 
 **Groundwork 2.1** added context engineering, capability resolution, scheduled Routines, a setup-time capability configurator, and ECC version pinning, on the same small-footprint model below — see [Capabilities, profiles and Routines](#capabilities-profiles-and-routines) and [CHANGELOG.md](CHANGELOG.md) for full detail.
 
