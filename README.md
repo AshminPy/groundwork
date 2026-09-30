@@ -143,14 +143,20 @@ groundwork integrations list         # the Integration Catalog: one line per int
 groundwork integrations show NAME    # full detail for one integration
 groundwork integrations doctor NAME  # show's detail plus a reason for each observation
 groundwork integrations refresh      # re-run every probe and persist to the statusLine's cache
+groundwork update --check            # non-mutating: current vs. latest published release
+groundwork update                    # installs the latest published, stable release
+groundwork update --version 2.3.0    # installs that exact published release
+groundwork rollback                  # restores the most recent backup (same as ./setup.sh --rollback)
+groundwork rollback --version 2.2.0  # restores the backup taken right before 2.2.0 was installed
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
 working exactly as before — `groundwork` is an additional, smaller-surface way to reach a subset
 of it, not the only way. `groundwork integrations` forwards its arguments verbatim to
 `groundwork_integrations.py` — see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full truth
-model. More subcommands (`groundwork routines`, `groundwork update`) are planned for later
-releases.
+model. `groundwork update`/`rollback` never reimplement the installer — see
+[docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. A `groundwork routines`
+subcommand is planned for a later release.
 
 Per project, once, if you want spec-driven work there:
 ```bash

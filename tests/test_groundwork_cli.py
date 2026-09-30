@@ -251,10 +251,64 @@ def test_integrations_dispatches_not_reimplements() -> None:
     finish()
 
 
+def test_update_rollback_dispatches_not_reimplements() -> None:
+    print("groundwork_cli.py — update/rollback forward verbatim to the installed groundwork_update.py "
+          "(Phase 3, openspec/changes/groundwork-update-lifecycle/) — network-free paths only, so this "
+          "stays a deterministic dispatch check, not a live-release test")
+    if shutil_which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh exits 0", r.returncode == 0, r.stdout[-1500:] + r.stderr[-800:])
+
+        installed_update = e.cfg / "groundwork" / "bin" / "groundwork_update.py"
+        check("install.sh copies groundwork_update.py into the installed bin dir", installed_update.is_file())
+
+        # --help for both subcommands: no network involved, argparse.REMAINDER + -h interception
+        # bug (https://bugs.python.org/issue9334) — same reasoning already fixed for "integrations".
+        for name in ("update", "rollback"):
+            help_direct = subprocess.run(["python3", str(installed_update), name, "--help"],
+                                         capture_output=True, text=True, env=e.env, timeout=30)
+            help_via_cli = e.run_cli(name, "--help")
+            check(f"groundwork {name} --help reaches the installed script's real help text, byte-identical",
+                  help_via_cli.stdout == help_direct.stdout and help_via_cli.returncode == help_direct.returncode,
+                  help_via_cli.stdout[:300])
+
+        # A deterministic, network-free error path: "--check" and "--version" together is rejected
+        # before any HTTP call is made, so the dispatched output is byte-identical without needing
+        # a live GitHub API call.
+        direct_combo = subprocess.run(["python3", str(installed_update), "update", "--check", "--version", "9.9.9"],
+                                      capture_output=True, text=True, env=e.env, timeout=30)
+        via_cli_combo = e.run_cli("update", "--check", "--version", "9.9.9")
+        check("groundwork update --check --version X exit code matches direct invocation",
+              via_cli_combo.returncode == direct_combo.returncode,
+              f"cli={via_cli_combo.returncode} direct={direct_combo.returncode}")
+        check("groundwork update --check --version X stderr is byte-identical to direct invocation",
+              via_cli_combo.stderr == direct_combo.stderr, via_cli_combo.stderr[:300] + "\n---\n" + direct_combo.stderr[:300])
+
+        # rollback --version with no matching backup: also deterministic and network-free.
+        direct_rb = subprocess.run(["python3", str(installed_update), "rollback", "--version", "9.9.9"],
+                                   capture_output=True, text=True, env=e.env, timeout=30)
+        via_cli_rb = e.run_cli("rollback", "--version", "9.9.9")
+        check("groundwork rollback --version X (no matching backup) exit code matches direct invocation",
+              via_cli_rb.returncode == direct_rb.returncode,
+              f"cli={via_cli_rb.returncode} direct={direct_rb.returncode}")
+        check("groundwork rollback --version X (no matching backup) stderr is byte-identical to direct invocation",
+              via_cli_rb.stderr == direct_rb.stderr, via_cli_rb.stderr[:300] + "\n---\n" + direct_rb.stderr[:300])
+
+        # Top-level help lists both new subcommands.
+        top_help = e.run_cli("--help")
+        check("groundwork --help lists 'update'", "update" in top_help.stdout, top_help.stdout)
+        check("groundwork --help lists 'rollback'", "rollback" in top_help.stdout, top_help.stdout)
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
               test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
-              test_integrations_dispatches_not_reimplements):
+              test_integrations_dispatches_not_reimplements, test_update_rollback_dispatches_not_reimplements):
         try:
             t()
         except AssertionError:
