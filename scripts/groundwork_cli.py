@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """The `groundwork` command — a single, discoverable entry point that dispatches to Groundwork's
 existing, already-tested functionality. It does not reimplement any logic: `doctor` shells out to
-the installed copy of setup.sh's own `--doctor` mode so output is identical by construction, and
-`version` reads the same `$CLAUDE_CONFIG_DIR/groundwork/VERSION` file `setup.sh --verify` reads.
+the installed copy of setup.sh's own `--doctor` mode so output is identical by construction,
+`version` reads the same `$CLAUDE_CONFIG_DIR/groundwork/VERSION` file `setup.sh --verify` reads, and
+`integrations` forwards every argument verbatim to the installed Integration Catalog script.
 
-Phase 1 of the Groundwork CLI (openspec/changes/groundwork-cli-foundation/): --help, version,
-doctor only. Later phases add integrations/routines/update/rollback subtrees — this file's
-dispatch table is where those get added, not a restructure.
+Phase 1 (openspec/changes/groundwork-cli-foundation/): --help, version, doctor.
+Phase 2 (openspec/changes/groundwork-integrations-cli/): integrations (list/show/refresh/doctor),
+a pure pass-through — see `cmd_integrations`. Later phases add routines/update/rollback subtrees —
+this file's dispatch table is where those get added, not a restructure.
 
 Installed as `$CLAUDE_CONFIG_DIR/groundwork/bin/groundwork` (no .py extension, executable bit
 set) by install.sh, and made reachable via PATH by the env-script mechanism install.sh also sets
@@ -30,6 +32,12 @@ VERSION_PATH = CLAUDE_DIR / "groundwork" / "VERSION"
 # that are not copied alongside it, and are never invoked from this installed location — only
 # --doctor is ever passed to it from here.
 INSTALLED_SETUP_SH = CLAUDE_DIR / "groundwork" / "bin" / "setup.sh"
+# Phase 2 (openspec/changes/groundwork-integrations-cli/): `integrations` is a pure pass-through to
+# the installed Integration Catalog script — every arg after "integrations" is forwarded verbatim
+# (argparse.REMAINDER), including "--help", so its own subcommands/help text are the single source
+# of truth and can never drift from what this CLI documents. No business logic — not even the list
+# of subcommand names — is duplicated here.
+INSTALLED_INTEGRATIONS_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_integrations.py"
 
 
 def _read_version() -> str | None:
@@ -58,6 +66,16 @@ def cmd_doctor(_args) -> int:
     return result.returncode
 
 
+def cmd_integrations(extra_argv: list[str]) -> int:
+    if not INSTALLED_INTEGRATIONS_PY.exists():
+        print(f"integrations: {INSTALLED_INTEGRATIONS_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_integrations.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_INTEGRATIONS_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -70,10 +88,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_version.set_defaults(func=cmd_version)
     p_doctor = sub.add_parser("doctor", help="read-only health check (identical to ./setup.sh --doctor)")
     p_doctor.set_defaults(func=cmd_doctor)
+    # Listed here only so it appears in `groundwork --help`'s subcommand summary; main() intercepts
+    # "integrations" before this subparser ever runs (see the comment there for why: argparse's
+    # REMAINDER does not reliably coexist with -h/--help interception across parser levels —
+    # https://bugs.python.org/issue9334 — so a plain forward-everything subparser can't be trusted
+    # to pass "--help" through to the installed script).
+    sub.add_parser(
+        "integrations",
+        help="Integration Catalog: list/show/refresh/doctor (see 'groundwork integrations --help')",
+        add_help=False,
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    # Handled before argparse ever sees it: everything after "integrations" (including "--help")
+    # must reach the installed script byte-for-byte, and argparse's REMAINDER cannot reliably do
+    # that across parser levels (see the comment in build_parser()).
+    if argv and argv[0] == "integrations":
+        return cmd_integrations(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

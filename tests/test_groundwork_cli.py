@@ -204,9 +204,57 @@ def test_install_uninstall_registers_and_removes_path() -> None:
     finish()
 
 
+def test_integrations_dispatches_not_reimplements() -> None:
+    print("groundwork_cli.py — integrations forwards verbatim to the installed groundwork_integrations.py")
+    if shutil_which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh exits 0", r.returncode == 0, r.stdout[-1500:] + r.stderr[-800:])
+
+        installed_integrations = e.cfg / "groundwork" / "bin" / "groundwork_integrations.py"
+        check("install.sh copies groundwork_integrations.py into the installed bin dir",
+              installed_integrations.is_file())
+
+        for subargs in (["list"], ["show", "github"], ["doctor", "github"]):
+            direct = subprocess.run(["python3", str(installed_integrations), *subargs],
+                                    capture_output=True, text=True, env=e.env, timeout=30)
+            via_cli = e.run_cli("integrations", *subargs)
+            check(f"groundwork integrations {' '.join(subargs)} exit code matches direct invocation",
+                  via_cli.returncode == direct.returncode,
+                  f"cli={via_cli.returncode} direct={direct.returncode}")
+            check(f"groundwork integrations {' '.join(subargs)} stdout is byte-identical to direct invocation",
+                  via_cli.stdout == direct.stdout, via_cli.stdout[:300] + "\n---\n" + direct.stdout[:300])
+
+        # --help must reach the installed script's own real help text, not a stub — this is the
+        # specific argparse REMAINDER + -h interaction (https://bugs.python.org/issue9334) that
+        # main() works around by intercepting "integrations" before argparse ever sees it.
+        help_direct = subprocess.run(["python3", str(installed_integrations), "--help"],
+                                     capture_output=True, text=True, env=e.env, timeout=30)
+        help_via_cli = e.run_cli("integrations", "--help")
+        check("groundwork integrations --help reaches the installed script's real help text, byte-identical",
+              help_via_cli.stdout == help_direct.stdout and help_via_cli.returncode == help_direct.returncode,
+              help_via_cli.stdout[:300])
+        check("groundwork integrations --help is not the bare argparse stub",
+              "Integration Catalog" in help_via_cli.stdout, help_via_cli.stdout)
+
+        # Unknown integration name: a real, non-zero error, no traceback, passed through untouched.
+        bad = e.run_cli("integrations", "show", "totally-not-a-real-integration")
+        check("unknown integration name via the CLI returns non-zero, no traceback",
+              bad.returncode == 1 and "Traceback" not in bad.stderr, bad.stdout + bad.stderr)
+
+        # Top-level help still lists "integrations" as a subcommand.
+        top_help = e.run_cli("--help")
+        check("groundwork --help lists 'integrations'", "integrations" in top_help.stdout, top_help.stdout)
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
-              test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path):
+              test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
+              test_integrations_dispatches_not_reimplements):
         try:
             t()
         except AssertionError:
