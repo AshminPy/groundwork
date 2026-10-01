@@ -59,7 +59,17 @@ DEFAULT_STATUSLINE_CONFIG = {
     "show_context": True,
     "show_cost": False,
     "show_validation": True,
-    "plain_text": False,         # True: ASCII-only fallback, no Unicode symbols
+    "plain_text": False,         # True: ASCII-only fallback, no Unicode symbols — takes precedence
+                                 # over symbol_set/separator below (see _fmt_integrations()/render()):
+                                 # plain_text already replaces symbols with words and │ with | entirely,
+                                 # so a chosen symbol_set/separator is simply never consulted while it's on
+    "symbol_set": "default",     # "default" | "ascii" | "emoji" — which SYMBOL_SETS preset renders the
+                                 # integrations row's CONNECTED/CONFIGURED/AVAILABLE glyphs (ignored when
+                                 # plain_text is true). Two fixed presets only — no arbitrary custom
+                                 # symbol strings (display/injection risk; out of scope for this change).
+    "separator": "unicode",      # "unicode" | "ascii" — which SEPARATORS preset renders the field
+                                 # separator (ignored when plain_text is true, which always uses "|").
+                                 # Two fixed presets only — no arbitrary custom separator string.
     "max_integrations": 4,       # compact mode only; detailed shows all cached, non-empty entries
     "integrations_min_state": "available",  # "available" | "configured" | "connected" — lowest
                                              # summary state still shown (e.g. "connected" hides
@@ -68,9 +78,32 @@ DEFAULT_STATUSLINE_CONFIG = {
                                              # actually signed into); default keeps existing behavior
 }
 
-SUMMARY_SYMBOL = {"CONNECTED": "●", "CONFIGURED": "◐", "AVAILABLE": "○"}  # ● ◐ ○
+SUMMARY_SYMBOL = {"CONNECTED": "●", "CONFIGURED": "◐", "AVAILABLE": "○"}  # ● ◐ ○ — the "default" symbol_set
 SUMMARY_PLAIN = {"CONNECTED": "connected", "CONFIGURED": "configured", "AVAILABLE": "available"}
 SUMMARY_RANK = {"AVAILABLE": 0, "CONFIGURED": 1, "CONNECTED": 2}  # ordering for integrations_min_state
+
+# Fixed symbol/separator presets for the `symbol_set`/`separator` config keys. Deliberately closed sets —
+# not a generic "custom glyph" mechanism — so a config value can only ever select one of these, never
+# inject an arbitrary string into the render (see DEFAULT_STATUSLINE_CONFIG's comments above).
+SYMBOL_SETS = {
+    "default": SUMMARY_SYMBOL,
+    "ascii": {"CONNECTED": "+", "CONFIGURED": "~", "AVAILABLE": "-"},
+    "emoji": {"CONNECTED": "✅", "CONFIGURED": "🟡", "AVAILABLE": "⚪"},
+}
+SEPARATORS = {"unicode": "│", "ascii": "|"}
+
+
+def _resolve_symbol_set(cfg: dict) -> dict:
+    """Never raises: an unrecognized/malformed symbol_set value (e.g. hand-edited statusline-config.json
+    bypassing the `config set` CLI's own choice validation) falls back to the "default" preset rather
+    than crashing or corrupting the render."""
+    return SYMBOL_SETS.get(str(cfg.get("symbol_set", "default")), SYMBOL_SETS["default"])
+
+
+def _resolve_separator(cfg: dict) -> str:
+    """Same fail-safe contract as _resolve_symbol_set(): unrecognized/malformed falls back to "unicode"."""
+    return SEPARATORS.get(str(cfg.get("separator", "unicode")), SEPARATORS["unicode"])
+
 
 # One entry per DEFAULT_STATUSLINE_CONFIG key, used only by the `config` CLI below (get/set/unset/
 # list) to validate a value before writing it — the renderer itself never consults this; it stays
@@ -82,6 +115,8 @@ KEY_SCHEMA = {
     "show_cost": ("bool", None),
     "show_validation": ("bool", None),
     "plain_text": ("bool", None),
+    "symbol_set": ("choice", ["default", "ascii", "emoji"]),
+    "separator": ("choice", ["unicode", "ascii"]),
     "max_integrations": ("int", None),
     "integrations_min_state": ("choice", ["available", "configured", "connected"]),
 }
@@ -310,6 +345,8 @@ def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
         return None
     min_state = cfg.get("integrations_min_state", "available")
     min_rank = SUMMARY_RANK.get(str(min_state).upper(), 0)  # unrecognized value falls back to "available"
+    symbols = _resolve_symbol_set(cfg)  # ignored entirely when plain is True (plain_text precedence)
+    field_sep = " | " if plain else f" {_resolve_separator(cfg)} "  # same precedence as above
     entries = []
     for name, obs in sorted(cache.items()):
         if not isinstance(obs, dict):
@@ -321,7 +358,7 @@ def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
             continue
         checked_at = obs.get("checked_at")
         age_s = _cache_age_seconds(checked_at) if isinstance(checked_at, str) else None
-        label = SUMMARY_PLAIN[summary] if plain else SUMMARY_SYMBOL[summary]
+        label = SUMMARY_PLAIN[summary] if plain else symbols[summary]
         text = f"{name} {label}"
         # Every cached observation shows its age — even fresh — so CACHED is never visually
         # mistaken for LIVE (a fresh cache entry is still "connected as of a moment ago", not
@@ -339,12 +376,14 @@ def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
         return None
     if cfg.get("mode") != "detailed":
         entries = entries[: max(1, int(cfg.get("max_integrations", 4)))]
-    return (" | " if plain else " │ ").join(entries)
+    return field_sep.join(entries)
 
 
 def render(stdin: dict, cfg: dict) -> str:
     plain = bool(cfg.get("plain_text"))
-    sep = " | " if plain else " │ "  # ' | ' / ' │ '
+    # plain_text takes precedence over separator: plain always uses the word-friendly " | ", never
+    # consulting the symbol_set/separator presets below (see DEFAULT_STATUSLINE_CONFIG's comments).
+    sep = " | " if plain else f" {_resolve_separator(cfg)} "  # ' | ' / ' │ ' (or ' | ' again for ascii)
 
     profile = _load_profile()
     version = _load_version()
