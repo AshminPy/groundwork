@@ -91,6 +91,12 @@ SYMBOL_SETS = {
     "emoji": {"CONNECTED": "✅", "CONFIGURED": "🟡", "AVAILABLE": "⚪"},
 }
 SEPARATORS = {"unicode": "│", "ascii": "|"}
+# Same failure mode the KEY_SCHEMA/DEFAULT_STATUSLINE_CONFIG assert above guards against: every
+# SYMBOL_SETS preset must define exactly CONNECTED/CONFIGURED/AVAILABLE (SUMMARY_SYMBOL's keys), or
+# _fmt_integrations()'s `symbols[summary]` lookup could KeyError on a future preset added with a typo
+# or a missing entry — a render-time crash this module's whole design exists to prevent.
+assert all(set(preset) == set(SUMMARY_SYMBOL) for preset in SYMBOL_SETS.values()), \
+    "every SYMBOL_SETS preset must define exactly SUMMARY_SYMBOL's keys"
 
 
 def _resolve_symbol_set(cfg: dict) -> dict:
