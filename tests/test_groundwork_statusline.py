@@ -262,6 +262,154 @@ def test_integrations_min_state_filters_by_connectivity() -> None:
     finish()
 
 
+def _write_three_state_integrations_cache(mod) -> None:
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _write_json(mod.INTEGRATIONS_CACHE_PATH, {
+        "schema": 1,
+        "integrations": {
+            "Datadog": {"available": True, "configured": False, "connected": False,
+                        "used": None, "summary": "AVAILABLE", "checked_at": now},
+            "AWS": {"available": True, "configured": True, "connected": False,
+                    "used": None, "summary": "CONFIGURED", "checked_at": now},
+            "GitHub": {"available": True, "configured": True, "connected": True,
+                       "used": None, "summary": "CONNECTED", "checked_at": now},
+        },
+    })
+
+
+def test_symbol_set_presets_render_correct_glyphs() -> None:
+    print("groundwork_statusline.py — symbol_set selects one of the fixed SYMBOL_SETS presets "
+          "(default/ascii/emoji) for the integrations row's CONNECTED/CONFIGURED/AVAILABLE glyphs, "
+          "in both compact and detailed mode")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        _write_three_state_integrations_cache(mod)
+
+        expectations = {
+            "default": ("●", "◐", "○"),
+            "ascii": ("+", "~", "-"),
+            "emoji": ("✅", "🟡", "⚪"),
+        }
+        for mode in ("compact", "detailed"):
+            for symbol_set, (connected, configured, available) in expectations.items():
+                out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG,
+                                                  "mode": mode, "symbol_set": symbol_set})
+                check(f"[{mode}] symbol_set={symbol_set} shows its own CONNECTED glyph ({connected!r})",
+                      connected in out, out)
+                check(f"[{mode}] symbol_set={symbol_set} shows its own CONFIGURED glyph ({configured!r})",
+                      configured in out, out)
+                check(f"[{mode}] symbol_set={symbol_set} shows its own AVAILABLE glyph ({available!r})",
+                      available in out, out)
+                other_glyphs = [g for name, glyphs in expectations.items() if name != symbol_set for g in glyphs]
+                check(f"[{mode}] symbol_set={symbol_set} shows none of the other presets' glyphs",
+                      not any(g in out for g in other_glyphs), (out, other_glyphs))
+    finish()
+
+
+def test_separator_presets() -> None:
+    print("groundwork_statusline.py — separator selects one of the fixed SEPARATORS presets "
+          "(unicode '│' / ascii '|') for the field separator, both between top-level sections and "
+          "between integrations entries")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        _write_three_state_integrations_cache(mod)
+
+        unicode_out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "separator": "unicode"})
+        ascii_out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "separator": "ascii"})
+        check("separator='unicode' (default) renders the │ field separator",
+              "│" in unicode_out, unicode_out)
+        check("separator='ascii' renders the | field separator instead of │",
+              "|" in ascii_out and "│" not in ascii_out, ascii_out)
+        check("separator='unicode' output has no bare | field separator",
+              "│" in unicode_out, unicode_out)
+    finish()
+
+
+def test_plain_text_takes_precedence_over_symbol_set_and_separator() -> None:
+    print("groundwork_statusline.py — plain_text=true still fully overrides symbol_set/separator: "
+          "words and '|' only, never an emoji/ascii glyph or the unicode separator")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        _write_three_state_integrations_cache(mod)
+
+        plain_with_emoji_and_unicode_sep = mod.render(STDIN_FIXTURE, {
+            **mod.DEFAULT_STATUSLINE_CONFIG,
+            "plain_text": True, "symbol_set": "emoji", "separator": "unicode",
+        })
+        plain_default = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "plain_text": True})
+
+        check("plain_text ignores symbol_set='emoji': no emoji glyph appears",
+              not any(g in plain_with_emoji_and_unicode_sep for g in ("✅", "🟡", "⚪")),
+              plain_with_emoji_and_unicode_sep)
+        check("plain_text ignores separator='unicode': no │ appears",
+              "│" not in plain_with_emoji_and_unicode_sep, plain_with_emoji_and_unicode_sep)
+        check("plain_text output is pure ASCII even with symbol_set=emoji/separator=unicode configured",
+              all(ord(c) < 128 for c in plain_with_emoji_and_unicode_sep), plain_with_emoji_and_unicode_sep)
+        check("plain_text rendering is identical regardless of symbol_set/separator (fully overridden)",
+              plain_with_emoji_and_unicode_sep == plain_default,
+              (plain_with_emoji_and_unicode_sep, plain_default))
+    finish()
+
+
+def test_invalid_symbol_set_and_separator_fall_back_safely() -> None:
+    print("groundwork_statusline.py — an unrecognized symbol_set/separator value (e.g. a hand-edited "
+          "statusline-config.json bypassing the config CLI's own validation) falls back to "
+          "default/unicode, never raises, never corrupts the render")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        mod.STATUSLINE_CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "statusline-config.json"
+        _write_three_state_integrations_cache(mod)
+
+        # Direct render() call with an in-memory bogus value.
+        try:
+            bogus_direct = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG,
+                                                        "symbol_set": "glitter", "separator": "tabs"})
+            crashed_direct = False
+        except Exception as e:
+            bogus_direct = str(e)
+            crashed_direct = True
+        check("render() never raises on an unrecognized symbol_set/separator value", not crashed_direct, bogus_direct)
+        default_out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+        check("unrecognized symbol_set/separator falls back to the exact same output as the real defaults",
+              not crashed_direct and bogus_direct == default_out, (bogus_direct, default_out))
+
+        # The more realistic path: a hand-edited statusline-config.json on disk with bad choice values
+        # (type checks in _load_statusline_config() pass — they're strings — but they're not valid choices).
+        _write_json(mod.STATUSLINE_CONFIG_PATH, {"symbol_set": "glitter", "separator": "tabs"})
+        try:
+            cfg = mod._load_statusline_config()
+            on_disk_bogus = mod.render(STDIN_FIXTURE, cfg)
+            crashed_on_disk = False
+        except Exception as e:
+            on_disk_bogus = str(e)
+            crashed_on_disk = True
+        check("a malformed on-disk symbol_set/separator value never raises via _load_statusline_config()",
+              not crashed_on_disk, on_disk_bogus)
+        check("a malformed on-disk symbol_set/separator value degrades to the real defaults' rendering",
+              not crashed_on_disk and on_disk_bogus == default_out, (on_disk_bogus, default_out))
+    finish()
+
+
 def test_stale_integrations_cache_remains_visibly_distinct_from_fresh() -> None:
     print("groundwork_statusline.py — a stale cached entry stays visually distinguishable from a "
           "merely-fresh one, not just a bigger number")
@@ -641,6 +789,66 @@ def test_config_cli_get_set_unset_list() -> None:
     finish()
 
 
+def test_config_cli_symbol_set_and_separator_round_trip() -> None:
+    print("groundwork_statusline.py — 'config get/set/unset/list' round-trip for the new symbol_set/"
+          "separator keys, mirroring test_config_cli_get_set_unset_list's pattern")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.STATUSLINE_CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "statusline-config.json"
+
+        rc, out, _ = _capture_cmd_config(mod, ["get", "symbol_set"])
+        check("get symbol_set before any customization returns the default 'default'",
+              rc == 0 and out.strip() == '"default"', out)
+        rc, out, _ = _capture_cmd_config(mod, ["get", "separator"])
+        check("get separator before any customization returns the default 'unicode'",
+              rc == 0 and out.strip() == '"unicode"', out)
+
+        rc, out, _ = _capture_cmd_config(mod, ["set", "symbol_set", "emoji"])
+        check("set symbol_set to a valid choice exits 0", rc == 0, out)
+        rc, out, _ = _capture_cmd_config(mod, ["set", "separator", "ascii"])
+        check("set separator to a valid choice exits 0", rc == 0, out)
+        check("statusline-config.json holds both custom values as real strings",
+              json.loads(mod.STATUSLINE_CONFIG_PATH.read_text()) == {"symbol_set": "emoji", "separator": "ascii"},
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["get", "symbol_set"])
+        check("get after set returns the custom value", rc == 0 and out.strip() == '"emoji"', out)
+        rc, out, _ = _capture_cmd_config(mod, ["get", "separator"])
+        check("get after set returns the custom value", rc == 0 and out.strip() == '"ascii"', out)
+
+        for bad_argv, expect_in_stderr in (
+            (["set", "symbol_set", "glitter"], "not one of"),
+            (["set", "separator", "tabs"], "not one of"),
+        ):
+            rc, _, err = _capture_cmd_config(mod, bad_argv)
+            check(f"{' '.join(bad_argv)} rejects cleanly (non-zero, '{expect_in_stderr}' in stderr)",
+                  rc != 0 and expect_in_stderr in err, err)
+        check("a rejected set never touched the previously-stored valid values",
+              json.loads(mod.STATUSLINE_CONFIG_PATH.read_text()) == {"symbol_set": "emoji", "separator": "ascii"},
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["list"])
+        list_lines = {line.split()[0]: line for line in out.splitlines() if line.strip()}
+        check("list marks symbol_set/separator as (custom) after set",
+              "(custom)" in list_lines["symbol_set"] and "(custom)" in list_lines["separator"], out)
+
+        rc, out, _ = _capture_cmd_config(mod, ["unset", "symbol_set"])
+        check("unset symbol_set exits 0 and reports the default it reverted to",
+              rc == 0 and "default" in out, out)
+        rc, out, _ = _capture_cmd_config(mod, ["unset", "separator"])
+        check("unset separator exits 0 and reports the default it reverted to",
+              rc == 0 and "unicode" in out, out)
+        check("unsetting both leaves an empty custom file (no keys left)",
+              json.loads(mod.STATUSLINE_CONFIG_PATH.read_text()) == {},
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["get", "symbol_set"])
+        check("get after unset falls back to the real default, not a stale custom value",
+              rc == 0 and out.strip() == '"default"', out)
+    finish()
+
+
 if __name__ == "__main__":
     for fn in (
         test_full_smoke_stdin_to_stdout, test_rendering_compact_and_detailed,
@@ -648,6 +856,9 @@ if __name__ == "__main__":
         test_missing_integrations_cache_shows_nothing_never_infers,
         test_fresh_cached_integration_visibly_communicates_age,
         test_integrations_min_state_filters_by_connectivity,
+        test_symbol_set_presets_render_correct_glyphs, test_separator_presets,
+        test_plain_text_takes_precedence_over_symbol_set_and_separator,
+        test_invalid_symbol_set_and_separator_fall_back_safely,
         test_stale_integrations_cache_remains_visibly_distinct_from_fresh,
         test_malformed_and_missing_state_fails_safe,
         test_two_session_ids_never_leak_last_turn_state,
@@ -658,6 +869,7 @@ if __name__ == "__main__":
         test_unavailable_fields_never_appear, test_execution_time_is_fast,
         test_no_expensive_subprocess_names_appear_in_source,
         test_config_cli_get_set_unset_list,
+        test_config_cli_symbol_set_and_separator_round_trip,
     ):
         try:
             fn()
