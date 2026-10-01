@@ -745,9 +745,13 @@ def test_settings_merge() -> None:
         fresh = tmp / "fresh.json"
         r = run_script(MERGE, args=[str(fresh)])
         data = load(fresh)
-        cmds = [h["command"] for ev in ("PreToolUse", "Stop", "SessionStart") for g in data["hooks"][ev] for h in g["hooks"]]
-        check("fresh: four hook entries registered", len(cmds) == 4 and any("snapshot" in c for c in cmds) and any("telemetry" in c for c in cmds), r.stdout)
+        cmds = [h["command"] for ev in ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure") for g in data["hooks"][ev] for h in g["hooks"]]
+        check("fresh: six hook entries registered (four hook scripts; telemetry registered three times)",
+              len(cmds) == 6 and sum(1 for c in cmds if "telemetry" in c) == 3 and any("snapshot" in c for c in cmds), r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))
+        check("fresh: PostToolUse/PostToolUseFailure fire on every tool (empty matcher) with a short timeout",
+              all(g.get("matcher") == "" and g["hooks"][0].get("timeout") == 5 for ev in ("PostToolUse", "PostToolUseFailure") for g in data["hooks"][ev]),
+              json.dumps({ev: data["hooks"][ev] for ev in ("PostToolUse", "PostToolUseFailure")}))
         check("fresh: no agent-teams env by default", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in data["env"], json.dumps(data["env"]))
         check("fresh: statusLine registered to Groundwork's own script",
               data.get("statusLine", {}).get("command", "").endswith("groundwork_statusline.py"), data.get("statusLine"))

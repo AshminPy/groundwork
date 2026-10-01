@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
-"""Stop hook — append one structured telemetry record per substantive Groundwork task.
+"""Stop / PostToolUse / PostToolUseFailure hook — Groundwork's only audit/telemetry mechanism.
 
-Groundwork has no other audit log, so this is its audit/telemetry mechanism: the same
-Stop-hook pattern as require_material_review.py, append-only JSONL, fail-open. It never
-blocks, never prints, never raises past main(); the user's task is primary, reporting is
-secondary.
+Groundwork has no other audit log. This one script now covers two independent records, kept in
+two separate files because their shapes and volumes differ (one per turn vs. one per tool call):
+
+1. Per-turn aggregate (Stop event, unchanged since 1.3.x) -> events.jsonl, schema 2.
+   See "Per-turn record" below.
+2. Per-tool-call record (PostToolUse / PostToolUseFailure, added in this change) ->
+   tool_events.jsonl, its own schema (see "Per-tool-call record" below). Added because Claude
+   Code's PostToolUse/PostToolUseFailure hooks (code.claude.com/docs/en/hooks-guide, confirmed
+   2026-10-01) give per-call success/failure that the per-turn record cannot: it only ever saw
+   tool *names used somewhere in the turn*, never whether an individual call succeeded. This was
+   recorded as a known gap in CHANGELOG 2.2.0 ("Investigated Integration Usage Telemetry... not
+   reliably supported... no PostToolUse hook exists anywhere in Groundwork") and is what this
+   change closes — nothing else about that investigation's wider scope (read/write classification,
+   CLI-domain attribution) is implemented here; see docs/ARCHITECTURE.md for the limitation this
+   still leaves.
+
+Same append-only JSONL, fail-open pattern as require_material_review.py for both: never blocks,
+never prints, never raises past main(). The user's task is primary, telemetry is secondary.
+
+## Per-turn record (Stop)
 
 Trigger: the turn was substantive — the response carries a "Harness metadata" block (the block
 output-contract.md asks for) OR the current turn used at least one tool. A conversational reply
@@ -28,7 +44,36 @@ Record layout (schema 2): `observed` holds what the hook determined itself (tran
 environment, version); `declared` holds what the model stated (block fields, status sentence).
 Reports must not present declared fields as verified.
 
-Disable with GROUNDWORK_TELEMETRY=off. Path override: GROUNDWORK_TELEMETRY_PATH.
+## Per-tool-call record (PostToolUse / PostToolUseFailure)
+
+Trigger: every PostToolUse and PostToolUseFailure event that carries a `tool_name`. Fires once
+per tool call — far higher volume than the per-turn record, which is exactly why it is a
+separate file: mixing a few-per-turn aggregate with many-per-call rows into one schema/file
+would force every reader (scripts/groundwork_report.py, any future one) to branch on shape, and
+the day-bucket/profile/playbook dimensions the per-turn schema aggregates by do not exist for a
+single tool call.
+
+What is recorded — deliberately exactly this and nothing more, per the approved scope: this hook
+never reads `tool_input` or `tool_response`/`tool_error` (the fields that could carry secrets,
+command text, file contents or prompt/response text) — only the event's own `tool_name`,
+`session_id`, and which event fired:
+  - `tool`: the tool name Claude Code reports (e.g. "Bash", "Edit", "mcp__github__list_prs"),
+    capped to a short length as a defensive bound — the same strings the per-turn record already
+    stores in `observed.tools`, so this adds no new exposure;
+  - `category`: "builtin" or "mcp", from the same `mcp__<server>__...` prefix test the per-turn
+    record already uses to build `observed.mcp_servers`; `mcp_server` carries that server slug
+    when `category` is "mcp" (never the full qualified tool name beyond what `tool` already has);
+  - `success`: True for PostToolUse, False for PostToolUseFailure;
+  - `ts`, `session_id`: same meaning as the per-turn record.
+Known limitation (unchanged from the 2.2.0 investigation): a Bash-invoked CLI integration (gh,
+kubectl, terraform, …) is not attributable by name here either — doing so would mean parsing
+`tool_input.command`, which this hook must never read. Only MCP-mechanism and built-in-tool usage
+is classified; CLI-mechanism usage stays invisible to this telemetry, as documented in
+docs/ARCHITECTURE.md.
+
+Both files share the owner-only (0600 file / 0700 dir) permission model and the same off-switch.
+Disable with GROUNDWORK_TELEMETRY=off. Path overrides: GROUNDWORK_TELEMETRY_PATH (per-turn file),
+GROUNDWORK_TOOL_TELEMETRY_PATH (per-tool-call file).
 """
 import hashlib
 import json
@@ -81,12 +126,25 @@ VALIDATION_STATES = {"not verified": "not_verified", "unverified": "not_verified
                      "partially verified": "partial", "partial": "partial", "verified": "verified"}
 
 
+TOOL_EVENTS = ("PostToolUse", "PostToolUseFailure")
+TOOL_NAME_CAP = 80          # defensive bound only — these strings are already stored unbounded
+MCP_SERVER_CAP = 40         # in the per-turn record's `observed.tools` / `mcp_servers` lists
+
+
 def default_path() -> Path:
     override = os.environ.get("GROUNDWORK_TELEMETRY_PATH")
     if override:
         return Path(os.path.expanduser(override))
     base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
     return base / "groundwork" / "telemetry" / "events.jsonl"
+
+
+def default_tool_path() -> Path:
+    override = os.environ.get("GROUNDWORK_TOOL_TELEMETRY_PATH")
+    if override:
+        return Path(os.path.expanduser(override))
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    return base / "groundwork" / "telemetry" / "tool_events.jsonl"
 
 
 def harness_version() -> str:
@@ -334,6 +392,36 @@ def parse_execution(value: str):
     return mode, (int(n.group(1)) if n else None)
 
 
+def classify_tool(tool_name: str):
+    """(category, mcp_server) — the same mcp__<server>__... prefix test turn_facts() already uses
+    to build observed.mcp_servers. "builtin" for everything else (Bash, Edit, Read, Agent, …)."""
+    if tool_name.startswith("mcp__"):
+        server = tool_name[5:].split("__")[0]
+        return "mcp", (server[:MCP_SERVER_CAP] if server else "unknown")
+    return "builtin", None
+
+
+def build_tool_record(data: dict, event: str) -> dict:
+    """One record per PostToolUse/PostToolUseFailure call. Reads only tool_name, session_id and
+    the event name — never tool_input or tool_response/tool_error (where secrets, command text or
+    file contents would live). {} when there is nothing usable to record (no tool_name)."""
+    tool_name = str(data.get("tool_name") or "").strip()
+    if not tool_name:
+        return {}
+    category, server = classify_tool(tool_name)
+    record = {
+        "schema": 1,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "session_id": data.get("session_id") or "unknown",
+        "tool": tool_name[:TOOL_NAME_CAP],
+        "category": category,
+        "success": event != "PostToolUseFailure",
+    }
+    if server:
+        record["mcp_server"] = server
+    return record
+
+
 def build_record(data: dict, text: str) -> dict:
     """One record: `observed` = facts the hook determined itself (transcript, environment, files);
     `declared` = what the model stated in its block and status sentence — recorded, not verified,
@@ -397,6 +485,15 @@ def build_record(data: dict, text: str) -> dict:
     }
 
 
+def _append_record(path: Path, record: dict) -> None:
+    """Shared owner-only append used by both the per-turn and per-tool-call records — one
+    permission model, one place that can get it wrong."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)  # owner-only records
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def main() -> None:
     if os.environ.get("GROUNDWORK_TELEMETRY", "").lower() == "off":
         sys.exit(0)
@@ -404,15 +501,17 @@ def main() -> None:
         data = json.load(sys.stdin)
         if not isinstance(data, dict):
             sys.exit(0)
+        event = str(data.get("hook_event_name") or "")
+        if event in TOOL_EVENTS:
+            record = build_tool_record(data, event)
+            if record:
+                _append_record(default_tool_path(), record)
+            sys.exit(0)
         text = str(data.get("last_assistant_message") or "")
         record = build_record(data, text)
         if not record:
             sys.exit(0)
-        path = default_path()
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)  # owner-only records
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _append_record(default_path(), record)
     except SystemExit:
         raise
     except Exception:

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on
+  Claude Code's `PostToolUse`/`PostToolUseFailure` hook events (confirmed current against
+  code.claude.com/docs/en/hooks-guide, 2026-10-01), closing the gap recorded in CHANGELOG 2.2.0
+  ("no `PostToolUse` hook exists anywhere in Groundwork, so success/failure is never captured").
+  It appends one minimal record per tool call — timestamp, session id, tool name, category
+  (`builtin`/`mcp`, with the MCP server slug), success/failure — to a new sibling file,
+  `~/.claude/groundwork/telemetry/tool_events.jsonl`, with the existing per-turn record's exact
+  permission model (0600 file / 0700 dir), fail-open behaviour and `GROUNDWORK_TELEMETRY=off`
+  switch. It never reads `tool_input`, `tool_response` or `tool_error` — command text, prompts,
+  responses, secrets, file contents, URLs or credentials cannot reach it. This is a local-only
+  addition to the existing JSONL telemetry mechanism — no HTTP endpoint, no network dependency,
+  no new server (an earlier draft proposing an HTTP endpoint was considered and rejected; see
+  `scripts/groundwork_report.py`'s own "no server, no LLM, no network" constraint, unchanged).
+  `scripts/groundwork_report.py`'s dated Markdown snapshot (`--snapshot`) gained a small "Tool
+  call reliability (per call)" section (total calls, overall success rate, per-tool table);
+  deliberately not wired into the interactive `dashboard.html`/its JS-filterable charts, since a
+  single tool call has no profile/playbook/version/environment dimension to filter by — adding
+  one would be a new UI for data that does not fit that shape, which was out of scope for this
+  change. Known limitation, unchanged from the 2.2.0 investigation: a Bash-invoked CLI integration
+  (`gh`, `kubectl`, `terraform`, …) is still not attributable by name, since that would require
+  reading `tool_input.command`, which this hook must never do.
+  `scripts/merge_settings.py`/`unmerge_settings.py` register/remove the same
+  `groundwork_telemetry.py` command on the two new events (matcher `""` — every tool call — with
+  a 5-second timeout) additively and symmetrically, alongside its existing `Stop` registration;
+  `openspec/specs/usage-telemetry/spec.md` gained a new requirement documenting the per-tool-call
+  record. Tests: `tests/test_telemetry.py` (new: `classify_tool()` cases, a full per-tool-call
+  hook test covering record shape, builtin vs. MCP categorization, success and failure records,
+  permissions, the shared off-switch, path override, and that no secret/command/response text
+  from `tool_input`/`tool_response`/`tool_error` ever reaches the file — verified directly against
+  a real run of the hook script with realistic JSON on stdin), `tests/test_report.py` (new:
+  `normalise_tool()`/`load_tool_events()`/`aggregate_tool_calls()`, the Markdown section's
+  presence/absence, CLI wiring via `--tool-events`), `tests/test_hooks.py`/`tests/test_setup.py`
+  updated for the new hook-entry count (six entries now register the four hook scripts;
+  `groundwork_telemetry.py` is registered three times — once per event it handles).
+
 ## 2.3.0 — 2026-09-30
 
 Next Release Program — a single, discoverable `groundwork` command that reaches Groundwork's

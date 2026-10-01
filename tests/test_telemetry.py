@@ -295,8 +295,114 @@ def test_telemetry_hook() -> None:
     finish()
 
 
+def test_classify_tool() -> None:
+    print("classify_tool")
+    m = load_module()
+    cases = [
+        ("Bash", ("builtin", None)),
+        ("Edit", ("builtin", None)),
+        ("Read", ("builtin", None)),
+        ("Agent", ("builtin", None)),
+        ("mcp__github__search_repositories", ("mcp", "github")),
+        ("mcp__plugin_my-plugin_db__query", ("mcp", "plugin_my-plugin_db")),
+        ("mcp__", ("mcp", "unknown")),
+    ]
+    for name, want in cases:
+        got = m.classify_tool(name)
+        check(f"{name!r} -> {want}", got == want, f"got {got}")
+    finish()
+
+
+def test_tool_call_telemetry() -> None:
+    """PostToolUse / PostToolUseFailure -> tool_events.jsonl: shape, privacy, permissions, fail-open."""
+    print("groundwork_telemetry.py (per-tool-call)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        cfg = tmp / "claude"
+        (cfg / "groundwork").mkdir(parents=True)
+        (cfg / "groundwork" / "VERSION").write_text("1.6.0\n")
+        env = {"CLAUDE_CONFIG_DIR": str(cfg)}
+        events = cfg / "groundwork" / "telemetry" / "tool_events.jsonl"
+        turn_events = cfg / "groundwork" / "telemetry" / "events.jsonl"
+
+        # a builtin tool succeeding
+        payload = {"session_id": "sess-tool-1", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                   "cwd": str(tmp), "tool_input": {"command": "echo hi"}, "tool_response": {"type": "text", "text": "hi"}}
+        r = run(payload, env)
+        check("PostToolUse exit 0, silent", r.returncode == 0 and r.stdout == "" and r.stderr == "", r.stdout + r.stderr)
+        check("one tool-call record appended", events.is_file() and len(events.read_text().splitlines()) == 1)
+        rec = last(events)
+        check("record shape: exactly schema/ts/session_id/tool/category/success (no mcp_server for a builtin tool)",
+              set(rec) == {"schema", "ts", "session_id", "tool", "category", "success"} and rec["schema"] == 1, json.dumps(rec))
+        check("builtin success record", rec["tool"] == "Bash" and rec["category"] == "builtin" and rec["success"] is True and rec["session_id"] == "sess-tool-1", json.dumps(rec))
+        check("owner-only permissions (file 0600, dir 0700)", (events.stat().st_mode & 0o777) == 0o600 and (events.parent.stat().st_mode & 0o777) == 0o700, oct(events.stat().st_mode & 0o777))
+
+        # an MCP tool succeeding -> category mcp + server slug, not the full call detail
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUse", "tool_name": "mcp__github__search_repositories",
+             "tool_input": {"query": "topic:security"}, "tool_response": {"type": "text", "text": "5 results"}}, env)
+        rec = last(events)
+        check("mcp success record carries category + mcp_server", rec["category"] == "mcp" and rec["mcp_server"] == "github" and rec["success"] is True and rec["tool"] == "mcp__github__search_repositories", json.dumps(rec))
+
+        # the same MCP tool failing -> PostToolUseFailure, success False, tool_error never stored
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "mcp__github__search_repositories",
+             "tool_input": {"query": "topic:security"}, "tool_error": "401 Unauthorized: token ghp_SUPERSECRETVALUE123 rejected"}, env)
+        rec = last(events)
+        check("failure record: success False", rec["success"] is False and rec["category"] == "mcp" and rec["mcp_server"] == "github", json.dumps(rec))
+
+        # privacy: tool_input / tool_response / tool_error contents never appear anywhere in the file,
+        # across every record written so far (command text, query text, response text, a token, a secret)
+        raw = events.read_text()
+        check("no tool_input/tool_output contents, commands, secrets or paths stored",
+              all(x not in raw for x in ("echo hi", "topic:security", "5 results", "ghp_SUPERSECRETVALUE123", "Unauthorized", str(tmp))), raw)
+
+        # a failing Bash command: the command text and any secret in it must never be stored either
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+             "tool_input": {"command": "curl -H 'Authorization: Bearer sk-live-ABCDEF123456' https://api.example.com"},
+             "tool_error": "curl: (22) The requested URL returned error: 403"}, env)
+        rec = last(events)
+        raw = events.read_text()
+        check("failing Bash record: success False, builtin, no command/secret leaked",
+              rec["success"] is False and rec["category"] == "builtin" and rec["tool"] == "Bash"
+              and all(x not in raw for x in ("sk-live-ABCDEF123456", "Authorization", "api.example.com", "curl")), raw)
+
+        # no tool_name -> nothing recorded (still exit 0)
+        n_before = len(events.read_text().splitlines())
+        r = run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUse", "tool_input": {"command": "x"}}, env)
+        check("no tool_name -> no record, exit 0", r.returncode == 0 and len(events.read_text().splitlines()) == n_before)
+
+        # overlong / malformed tool_name is capped, never crashes
+        run({"session_id": "s", "hook_event_name": "PostToolUse", "tool_name": "X" * 500}, env)
+        rec = last(events)
+        check("overlong tool name capped", len(rec["tool"]) == 80 and rec["category"] == "builtin", len(rec["tool"]))
+
+        # GROUNDWORK_TELEMETRY=off disables the tool-call path too (same single switch as the per-turn record)
+        n_before = len(events.read_text().splitlines())
+        r = run(payload, {**env, "GROUNDWORK_TELEMETRY": "off"})
+        check("GROUNDWORK_TELEMETRY=off -> no tool-call write either", r.returncode == 0 and len(events.read_text().splitlines()) == n_before)
+
+        # GROUNDWORK_TOOL_TELEMETRY_PATH override
+        alt = tmp / "alt-tool-events.jsonl"
+        run(payload, {**env, "GROUNDWORK_TOOL_TELEMETRY_PATH": str(alt)})
+        check("GROUNDWORK_TOOL_TELEMETRY_PATH override honoured", alt.is_file() and len(alt.read_text().splitlines()) == 1)
+        check("override does not touch the default path", len(events.read_text().splitlines()) == n_before)
+
+        # malformed stdin, unwritable path: silent, exit 0 (same fail-open contract as the per-turn record)
+        r = run(None, env, raw="not json")
+        check("malformed input -> exit 0, silent", r.returncode == 0 and r.stdout == "")
+        r = run(payload, {**env, "GROUNDWORK_TOOL_TELEMETRY_PATH": "/nonexistent-root-dir/tool_events.jsonl"})
+        check("unwritable path -> exit 0, silent", r.returncode == 0 and r.stdout == "" and r.stderr == "")
+
+        # the per-turn Stop record is completely unaffected: still written to its own file, untouched by tool-call traffic
+        t = transcript(tmp, [[{"name": "Bash", "input": {"command": "pytest -q"}}]], "turn.jsonl")
+        run({"session_id": "sess-turn", "prompt_id": "p", "cwd": str(tmp), "transcript_path": str(t),
+             "last_assistant_message": RESPONSE, "hook_event_name": "Stop"}, env)
+        check("Stop event still writes to events.jsonl (separate file, separate schema)",
+              turn_events.is_file() and json.loads(turn_events.read_text().splitlines()[0])["schema"] == 2)
+    finish()
+
+
 if __name__ == "__main__":
-    for fn in (test_outcome_classifier, test_telemetry_hook):
+    for fn in (test_outcome_classifier, test_telemetry_hook, test_classify_tool, test_tool_call_telemetry):
         try:
             fn()
         except AssertionError:
