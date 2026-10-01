@@ -18,9 +18,11 @@ is forced to imply another:
               profile's cloud/platform/integrations lists in config.json).
   connected   a real reachability/authentication check for a specific mechanism actually ran and
               succeeded. Only ever set true by a check that actually ran; never inferred from
-              availability or configuration alone. Today only the GitHub `gh` CLI mechanism has one
-              (`gh auth status`, the same command already trusted by groundwork_routines.py's
-              check_access()) — every other mechanism's `connected` stays False, honestly, until a
+              availability or configuration alone. Today two CLI mechanisms have one: GitHub's `gh`
+              CLI (`gh auth status`, the same command already trusted by groundwork_routines.py's
+              check_access()), and Jira's `acli` CLI (`acli jira auth status`, exit-code-only today —
+              see AccessMechanism.cli_success_marker's docstring on the Jira entry for why no success
+              marker is set yet). Every other mechanism's `connected` stays False, honestly, until a
               real check for it is implemented.
 
 `used` is a separate, task/session observation (True / False / None-for-unknown), read from
@@ -142,7 +144,27 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
     IntegrationEntry(
         name="Jira",
         capabilities=("jira.issue.read", "jira.issue.write"),
-        mechanisms=(AccessMechanism("mcp", "Atlassian MCP", mcp_server_name="atlassian"),),
+        mechanisms=(
+            AccessMechanism("mcp", "Atlassian MCP", mcp_server_name="atlassian"),
+            AccessMechanism(
+                "cli", "acli CLI", cli_binary="acli", cli_auth_cmd=("acli", "jira", "auth", "status"),
+                # UNVERIFIED success marker (documented 2026-10-01): `acli` was not installed in the
+                # sandbox this mechanism was added in, and the official reference page
+                # (developer.atlassian.com/cloud/acli/reference/commands/jira-auth-status/) could not
+                # be fetched from here either (network egress to that host is blocked), so the exact
+                # substring `acli jira auth status` prints on a real successful login has never been
+                # observed and is deliberately left unset rather than guessed (see
+                # AccessMechanism.cli_success_marker's own docstring: gh_cli's own marker exists
+                # precisely because exit code 0 was observed to be insufficient for IT). Leaving
+                # cli_success_marker unset makes _mechanism_connected() fall back to its existing
+                # exit-code-only path (same fallback every other marker-less mechanism already uses),
+                # so connected=True here currently means only "acli is on PATH and exited 0" — weaker
+                # confidence than the gh_cli mechanism's marker-checked CONNECTED. Replace
+                # cli_success_marker with a real, observed substring the first time this is run
+                # against a real, authenticated `acli` install (see docs/INTEGRATIONS.md's matching
+                # caveat).
+            ),
+        ),
         trust="Vendor/official (atlassian/atlassian-mcp-server, GA 2026-02-04); delete/admin ops off by default",
         config_requirements="OAuth 2.1 (default) or an API token",
         config_key=("integrations", "jira"),
