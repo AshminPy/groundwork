@@ -609,6 +609,9 @@ def test_urlopen_cert_fallback_retries_only_on_cert_failure() -> None:
 
     # Case 1: cert failure on first attempt, succeeds on retry -> the retry must pass a context kwarg
     # (proof it actually used the certifi-backed SSLContext, not a bare retry of the same call).
+    # certifi is faked here too (never relies on the real package being installed — it's the only
+    # third-party dependency anywhere in this repo, declared in no manifest) so this test behaves
+    # identically whether or not certifi happens to be present in whatever environment runs it.
     calls = []
 
     def fake_urlopen_cert_then_ok(req, timeout=None, context=None):
@@ -617,7 +620,22 @@ def test_urlopen_cert_fallback_retries_only_on_cert_failure() -> None:
             raise cert_error()
         return "ok"
 
+    # A real, valid PEM CA cert ssl.create_default_context(cafile=...) will actually accept —
+    # ssl.create_default_context eagerly reads and parses cafile, so a nonexistent path or
+    # placeholder text raises immediately. Exported from this interpreter's own already-loaded
+    # default trust store, so it needs no bundled fixture file and no real certifi install.
+    fake_cafile = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+    fake_cafile.write(ssl.DER_cert_to_PEM_cert(ssl.create_default_context().get_ca_certs(binary_form=True)[0]))
+    fake_cafile.close()
+
+    class _FakeCertifi:
+        @staticmethod
+        def where():
+            return fake_cafile.name
+
     urllib.request.urlopen = fake_urlopen_cert_then_ok
+    real_certifi_case1 = sys.modules.get("certifi", "__absent__")
+    sys.modules["certifi"] = _FakeCertifi()
     try:
         result = mod._urlopen_with_cert_fallback(object(), 5)
         check("cert-verification failure retries once and succeeds", result == "ok", result)
@@ -627,6 +645,11 @@ def test_urlopen_cert_fallback_retries_only_on_cert_failure() -> None:
               len(calls) == 2 and isinstance(calls[1], ssl.SSLContext), calls)
     finally:
         urllib.request.urlopen = real_urlopen
+        if real_certifi_case1 == "__absent__":
+            del sys.modules["certifi"]
+        else:
+            sys.modules["certifi"] = real_certifi_case1
+        os.unlink(fake_cafile.name)
 
     # Case 2: a non-cert URLError must never be retried — it propagates on the first failure.
     attempts = []
