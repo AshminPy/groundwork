@@ -85,6 +85,12 @@ KEY_SCHEMA = {
     "max_integrations": ("int", None),
     "integrations_min_state": ("choice", ["available", "configured", "connected"]),
 }
+# cmd_config_get()/cmd_config_unset() validate a key against DEFAULT_STATUSLINE_CONFIG while
+# cmd_config_set() validates against KEY_SCHEMA — two independently maintained dicts that happen to
+# list the same keys today. This fails loudly at import time if a future key is ever added to one
+# and not the other, rather than letting get/unset and set silently disagree on what's "known".
+assert set(KEY_SCHEMA) == set(DEFAULT_STATUSLINE_CONFIG), \
+    "KEY_SCHEMA and DEFAULT_STATUSLINE_CONFIG must list exactly the same keys"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -441,8 +447,15 @@ def _read_custom_statusline_config() -> dict:
 
 
 def _write_custom_statusline_config(data: dict) -> None:
+    # Same temp-file + os.replace pattern as the project's other local JSON config/cache writers
+    # (merge_settings.py's write_atomic(), reused in groundwork_report.py, reimplemented inline in
+    # groundwork_integrations.py for the Integration Catalog cache next to this file) — a write
+    # interrupted mid-flight leaves the temp file corrupt, never this file, so a concurrent read or
+    # a later `config set`/`unset` never sees a truncated statusline-config.json.
     STATUSLINE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATUSLINE_CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n")
+    tmp = STATUSLINE_CONFIG_PATH.with_name(STATUSLINE_CONFIG_PATH.name + ".groundwork.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, STATUSLINE_CONFIG_PATH)
 
 
 def cmd_config_list(_args) -> int:
