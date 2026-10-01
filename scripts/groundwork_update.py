@@ -38,12 +38,21 @@ never runs and config.json is simply never touched — not because it is re-appl
 change ever adds --capability-profile here, it must read the CURRENT config.json profile back
 first (the same pattern used for the telemetry profile above), never guess or default it, or a
 `groundwork update` run would silently overwrite a user's routine/integration configuration.
+
+Every GitHub API/tarball request tries the interpreter's own default SSL trust store first, and
+only on an actual certificate-verification failure retries once against certifi's CA bundle (never
+preferred up front, so a legitimate custom/enterprise/proxy CA already on the system keeps being
+used whenever it already works) — see `_urlopen_with_cert_fallback()`. This guards against a real,
+independently confirmed case: python.org's macOS installer ships Python without running its own
+post-install "Install Certificates.command", leaving that interpreter's default trust store empty
+even though the actual certificate (e.g. GitHub's) is genuine and not intercepted.
 """
 import argparse
 import io
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -84,15 +93,48 @@ def _semver_tuple(v: str):
     return tuple(int(p) for p in parts)
 
 
+def _is_cert_verification_failure(err: urllib.error.URLError) -> bool:
+    reason = getattr(err, "reason", None)
+    return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(reason)
+
+
+def _urlopen_with_cert_fallback(req: urllib.request.Request, timeout: float):
+    """urllib.request.urlopen(), retried once against certifi's CA bundle if (and only if) the
+    interpreter's own default trust store can't verify the certificate. Real, independently
+    confirmed case this guards against: python.org's macOS installer ships Python without ever
+    running its own post-install "Install Certificates.command", so that interpreter's default SSL
+    context has no local issuer certificates at all — a broken local trust store, not a bad or
+    intercepted certificate (GitHub's own cert chains to a public CA either way).
+
+    Always tries the interpreter's own default context FIRST, so a correctly configured
+    system/enterprise/proxy CA (e.g. via SSL_CERT_FILE, or this project's own outbound HTTPS proxy
+    in CI-like environments) keeps being used whenever it already works — this never silently
+    prefers certifi's public bundle over a legitimate custom CA, which could otherwise break a
+    working proxied setup instead of fixing a broken one. Falls back to raising the original error
+    unchanged when certifi isn't installed or the retry fails too — never hides a genuine,
+    different certificate or network problem."""
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.URLError as e:
+        if not _is_cert_verification_failure(e):
+            raise
+        try:
+            import certifi
+        except ImportError:
+            raise e from None  # certifi unavailable: surface the original cert error, not this one
+        context = ssl.create_default_context(cafile=certifi.where())
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+
+
 def _http_json(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as r:
+    with _urlopen_with_cert_fallback(req, HTTP_TIMEOUT_S) as r:
         return json.loads(r.read())
 
 
 def _http_bytes(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S * 4) as r:  # a tarball download needs more than 15s
+    with _urlopen_with_cert_fallback(req, HTTP_TIMEOUT_S * 4) as r:  # a tarball download needs more than 15s
         return r.read()
 
 

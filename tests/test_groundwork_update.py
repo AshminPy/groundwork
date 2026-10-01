@@ -17,10 +17,13 @@ import importlib.util
 import io
 import json
 import os
+import ssl
 import stat
 import sys
 import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 from io import StringIO
 from pathlib import Path
 
@@ -593,6 +596,110 @@ class _RollbackArgs:
         self.version = version
 
 
+def test_urlopen_cert_fallback_retries_only_on_cert_failure() -> None:
+    print("groundwork_update.py — SSL cert-verification fallback: retries with certifi's bundle "
+          "only on an actual certificate-verification failure, never on an unrelated network error, "
+          "and never swallows the original error when certifi isn't installed")
+    mod = load_module()
+    real_urlopen = urllib.request.urlopen
+
+    def cert_error():
+        return urllib.error.URLError(
+            ssl.SSLCertVerificationError(1, "certificate verify failed: unable to get local issuer certificate"))
+
+    # Case 1: cert failure on first attempt, succeeds on retry -> the retry must pass a context kwarg
+    # (proof it actually used the certifi-backed SSLContext, not a bare retry of the same call).
+    # certifi is faked here too (never relies on the real package being installed — it's the only
+    # third-party dependency anywhere in this repo, declared in no manifest) so this test behaves
+    # identically whether or not certifi happens to be present in whatever environment runs it.
+    calls = []
+
+    def fake_urlopen_cert_then_ok(req, timeout=None, context=None):
+        calls.append(context)
+        if len(calls) == 1:
+            raise cert_error()
+        return "ok"
+
+    # A real, valid PEM CA cert ssl.create_default_context(cafile=...) will actually accept —
+    # ssl.create_default_context eagerly reads and parses cafile, so a nonexistent path or
+    # placeholder text raises immediately. Exported from this interpreter's own already-loaded
+    # default trust store, so it needs no bundled fixture file and no real certifi install.
+    # Checked before creating the temp file: an interpreter with zero default CA certs (the same
+    # broken-trust-store case this whole fix exists to handle) can't supply one, and must not leak
+    # an unclosed temp file reaching for a cert that isn't there.
+    der_certs = ssl.create_default_context().get_ca_certs(binary_form=True)
+    check("this interpreter's own default trust store has at least one CA cert to build the test's "
+          "fake certifi bundle from", len(der_certs) > 0, "empty default trust store")
+    if der_certs:
+        fake_cafile = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+        fake_cafile.write(ssl.DER_cert_to_PEM_cert(der_certs[0]))
+        fake_cafile.close()
+
+        class _FakeCertifi:
+            @staticmethod
+            def where():
+                return fake_cafile.name
+
+        urllib.request.urlopen = fake_urlopen_cert_then_ok
+        real_certifi_case1 = sys.modules.get("certifi", "__absent__")
+        sys.modules["certifi"] = _FakeCertifi()
+        try:
+            result = mod._urlopen_with_cert_fallback(object(), 5)
+            check("cert-verification failure retries once and succeeds", result == "ok", result)
+            check("first attempt uses the interpreter's own default context (no explicit context)",
+                  calls[0] is None, calls)
+            check("retry passes an explicit SSLContext (the certifi-backed fallback)",
+                  len(calls) == 2 and isinstance(calls[1], ssl.SSLContext), calls)
+        finally:
+            urllib.request.urlopen = real_urlopen
+            if real_certifi_case1 == "__absent__":
+                del sys.modules["certifi"]
+            else:
+                sys.modules["certifi"] = real_certifi_case1
+            os.unlink(fake_cafile.name)
+
+    # Case 2: a non-cert URLError must never be retried — it propagates on the first failure.
+    attempts = []
+
+    def fake_urlopen_other_error(req, timeout=None, context=None):
+        attempts.append(1)
+        raise urllib.error.URLError("Name or service not known")
+
+    urllib.request.urlopen = fake_urlopen_other_error
+    try:
+        raised = False
+        try:
+            mod._urlopen_with_cert_fallback(object(), 5)
+        except urllib.error.URLError:
+            raised = True
+        check("a non-certificate URLError is never retried", raised and len(attempts) == 1, attempts)
+    finally:
+        urllib.request.urlopen = real_urlopen
+
+    # Case 3: cert failure but certifi is unavailable -> the original error re-raises unchanged,
+    # never hidden and never a different, more confusing error.
+    def fake_urlopen_cert_only(req, timeout=None, context=None):
+        raise cert_error()
+
+    urllib.request.urlopen = fake_urlopen_cert_only
+    real_certifi = sys.modules.get("certifi", "__absent__")
+    sys.modules["certifi"] = None  # forces `import certifi` to raise ImportError
+    try:
+        raised = False
+        try:
+            mod._urlopen_with_cert_fallback(object(), 5)
+        except urllib.error.URLError as e:
+            raised = isinstance(e.reason, ssl.SSLCertVerificationError)
+        check("without certifi installed, the original cert error re-raises unchanged (never hidden)", raised)
+    finally:
+        urllib.request.urlopen = real_urlopen
+        if real_certifi == "__absent__":
+            del sys.modules["certifi"]
+        else:
+            sys.modules["certifi"] = real_certifi
+    finish()
+
+
 def test_rollback_not_installed_fails_clean() -> None:
     print("groundwork_update.py — rollback on an uninstalled Groundwork fails clean")
     mod = load_module()
@@ -643,6 +750,7 @@ if __name__ == "__main__":
                test_update_refuses_incomplete_or_mismatched_archive,
                test_update_install_failure_reports_rollback_hint,
                test_update_download_and_extract_failures_are_clean,
+               test_urlopen_cert_fallback_retries_only_on_cert_failure,
                test_rollback_not_installed_fails_clean, test_rollback_dispatches_to_installed_setup_sh):
         try:
             fn()
