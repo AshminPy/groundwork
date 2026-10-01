@@ -60,10 +60,16 @@ DEFAULT_STATUSLINE_CONFIG = {
     "show_validation": True,
     "plain_text": False,         # True: ASCII-only fallback, no Unicode symbols
     "max_integrations": 4,       # compact mode only; detailed shows all cached, non-empty entries
+    "integrations_min_state": "available",  # "available" | "configured" | "connected" — lowest
+                                             # summary state still shown (e.g. "connected" hides
+                                             # ○ AVAILABLE-only and ◐ CONFIGURED-but-not-connected
+                                             # entries, such as a plugin-installed MCP server never
+                                             # actually signed into); default keeps existing behavior
 }
 
 SUMMARY_SYMBOL = {"CONNECTED": "●", "CONFIGURED": "◐", "AVAILABLE": "○"}  # ● ◐ ○
 SUMMARY_PLAIN = {"CONNECTED": "connected", "CONFIGURED": "configured", "AVAILABLE": "available"}
+SUMMARY_RANK = {"AVAILABLE": 0, "CONFIGURED": 1, "CONNECTED": 2}  # ordering for integrations_min_state
 
 
 # ---------------------------------------------------------------------------------------------
@@ -281,12 +287,16 @@ def _fmt_last_turn(fields: dict, plain: bool, show_validation: bool) -> Optional
 def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
     if not cache:
         return None
+    min_state = cfg.get("integrations_min_state", "available")
+    min_rank = SUMMARY_RANK.get(str(min_state).upper(), 0)  # unrecognized value falls back to "available"
     entries = []
     for name, obs in sorted(cache.items()):
         if not isinstance(obs, dict):
             continue
         summary = obs.get("summary")
         if summary not in SUMMARY_SYMBOL:  # NOT CONFIGURED entries add noise, not signal — skip
+            continue
+        if SUMMARY_RANK[summary] < min_rank:  # below the configured floor (e.g. "connected") — skip
             continue
         checked_at = obs.get("checked_at")
         age_s = _cache_age_seconds(checked_at) if isinstance(checked_at, str) else None

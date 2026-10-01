@@ -219,6 +219,49 @@ def test_fresh_cached_integration_visibly_communicates_age() -> None:
     finish()
 
 
+def test_integrations_min_state_filters_by_connectivity() -> None:
+    print("groundwork_statusline.py — integrations_min_state hides entries below the configured "
+          "floor (e.g. 'connected' hides AVAILABLE-only and CONFIGURED-but-not-connected entries, "
+          "such as a plugin-installed MCP server that was never signed into), default unchanged")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "config.json"
+        mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
+        mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
+        mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _write_json(mod.INTEGRATIONS_CACHE_PATH, {
+            "schema": 1,
+            "integrations": {
+                "Datadog": {"available": True, "configured": False, "connected": False,
+                            "used": None, "summary": "AVAILABLE", "checked_at": now},
+                "AWS": {"available": True, "configured": True, "connected": False,
+                        "used": None, "summary": "CONFIGURED", "checked_at": now},
+                "GitHub": {"available": True, "configured": True, "connected": True,
+                           "used": None, "summary": "CONNECTED", "checked_at": now},
+            },
+        })
+
+        default_out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+        check("default config (unset integrations_min_state) keeps existing behavior: all three shown",
+              all(n in default_out for n in ("Datadog", "AWS", "GitHub")), default_out)
+
+        connected_only = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "integrations_min_state": "connected"})
+        check("integrations_min_state='connected' hides the AVAILABLE-only entry (Datadog)",
+              "Datadog" not in connected_only, connected_only)
+        check("integrations_min_state='connected' hides the CONFIGURED-but-not-connected entry (AWS)",
+              "AWS" not in connected_only, connected_only)
+        check("integrations_min_state='connected' still shows the CONNECTED entry (GitHub)",
+              "GitHub" in connected_only, connected_only)
+
+        configured_floor = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "integrations_min_state": "configured"})
+        check("integrations_min_state='configured' hides AVAILABLE-only (Datadog) but keeps CONFIGURED+ (AWS, GitHub)",
+              "Datadog" not in configured_floor and "AWS" in configured_floor and "GitHub" in configured_floor,
+              configured_floor)
+    finish()
+
+
 def test_stale_integrations_cache_remains_visibly_distinct_from_fresh() -> None:
     print("groundwork_statusline.py — a stale cached entry stays visually distinguishable from a "
           "merely-fresh one, not just a bigger number")
@@ -518,6 +561,7 @@ if __name__ == "__main__":
         test_plain_text_fallback_has_no_unicode_symbols, test_integrations_section_hidden,
         test_missing_integrations_cache_shows_nothing_never_infers,
         test_fresh_cached_integration_visibly_communicates_age,
+        test_integrations_min_state_filters_by_connectivity,
         test_stale_integrations_cache_remains_visibly_distinct_from_fresh,
         test_malformed_and_missing_state_fails_safe,
         test_two_session_ids_never_leak_last_turn_state,
