@@ -149,7 +149,98 @@ Researched live against current sources, not adopted automatically — "third-pa
 
 None of these were marked high-priority in the 2.1 brief; building all of them untested against real external accounts (this implementation environment has none) would be exactly the overbuilding Groundwork's own principles warn against. Revisit after the six shipped routines have real usage evidence.
 
-## 14. Summary table
+## 14. Post-current-release feature candidates (recorded 2026-09-30, not built)
+
+Recorded per explicit owner instruction during the Next Release Program (Groundwork CLI
+foundation, Phase 1, PR #30): documentation only, no code, no OpenSpec change yet. These are
+**POST-CURRENT-RELEASE candidates** — evaluation and implementation begin only after the Next
+Release Program's current phases (CLI foundation → Integration Catalog UX → version/update
+lifecycle → Routine CLI UX → cross-feature validation) are complete, reviewed, merged and
+released, per §12's validation-driven-evolution rule. None of the three below has been designed,
+scoped, or gated through architecture-quality.md §2 yet; that work starts when each is actually
+picked up.
+
+### 14.1 Harness evidence references
+
+**FUTURE.** Extend the `HARNESS METADATA` block (`output-contract.md`) so a response's evidence
+claim is independently inspectable, not just asserted. Today's block states evidence *categories*
+(`repo, tests, runtime, subagent review`); the candidate direction adds a `References:` list
+naming the specific artifacts actually used for that response — a PR/commit/issue actually
+inspected, a repository file or validation artifact, vendor documentation actually read, or a
+durable runtime-evidence pointer — with the existing checklist-style categories shown as a
+checked/unchecked list rather than a comma-separated summary.
+
+Hard constraints carried forward from the request, to be honored whenever this is built, not
+relaxed: references must be evidence *actually used* for that response, never attached because the
+task merely concerns that technology; prefer primary/authoritative sources; preserve the source's
+own identity (PR number, commit SHA, issue number, file path, test name, documentation URL) rather
+than flattening it to a generic label; never fabricate a reference or imply a source was inspected
+when it was not; never expose credentials, secrets, sensitive paths, or otherwise unsafe
+information in a reference. The open design question — **investigate before implementing**: how
+evidence provenance is carried deterministically through the existing Groundwork workflow (i.e.
+where in the current tool-call/response pipeline a "what did I actually just read" list can be
+collected without either hand-maintaining it or having the model re-derive it unreliably after the
+fact) has not been investigated yet.
+
+### 14.2 Evidence confidence
+
+**FUTURE.** A deterministic, evidence-backed confidence indicator, kept explicitly separate from
+two things it must never be confused with:
+
+- **Validation** (`output-contract.md`/`evidence-policy.md` §5-6) — were the required validation
+  activities actually performed (tests run, runtime checked, review done)?
+- **Evidence Confidence** — how strong and complete is the evidence *behind* the conclusion (e.g.
+  `HIGH`: authoritative source checked + runtime verified + tests passed + independent validation;
+  `LOW`: repository inspected only, runtime unavailable, external state not independently
+  verified)?
+- **References** (§14.1) — where the user can independently inspect that evidence.
+
+Explicit requirement, carried forward verbatim in intent: this must **not** become an arbitrary
+LLM self-confidence percentage (e.g. "Confidence: 94%") unless a demonstrably calibrated,
+defensible model backs that number — none exists today, and none should be assumed into
+existence. The preferred shape is a small enumerated label (`HIGH`/`LOW`, or similar) derived
+deterministically from observable evidence quality/completeness — which sources were actually
+checked, whether runtime was verified, whether independent review ran — rather than the model
+declaring how confident it feels. `UNKNOWN` (evidence-policy.md §2) must remain `UNKNOWN`; this
+mechanism is not a way to dress up an unverified claim as confident-sounding output. Not
+investigated yet: the actual deterministic rule mapping observed evidence signals to a confidence
+label.
+
+### 14.3 Groundwork Hands-Free (Hands-Free SRE)
+
+**FUTURE — highest-priority investigation once the current release ships**, per explicit owner
+instruction. Working name: **Groundwork Hands-Free** (capability: **Hands-Free SRE**). Target
+experience: a user at an active terminal talks naturally to Claude, which listens, understands the
+active terminal/session context, replies by voice, asks clarifying questions, suggests and (when
+authorized) executes commands, observes output, reasons about the next action, continues the task,
+asks for authorization when required, can be interrupted or redirected by the user, and validates
+completion. Conceptual loop as given: LISTEN → UNDERSTAND → REASON → SPEAK → ASK/APPROVE WHEN
+REQUIRED → EXECUTE → OBSERVE → CONTINUE. Candidate modes to investigate: OBSERVE, ASSIST, OPERATE.
+
+Architecture constraints stated as requirements, to govern the investigation whenever it starts —
+none of this is designed yet, these are boundaries the design must satisfy, not a design:
+
+- A Groundwork capability, not a separate product; Claude Code remains the engineering/reasoning
+  engine; Groundwork remains the governance, safety, evidence and validation layer — no second,
+  competing agent runtime.
+- Voice/terminal interaction must be modular, must not hardcode specific terminal applications or
+  session names, and concurrent terminal sessions must not cross-route context or actions into
+  each other.
+- Explicit safety boundaries: read-only investigation should not require unnecessary
+  confirmations; consequential/destructive operations must preserve Groundwork's existing safety
+  policy (the same authorization rule `engineering-workflow.md` §4 already applies, not a weaker
+  one for voice); user interruption must be supported; safe semantics for stopping an
+  already-running command need to be determined, not assumed.
+- **Enterprise requirement, non-negotiable:** the core capability must **not** require ElevenLabs,
+  OpenAI speech, Google Speech, or another unapproved external voice provider. Local or
+  company-approved STT/TTS must be investigated first; an external voice provider may later be an
+  optional adapter, never a requirement for core functionality.
+
+Not started: feasibility, security and architecture investigation, and the smallest end-to-end
+POC — both explicitly deferred until the current Next Release Program is complete, reviewed,
+merged and released.
+
+## 15. Summary table
 
 | Area | CURRENT (1.1.0) | FUTURE / PLANNED DIRECTION |
 |---|---|---|
