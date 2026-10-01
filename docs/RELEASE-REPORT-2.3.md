@@ -83,9 +83,22 @@ permission, hook, or safety control was weakened by this release.
 Only one published release (`v2.2.0`) existed at the time `groundwork update`/`rollback` were built
 and validated, so a true "previous release → next release" upgrade could not be exercised against
 two real releases before now — the update mechanism itself was validated against that one real
-release plus a controlled stub installer. Publishing `v2.3.0` is the first opportunity to validate
-a genuine N→N+1 upgrade for real; see the post-release verification note in this release's process
-record for the result, if publication succeeded.
+release plus a controlled stub installer.
+
+**Resolved post-release**: with `v2.3.0` published, the real N→N+1 upgrade was exercised end to end
+in a disposable sandbox: a genuine `v2.2.0` install (via `git archive v2.2.0` + its own `setup.sh`)
+→ `groundwork update --version 2.2.0` (real downgrade fetch/install of the real `v2.2.0` release,
+exit 0) → `groundwork update` with no flags (real upgrade to the real, now-published `v2.3.0`
+release, exit 0) → `groundwork rollback` (real restore of the backup taken immediately before the
+last update, exit 0, reverted `VERSION` to `2.2.0`). An unrelated planted `settings.json` key and
+`mcpServers` entry, and the installation's `profile`, survived every transition unchanged. This
+closes the limitation above — no further gap remains in the update/rollback mechanism's own logic.
+
+One real-world constraint remains, by design rather than as a defect: a pre-`v2.3.0` installation
+has no `groundwork` command or `groundwork_update.py` at all (both are new in this release), so it
+cannot self-update — it needs one manual `git checkout v2.3.0 && bash install.sh` (or equivalent) to
+bootstrap onto `v2.3.0` before `groundwork update` becomes available for all future releases. This
+was independently confirmed on a real, pre-existing `v2.1.0`-era installation outside the sandbox.
 
 ## 7. Deliberately excluded work
 
@@ -104,8 +117,12 @@ in `setup.sh --doctor`).
 
 ## 9. Release/tag information
 
-- **Tag**: `v2.3.0`, annotated, created on the validated release-preparation merge commit.
-- **GitHub Release**: see this release's process record for status — no `create_release`-class
-  tool was available through this session's GitHub MCP toolset at publication time; if so, the tag
-  was pushed (or reported blocked) per the documented authorization contingency, and GitHub Release
-  creation was reported as requiring manual owner action rather than treated as a defect.
+- **Tag**: `v2.3.0`, annotated, target commit `7a78f9725406d3c8f021a7b84edb03b8d65c79e1` (the
+  validated `release/2.3.0` → `main` merge, PR #35). The session's own git transport received an
+  HTTP 403 pushing the tag (branch pushes succeeded all session; only the tag push was rejected) —
+  per explicit instruction, this was reported rather than retried or worked around, and the
+  repository owner pushed the tag directly. Verified afterward: the remote tag object's `object`
+  field points to the exact expected commit.
+- **GitHub Release**: published by the repository owner (no `create_release`-class tool was
+  available through this session's GitHub MCP toolset), confirmed live via the GitHub API —
+  `draft: false`, `prerelease: false`, tag `v2.3.0`, target `main`.
