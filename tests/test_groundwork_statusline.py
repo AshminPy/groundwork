@@ -555,6 +555,92 @@ def test_no_expensive_subprocess_names_appear_in_source() -> None:
     finish()
 
 
+def _capture_cmd_config(mod, argv: list[str]) -> tuple[int, str, str]:
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = StringIO(), StringIO()
+    try:
+        rc = mod.cmd_config(argv)
+        return rc, sys.stdout.getvalue(), sys.stderr.getvalue()
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+
+
+def test_config_cli_get_set_unset_list() -> None:
+    print("groundwork_statusline.py — 'config get/set/unset/list' CLI: validates by key schema, "
+          "writes/reads statusline-config.json directly, never touches config.json, defaults vs. "
+          "custom are classified correctly")
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mod.CLAUDE_DIR = Path(tmpdir)
+        mod.STATUSLINE_CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "statusline-config.json"
+
+        rc, out, _ = _capture_cmd_config(mod, ["list"])
+        check("list exits 0 before any file exists", rc == 0, out)
+        check("list shows every default key as (default) before any customization",
+              all(f"{k} " in out and "(default)" in out.split(k, 1)[1].split("\n", 1)[0]
+                  for k in mod.DEFAULT_STATUSLINE_CONFIG), out)
+        check("statusline-config.json is not created just by listing (read-only operation)",
+              not mod.STATUSLINE_CONFIG_PATH.exists(), "file exists after a read-only 'list'")
+
+        rc, out, _ = _capture_cmd_config(mod, ["set", "integrations_min_state", "connected"])
+        check("set a valid choice value exits 0", rc == 0, out)
+        check("statusline-config.json now exists and holds only the one key set",
+              json.loads(mod.STATUSLINE_CONFIG_PATH.read_text()) == {"integrations_min_state": "connected"},
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["get", "integrations_min_state"])
+        check("get after set returns the custom value, not the default",
+              rc == 0 and out.strip() == '"connected"', out)
+
+        rc, out, _ = _capture_cmd_config(mod, ["set", "max_integrations", "2"])
+        check("set a valid int value exits 0 and is stored as a real int, not a string",
+              rc == 0 and json.loads(mod.STATUSLINE_CONFIG_PATH.read_text())["max_integrations"] == 2,
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["set", "show_cost", "true"])
+        check("set a valid bool value exits 0 and is stored as a real bool, not the string 'true'",
+              rc == 0 and json.loads(mod.STATUSLINE_CONFIG_PATH.read_text())["show_cost"] is True,
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        for bad_argv, expect_in_stderr in (
+            (["set", "integrations_min_state", "bogus"], "not one of"),
+            (["set", "show_cost", "maybe"], "not a valid boolean"),
+            (["set", "max_integrations", "not-a-number"], "not a valid integer"),
+            (["set", "max_integrations", "0"], "at least 1"),
+            (["set", "not_a_real_key", "x"], "unknown key"),
+            (["get", "not_a_real_key"], "unknown key"),
+            (["unset", "not_a_real_key"], "unknown key"),
+        ):
+            rc, _, err = _capture_cmd_config(mod, bad_argv)
+            check(f"{' '.join(bad_argv)} rejects cleanly (non-zero, '{expect_in_stderr}' in stderr)",
+                  rc != 0 and expect_in_stderr in err, err)
+
+        rc, out, _ = _capture_cmd_config(mod, ["list"])
+        list_lines = {line.split()[0]: line for line in out.splitlines() if line.strip()}
+        check("list after several sets marks the customized keys (custom)",
+              all("(custom)" in list_lines[k] for k in ("integrations_min_state", "max_integrations", "show_cost")),
+              out)
+        check("list after several sets still marks never-touched keys (default)",
+              all("(default)" in list_lines[k] for k in ("mode", "show_integrations", "show_context", "plain_text")),
+              out)
+
+        rc, out, _ = _capture_cmd_config(mod, ["unset", "integrations_min_state"])
+        check("unset a customized key exits 0 and reports the default it reverted to",
+              rc == 0 and "available" in out, out)
+        check("unset removes only that key from the file, leaving the other custom keys intact",
+              json.loads(mod.STATUSLINE_CONFIG_PATH.read_text()) == {"max_integrations": 2, "show_cost": True},
+              mod.STATUSLINE_CONFIG_PATH.read_text())
+
+        rc, out, _ = _capture_cmd_config(mod, ["unset", "mode"])
+        check("unset a key that was never customized is a harmless no-op, still exits 0",
+              rc == 0, out)
+
+        rc, out, err = _capture_cmd_config(mod, ["get", "integrations_min_state"])
+        check("get after unset falls back to the real default, not a stale cached value",
+              rc == 0 and out.strip() == '"available"', out)
+    finish()
+
+
 if __name__ == "__main__":
     for fn in (
         test_full_smoke_stdin_to_stdout, test_rendering_compact_and_detailed,
@@ -571,6 +657,7 @@ if __name__ == "__main__":
         test_git_status_clean_and_dirty, test_git_status_missing_or_timeout_omits_field_never_hangs,
         test_unavailable_fields_never_appear, test_execution_time_is_fast,
         test_no_expensive_subprocess_names_appear_in_source,
+        test_config_cli_get_set_unset_list,
     ):
         try:
             fn()

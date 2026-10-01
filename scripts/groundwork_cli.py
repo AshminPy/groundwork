@@ -53,6 +53,13 @@ INSTALLED_UPDATE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_update.py"
 # `doctor` gaining an optional routine-name filter inside that script itself). No routine
 # execution, readiness, or scheduling logic is duplicated here.
 INSTALLED_ROUTINES_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_routines.py"
+# `statusline` is the same kind of pass-through — every arg after "statusline" is forwarded
+# verbatim to the installed groundwork_statusline.py's own `config get/set/unset/list` CLI, which
+# owns statusline-config.json entirely (defaults/schema/validation live there, not here, so they
+# can never drift). Unlike the others, a bare "groundwork statusline" with no further args is
+# never forwarded: groundwork_statusline.py's zero-argv path is reserved for Claude Code's own
+# statusLine invocation (JSON on stdin) and would otherwise hang waiting for stdin here.
+INSTALLED_STATUSLINE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_statusline.py"
 
 
 def _read_version() -> str | None:
@@ -121,6 +128,20 @@ def cmd_routines(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_statusline(extra_argv: list[str]) -> int:
+    if not extra_argv:
+        print("statusline: see 'groundwork statusline config --help' to view or change statusline "
+              "display settings", file=sys.stderr)
+        return 1
+    if not INSTALLED_STATUSLINE_PY.exists():
+        print(f"statusline: {INSTALLED_STATUSLINE_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_statusline.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_STATUSLINE_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -160,14 +181,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Routines: list/run/doctor/schedule (see 'groundwork routines --help')",
         add_help=False,
     )
+    sub.add_parser(
+        "statusline",
+        help="statusline display settings: config list/get/set/unset (see 'groundwork statusline config --help')",
+        add_help=False,
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     # Handled before argparse ever sees it: everything after "integrations"/"update"/"rollback"/
-    # "routines" (including "--help") must reach the installed script byte-for-byte, and argparse's
-    # REMAINDER cannot reliably do that across parser levels (see the comment in build_parser()).
+    # "routines"/"statusline" (including "--help") must reach the installed script byte-for-byte,
+    # and argparse's REMAINDER cannot reliably do that across parser levels (see the comment in
+    # build_parser()).
     if argv and argv[0] == "integrations":
         return cmd_integrations(argv[1:])
     if argv and argv[0] == "update":
@@ -176,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_rollback(argv[1:])
     if argv and argv[0] == "routines":
         return cmd_routines(argv[1:])
+    if argv and argv[0] == "statusline":
+        return cmd_statusline(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
