@@ -354,11 +354,63 @@ def test_routines_dispatches_not_reimplements() -> None:
     finish()
 
 
+def test_statusline_dispatches_not_reimplements() -> None:
+    print("groundwork_cli.py — statusline forwards verbatim to the installed groundwork_statusline.py's "
+          "own 'config get/set/unset/list' CLI")
+    if shutil_which("bash") is None:
+        print("  skip: bash not available")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh exits 0", r.returncode == 0, r.stdout[-1500:] + r.stderr[-800:])
+
+        installed_statusline = e.cfg / "groundwork" / "bin" / "groundwork_statusline.py"
+        check("install.sh copies groundwork_statusline.py into the installed bin dir", installed_statusline.is_file())
+
+        for subargs in (["config", "list"], ["config", "set", "integrations_min_state", "connected"],
+                        ["config", "get", "integrations_min_state"], ["config", "unset", "integrations_min_state"]):
+            direct = subprocess.run(["python3", str(installed_statusline), *subargs],
+                                    capture_output=True, text=True, env=e.env, timeout=30)
+            via_cli = e.run_cli("statusline", *subargs)
+            check(f"groundwork statusline {' '.join(subargs)} exit code matches direct invocation",
+                  via_cli.returncode == direct.returncode,
+                  f"cli={via_cli.returncode} direct={direct.returncode}")
+            check(f"groundwork statusline {' '.join(subargs)} stdout is byte-identical to direct invocation",
+                  via_cli.stdout == direct.stdout, via_cli.stdout[:300] + "\n---\n" + direct.stdout[:300])
+
+        # --help must reach the installed script's own real help text, same REMAINDER+-h workaround
+        # as integrations/update/rollback/routines (https://bugs.python.org/issue9334).
+        help_direct = subprocess.run(["python3", str(installed_statusline), "config", "--help"],
+                                     capture_output=True, text=True, env=e.env, timeout=30)
+        help_via_cli = e.run_cli("statusline", "config", "--help")
+        check("groundwork statusline config --help reaches the installed script's real help text, byte-identical",
+              help_via_cli.stdout == help_direct.stdout and help_via_cli.returncode == help_direct.returncode,
+              help_via_cli.stdout[:300])
+
+        # A bare "groundwork statusline" (no further args) must never hang waiting on stdin — the
+        # installed script's zero-argv path is reserved for Claude Code's own statusLine
+        # invocation. cmd_statusline() short-circuits this before any subprocess is spawned.
+        bare = e.run_cli("statusline")
+        check("bare 'groundwork statusline' returns promptly with a non-zero, informative exit — never hangs",
+              bare.returncode != 0 and "config" in (bare.stdout + bare.stderr), bare.stdout + bare.stderr)
+
+        # Unknown key via set: a real, non-zero error, no traceback, passed through untouched.
+        bad = e.run_cli("statusline", "config", "set", "not_a_real_key", "x")
+        check("unknown statusline config key via the CLI returns non-zero, no traceback",
+              bad.returncode != 0 and "Traceback" not in bad.stderr, bad.stdout + bad.stderr)
+
+        # Top-level help still lists "statusline" as a subcommand.
+        top_help = e.run_cli("--help")
+        check("groundwork --help lists 'statusline'", "statusline" in top_help.stdout, top_help.stdout)
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
               test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
               test_integrations_dispatches_not_reimplements, test_update_rollback_dispatches_not_reimplements,
-              test_routines_dispatches_not_reimplements):
+              test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements):
         try:
             t()
         except AssertionError:

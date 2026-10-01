@@ -27,6 +27,7 @@ show/hide, plain-text-vs-Unicode-symbol) — a small file, deliberately separate
 (see design.md Decision 6: groundwork_config.py's `init --force` unconditionally rewrites
 config.json on every `--configure`, which would silently discard personalization stored there).
 """
+import argparse
 import calendar
 import json
 import os
@@ -70,6 +71,20 @@ DEFAULT_STATUSLINE_CONFIG = {
 SUMMARY_SYMBOL = {"CONNECTED": "●", "CONFIGURED": "◐", "AVAILABLE": "○"}  # ● ◐ ○
 SUMMARY_PLAIN = {"CONNECTED": "connected", "CONFIGURED": "configured", "AVAILABLE": "available"}
 SUMMARY_RANK = {"AVAILABLE": 0, "CONFIGURED": 1, "CONNECTED": 2}  # ordering for integrations_min_state
+
+# One entry per DEFAULT_STATUSLINE_CONFIG key, used only by the `config` CLI below (get/set/unset/
+# list) to validate a value before writing it — the renderer itself never consults this; it stays
+# permissive and fails safe on anything malformed (see _load_statusline_config()).
+KEY_SCHEMA = {
+    "mode": ("choice", ["compact", "detailed"]),
+    "show_integrations": ("bool", None),
+    "show_context": ("bool", None),
+    "show_cost": ("bool", None),
+    "show_validation": ("bool", None),
+    "plain_text": ("bool", None),
+    "max_integrations": ("int", None),
+    "integrations_min_state": ("choice", ["available", "configured", "connected"]),
+}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -384,5 +399,142 @@ def main() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# `groundwork statusline config` — reachable only via explicit argv (never how Claude Code invokes
+# this script, which always runs it with zero arguments and JSON on stdin — see main() above).
+# Reads/writes statusline-config.json directly; never touches config.json, consistent with this
+# file's whole design (see the module docstring's statusline-config.json note).
+
+def _parse_value(key: str, raw: str):
+    kind, choices = KEY_SCHEMA[key]
+    if kind == "bool":
+        low = raw.strip().lower()
+        if low in ("true", "1", "yes", "on"):
+            return True
+        if low in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(f"'{raw}' is not a valid boolean — use true/false")
+    if kind == "int":
+        try:
+            value = int(raw)
+        except ValueError:
+            raise ValueError(f"'{raw}' is not a valid integer")
+        if value < 1:
+            raise ValueError("must be at least 1")
+        return value
+    if kind == "choice":
+        if raw not in choices:
+            raise ValueError(f"'{raw}' is not one of: {', '.join(choices)}")
+        return raw
+    raise AssertionError(key)  # unreachable — every KEY_SCHEMA entry has a handled kind
+
+
+def _read_custom_statusline_config() -> dict:
+    """The raw on-disk override file only, never merged with defaults — distinct from
+    _load_statusline_config(), which returns the full effective (default+override) config the
+    renderer actually uses. Used by the config CLI to know what's actually been customized."""
+    try:
+        data = json.loads(STATUSLINE_CONFIG_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_custom_statusline_config(data: dict) -> None:
+    STATUSLINE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATUSLINE_CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def cmd_config_list(_args) -> int:
+    custom = _read_custom_statusline_config()
+    effective = _load_statusline_config()
+    for key in DEFAULT_STATUSLINE_CONFIG:
+        is_custom = key in custom and isinstance(custom[key], type(DEFAULT_STATUSLINE_CONFIG[key]))
+        source = "custom" if is_custom else "default"
+        print(f"{key:<24} {json.dumps(effective[key]):<10} ({source})")
+    return 0
+
+
+def cmd_config_get(args) -> int:
+    if args.key not in DEFAULT_STATUSLINE_CONFIG:
+        print(f"config get: unknown key '{args.key}' — run 'groundwork statusline config list' for valid keys",
+              file=sys.stderr)
+        return 1
+    effective = _load_statusline_config()
+    print(json.dumps(effective[args.key]))
+    return 0
+
+
+def cmd_config_set(args) -> int:
+    if args.key not in KEY_SCHEMA:
+        print(f"config set: unknown key '{args.key}' — run 'groundwork statusline config list' for valid keys",
+              file=sys.stderr)
+        return 1
+    try:
+        value = _parse_value(args.key, args.value)
+    except ValueError as e:
+        print(f"config set: {e}", file=sys.stderr)
+        return 1
+    custom = _read_custom_statusline_config()
+    custom[args.key] = value
+    _write_custom_statusline_config(custom)
+    print(f"{args.key} = {json.dumps(value)}")
+    return 0
+
+
+def cmd_config_unset(args) -> int:
+    if args.key not in DEFAULT_STATUSLINE_CONFIG:
+        print(f"config unset: unknown key '{args.key}' — run 'groundwork statusline config list' for valid keys",
+              file=sys.stderr)
+        return 1
+    custom = _read_custom_statusline_config()
+    if args.key in custom:
+        del custom[args.key]
+        _write_custom_statusline_config(custom)
+    print(f"{args.key} reverted to default ({json.dumps(DEFAULT_STATUSLINE_CONFIG[args.key])})")
+    return 0
+
+
+def cmd_config(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="groundwork statusline config",
+        description="View or change statusline display settings (statusline-config.json). "
+                     "Never touches config.json and is never overwritten by install.sh/--configure.",
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+    p_list = sub.add_parser("list", help="show every setting, its current value, and whether it's default or custom")
+    p_list.set_defaults(func=cmd_config_list)
+    p_get = sub.add_parser("get", help="print one setting's current effective value")
+    p_get.add_argument("key")
+    p_get.set_defaults(func=cmd_config_get)
+    p_set = sub.add_parser("set", help="set a setting")
+    p_set.add_argument("key")
+    p_set.add_argument("value")
+    p_set.set_defaults(func=cmd_config_set)
+    p_unset = sub.add_parser("unset", help="remove a setting, reverting it to its default")
+    p_unset.add_argument("key")
+    p_unset.set_defaults(func=cmd_config_unset)
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+def _print_statusline_cli_usage() -> None:
+    print("usage: groundwork statusline config {list,get,set,unset} ...\n"
+          "  config list              show every statusline setting, value, and whether it's default or custom\n"
+          "  config get KEY           print one setting's current effective value\n"
+          "  config set KEY VALUE     set a setting (persists in statusline-config.json)\n"
+          "  config unset KEY         remove a setting, reverting it to its default",
+          file=sys.stderr)
+
+
 if __name__ == "__main__":
+    # Claude Code's statusLine mechanism always invokes this script with zero arguments and JSON
+    # on stdin (see main() above) — argv dispatch here is reachable only from an explicit CLI call
+    # ("groundwork statusline config ..."), never from a real statusLine render, so it can never
+    # collide with or slow down the render path.
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "config":
+            sys.exit(cmd_config(sys.argv[2:]))
+        _print_statusline_cli_usage()
+        sys.exit(0 if sys.argv[1] in ("-h", "--help") else 1)
     sys.exit(main())
