@@ -34,6 +34,7 @@ from pathlib import Path
 VERSION = "1"
 MAX_BYTES = 64 * 1024 * 1024       # never read more than the last 64 MB of telemetry
 MAX_BUCKETS = 4000                 # above this, days collapse into ISO weeks
+TOOL_NAME_CAP = 80                 # defensive bound only, matches hooks/groundwork_telemetry.py's own cap
 MIN_TREND_N = 5                    # both periods need at least this many known outcomes
 OUTCOMES = ("complete", "partial", "blocked", "failed", "unknown")
 VALIDATIONS = ("verified", "partial", "not_verified", "unknown")
@@ -49,6 +50,13 @@ def config_dir() -> Path:
 
 def events_path() -> Path:
     return Path(os.path.expanduser(os.environ.get("GROUNDWORK_TELEMETRY_PATH") or str(config_dir() / "groundwork" / "telemetry" / "events.jsonl")))
+
+
+def tool_events_path() -> Path:
+    """The per-tool-call sibling file (hooks/groundwork_telemetry.py's PostToolUse/
+    PostToolUseFailure records) — a separate file and schema from events.jsonl; see that hook's
+    module docstring for why. Read-only here, same as events_path()."""
+    return Path(os.path.expanduser(os.environ.get("GROUNDWORK_TOOL_TELEMETRY_PATH") or str(config_dir() / "groundwork" / "telemetry" / "tool_events.jsonl")))
 
 
 def reports_dir() -> Path:
@@ -158,6 +166,85 @@ def load_events(path: Path):
     except FileNotFoundError:
         pass
     return records, stats
+
+
+def normalise_tool(raw: dict):
+    """One tool_events.jsonl line (hooks/groundwork_telemetry.py's per-call schema) -> a small flat
+    record, or None. Deliberately separate from normalise() above: different file, different
+    schema, no shared dimensions (no profile/playbook/version/environment — a single tool call
+    carries none of those) — folding the two into one normaliser would just be two unrelated
+    branches pretending to be one function."""
+    if not isinstance(raw, dict) or raw.get("schema") != 1:
+        return None
+    ts = str(raw.get("ts") or "")
+    if len(ts) < 10 or not ts[:4].isdigit():
+        return None
+    try:
+        day = dt.date.fromisoformat(ts[:10])
+    except ValueError:
+        return None
+    # Unlike _label() fields below, the tool name is kept at its original case: it is an
+    # identifier (e.g. "Bash", "mcp__github__list_prs"), not a free-text label to fold/validate —
+    # normalise() above treats the per-turn record's own `tools` list the same way.
+    tool = str(raw.get("tool") or "").strip()[:TOOL_NAME_CAP]
+    if not tool:
+        return None
+    category = _label(raw.get("category"))
+    return {"day": day.isoformat(), "tool": tool, "category": category if category in ("builtin", "mcp") else "unknown",
+            "success": bool(raw.get("success"))}
+
+
+def load_tool_events(path: Path):
+    """Bounded, tolerant read of the per-tool-call sibling file — same shape of contract as
+    load_events() (malformed lines counted and skipped, never raises on a missing file)."""
+    records, stats = [], {"lines": 0, "malformed": 0, "bytes_skipped": 0}
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > MAX_BYTES:
+                f.seek(size - MAX_BYTES)
+                f.readline()
+                stats["bytes_skipped"] = size - MAX_BYTES
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                stats["lines"] += 1
+                try:
+                    rec = normalise_tool(json.loads(raw))
+                except Exception:
+                    rec = None
+                if rec is None:
+                    stats["malformed"] += 1
+                else:
+                    records.append(rec)
+    except FileNotFoundError:
+        pass
+    return records, stats
+
+
+def aggregate_tool_calls(records: list, window_days, ref: dt.date, top_n: int = 15) -> dict:
+    """Per-tool call counts and success rate within the same (ref - window, ref] period compute()
+    uses for the main report — a small, separate computation (no shared buckets with aggregate()/
+    compute(): this data has no profile/playbook/version/environment dimensions to key by, and no
+    interactive filters reference it, so it is not wired into render_html()/the JS twin — see
+    hooks/groundwork_telemetry.py's module docstring and the CHANGELOG entry for why this stays a
+    Markdown-only addition rather than a new dashboard panel)."""
+    if window_days:
+        start = ref - dt.timedelta(days=window_days)
+        sel = [r for r in records if start < dt.date.fromisoformat(r["day"]) <= ref]
+    else:
+        sel = records
+    by_tool = {}
+    for r in sel:
+        b = by_tool.setdefault(r["tool"], {"category": r["category"], "n": 0, "ok": 0})
+        b["n"] += 1
+        b["ok"] += 1 if r["success"] else 0
+    top = sorted(by_tool.items(), key=lambda kv: (-kv[1]["n"], kv[0]))[:top_n]
+    total = len(sel)
+    ok_total = sum(b["ok"] for b in by_tool.values())
+    return {"total": total, "success": _rate(ok_total, total),
+            "by_tool": [{"tool": t, "category": b["category"], "n": b["n"], "ok": b["ok"], "rate": _rate(b["ok"], b["n"])} for t, b in top]}
 
 
 # ---------------------------------------------------------------- aggregate
@@ -334,7 +421,7 @@ def fmt_trend(v) -> str:
     return "" if v is None else f" {'↑' if v > 0 else '↓' if v < 0 else '→'}{pct0(abs(v))}%"
 
 
-def render_markdown(m: dict, meta: dict) -> str:
+def render_markdown(m: dict, meta: dict, tool_metrics: dict = None) -> str:
     s, t = m["summary"], m["trends"]
     lines = [f"# Groundwork health — {meta['generated']}", "",
              f"Window: last {meta['window_days']} days (to {meta['ref']}) · filters: none · source: {meta['events']} ({meta['stats']['lines']} lines, {meta['stats']['malformed']} skipped)", "",
@@ -354,6 +441,14 @@ def render_markdown(m: dict, meta: dict) -> str:
     lines += ["", "## Execution modes", ""] + [f"- {k}: {v}" for k, v in sorted(m["exec_modes"].items())]
     lines += ["", "## Harness versions", ""] + [f"- {k}: {v}" for k, v in sorted(m["versions"].items())]
     lines += ["", "## Tools (top)", ""] + [f"- {k}: {v}" for k, v in m["tools"].items()]
+    if tool_metrics and tool_metrics["total"]:
+        lines += ["", "## Tool call reliability (per call)", "",
+                   f"- Total tool calls in this period: {tool_metrics['total']}",
+                   f"- Overall success rate: {fmt(tool_metrics['success'])}", "",
+                   "| Tool | Category | Calls | Success rate |", "|---|---|---|---|"]
+        for row in tool_metrics["by_tool"]:
+            lines.append(f"| {row['tool']} | {row['category']} | {row['n']} | {fmt(row['rate'])} |")
+        lines += ["", "_Per-call data (PostToolUse/PostToolUseFailure): which tools and MCP servers are actually used, and whether each call succeeded — tool name, category, success/failure and timestamp only, never command, prompt, response or tool-input/output content. Not broken down by profile/playbook/version/environment (a single tool call carries none of those) and not part of the filterable dashboard above._", ""]
     lines += ["", "_Declared fields (outcome, validation, evidence, playbook) are what the model stated; observed fields (tools, files, tests, deploys, profile) were determined by the hook. No prompts, responses, code or secrets are stored._", ""]
     return "\n".join(lines)
 
@@ -502,15 +597,18 @@ def generate(args) -> dict:
     window = int(args.window) if args.window else cfg["window_days"]
     ref = dt.date.fromisoformat(args.now) if args.now else dt.date.today()
     ev = Path(os.path.expanduser(args.events)) if args.events else events_path()
+    tool_ev = Path(os.path.expanduser(args.tool_events)) if args.tool_events else tool_events_path()
     out = Path(os.path.expanduser(args.out)) if args.out else reports_dir()
     records, stats = load_events(ev)
     buckets, granularity = aggregate(records)
+    tool_records, tool_stats = load_tool_events(tool_ev)
+    tool_metrics = aggregate_tool_calls(tool_records, window, ref)
     meta = {"generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "ref": ref.isoformat(), "window_days": window,
             "events": str(ev), "stats": stats, "granularity": granularity}
     metrics = compute(buckets, window, ref)
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
     page = render_html(buckets, meta)
-    md = render_markdown(metrics, meta)
+    md = render_markdown(metrics, meta, tool_metrics)
     written = []
     targets = [("dashboard.html", page)]
     if args.snapshot:
@@ -521,7 +619,8 @@ def generate(args) -> dict:
         os.chmod(tmp, 0o600)
         os.replace(tmp, out / name)
         written.append(str(out / name))
-    return {"written": written, "records": len(records), "buckets": len(buckets), "stats": stats, "summary": metrics["summary"]}
+    return {"written": written, "records": len(records), "buckets": len(buckets), "stats": stats, "summary": metrics["summary"],
+            "tool_calls": tool_metrics["total"], "tool_stats": tool_stats}
 
 
 # ---------------------------------------------------------------- schedule (macOS launchd)
@@ -602,6 +701,7 @@ def main(argv=None) -> int:
     g.add_argument("--window", type=int, help="health window in days (default from report.json, 30)")
     g.add_argument("--snapshot", action="store_true", help="also write YYYY-MM-DD.html and YYYY-MM-DD.md")
     g.add_argument("--events", help="telemetry file (default ~/.claude/groundwork/telemetry/events.jsonl)")
+    g.add_argument("--tool-events", help="per-tool-call telemetry file (default ~/.claude/groundwork/telemetry/tool_events.jsonl)")
     g.add_argument("--out", help="output directory (default ~/.claude/groundwork/reports)")
     g.add_argument("--now", help="reference date YYYY-MM-DD (default today)")
     s = sub.add_parser("schedule", help="set the launchd schedule")
@@ -614,6 +714,7 @@ def main(argv=None) -> int:
         for w in res["written"]:
             print(w)
         print(f"records={res['records']} buckets={res['buckets']} skipped={res['stats']['malformed']}")
+        print(f"tool_calls={res['tool_calls']} tool_lines={res['tool_stats']['lines']} tool_skipped={res['tool_stats']['malformed']}")
         return 0
     if args.cmd == "schedule":
         print(json.dumps(schedule(args.frequency, args.hour)))

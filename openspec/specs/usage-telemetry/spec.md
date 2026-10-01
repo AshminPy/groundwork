@@ -62,6 +62,29 @@ Each record SHALL contain an `observed` object (facts the hook determined from t
 - **WHEN** the Status paragraph is "I looked at the code and the tests."
 - **THEN** `declared.outcome` is `unknown`
 
+### Requirement: Per-tool-call record
+In addition to the per-turn record, a PostToolUse/PostToolUseFailure hook SHALL append one JSON
+line per tool call to `~/.claude/groundwork/telemetry/tool_events.jsonl` (its own schema, a
+sibling file — not merged into `events.jsonl`, which has no per-call dimensions) containing only:
+timestamp, session id, the tool name, a category (`builtin` or `mcp`, by the same `mcp__<server>`
+prefix test the per-turn record already uses, with the server slug when `mcp`), and success/failure
+(PostToolUse vs. PostToolUseFailure). It SHALL NOT read or store `tool_input`, `tool_response` or
+`tool_error` — only the event's own `tool_name` and `session_id`. It SHALL share the per-turn
+record's permission model (0600 file, 0700 directory), fail-open behaviour, and `GROUNDWORK_TELEMETRY=off`
+switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`.
+
+#### Scenario: A tool call succeeds
+- **WHEN** a `PostToolUse` event fires for `mcp__github__search_repositories`
+- **THEN** a record is appended with `category: "mcp"`, `mcp_server: "github"`, `success: true`, and no trace of the call's arguments or result
+
+#### Scenario: A tool call fails
+- **WHEN** a `PostToolUseFailure` event fires, with an error message containing a token or secret
+- **THEN** a record is appended with `success: false` and the error text never appears anywhere in the file
+
+#### Scenario: No tool name
+- **WHEN** the event carries no `tool_name`
+- **THEN** no record is appended
+
 ### Requirement: Agent facts reconciled with observed calls
 `declared.agent_count`, `declared.execution_mode` and `declared.agent_roles` SHALL be reconciled against the Agent calls observed in the current turn: when calls were observed, the count is the observed number, the mode is at least `subagents`, and declared roles are kept only when their number matches; when no calls were observed and the block declares a single agent, the count is 0 with no roles; when nothing could be observed (unreadable transcript) the declared values are kept as stated.
 

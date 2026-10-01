@@ -179,7 +179,7 @@ def test_setup() -> None:
         bk2 = b.backup_dirs()
         check("repeated setup: exits 0, second backup added, first backup intact", r2.returncode == 0 and len(bk2) == 2 and (bk2[0] / "claude" / "my-notes.md").read_text() == "mine\n", r2.stdout[-400:])
         hooks = [h["command"] for ev in b.settings()["hooks"].values() for g in ev for h in g["hooks"]]
-        check("repeated setup: idempotent settings (4 hook entries once, profile kept)", len(hooks) == 4 and b.settings()["env"]["GROUNDWORK_PROFILE"] == "personal" and json.loads((b.cfg / "groundwork" / "report.json").read_text())["schedule"] == "monthly")
+        check("repeated setup: idempotent settings (6 hook entries once, profile kept)", len(hooks) == 6 and b.settings()["env"]["GROUNDWORK_PROFILE"] == "personal" and json.loads((b.cfg / "groundwork" / "report.json").read_text())["schedule"] == "monthly")
 
         # ---- agent teams enabled; yearly + disabled schedules; other profile via prompt
         c = Box(tmp / "c")

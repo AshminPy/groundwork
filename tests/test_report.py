@@ -274,6 +274,73 @@ def test_report() -> None:
         r = run_cli(["generate", "--now", "2026-09-21", "--snapshot"], env)
         check("window_days from config (90) is independent of the weekly schedule", "last 90 days" in md_path.read_text())
 
+        # -- per-tool-call telemetry (tool_events.jsonl): load, aggregate, render, privacy, CLI wiring
+        tool_events = cfg / "groundwork" / "telemetry" / "tool_events.jsonl"
+
+        def trec(day, tool, success=True, category="builtin"):
+            return {"schema": 1, "ts": f"{day}T09:00:00Z", "session_id": "s", "tool": tool, "category": category, "success": success}
+
+        check("normalise_tool: schema-1 builtin record parsed", m.normalise_tool(trec(ref.isoformat(), "Bash")) == {"day": ref.isoformat(), "tool": "Bash", "category": "builtin", "success": True})
+        check("normalise_tool: mcp category kept", m.normalise_tool(trec(ref.isoformat(), "mcp__github__x", category="mcp"))["category"] == "mcp")
+        check("normalise_tool: wrong schema rejected", m.normalise_tool({"schema": 2, "ts": f"{ref.isoformat()}T09:00:00Z", "tool": "Bash"}) is None)
+        check("normalise_tool: missing tool rejected", m.normalise_tool({"schema": 1, "ts": f"{ref.isoformat()}T09:00:00Z"}) is None)
+        check("normalise_tool: bad timestamp rejected", m.normalise_tool({"schema": 1, "ts": "nope", "tool": "Bash"}) is None)
+        check("normalise_tool: unknown category label normalised to unknown", m.normalise_tool(trec(ref.isoformat(), "X", category="weird"))["category"] == "unknown")
+
+        d = lambda n: (ref - dt.timedelta(days=n)).isoformat()
+        tool_rows = (
+            [trec(d(i), "Bash", success=True) for i in range(6)]
+            + [trec(d(1), "Bash", success=False)]
+            + [trec(d(2), "Edit", success=True)]
+            + [trec(d(3), "mcp__github__search_repositories", success=True, category="mcp") for _ in range(3)]
+            + [trec(d(3), "mcp__github__search_repositories", success=False, category="mcp")]
+            + [trec(d(40), "Read", success=True)]  # outside the 30-day window
+        )
+        write_events(tool_events, tool_rows, extra_lines=["not json", "{}", '{"schema": 1, "ts": "nope", "tool": "Bash"}'])
+        trecs, tstats = m.load_tool_events(tool_events)
+        check("load_tool_events: malformed lines skipped and counted", tstats["malformed"] == 3 and len(trecs) == len(tool_rows), json.dumps(tstats))
+        tm30 = m.aggregate_tool_calls(trecs, 30, ref)
+        check("aggregate_tool_calls: 30d window excludes the day(40) record", tm30["total"] == 12, json.dumps(tm30))
+        bash_row = next(r for r in tm30["by_tool"] if r["tool"] == "Bash")
+        check("aggregate_tool_calls: Bash 7 calls, 6 ok (1 failure)", bash_row["n"] == 7 and bash_row["ok"] == 6 and bash_row["rate"]["rate"] == round(100 * 6 / 7, 1), json.dumps(bash_row))
+        gh_row = next(r for r in tm30["by_tool"] if r["tool"] == "mcp__github__search_repositories")
+        check("aggregate_tool_calls: mcp tool keeps its category and success rate", gh_row["category"] == "mcp" and gh_row["n"] == 4 and gh_row["ok"] == 3, json.dumps(gh_row))
+        check("aggregate_tool_calls: sorted by call count desc", [r["tool"] for r in tm30["by_tool"][:2]] == ["Bash", "mcp__github__search_repositories"], json.dumps(tm30["by_tool"]))
+        check("aggregate_tool_calls: overall success rate", tm30["success"]["num"] == 10 and tm30["success"]["den"] == 12, json.dumps(tm30["success"]))
+        tm_all = m.aggregate_tool_calls(trecs, None, ref)
+        check("aggregate_tool_calls: no window -> includes the day(40) record too", tm_all["total"] == 13, json.dumps(tm_all))
+        tm_empty = m.aggregate_tool_calls([], 30, ref)
+        check("aggregate_tool_calls: empty input -> total 0, no crash", tm_empty["total"] == 0 and tm_empty["by_tool"] == [])
+
+        # top_n cap
+        many_tools = [trec(ref.isoformat(), f"tool{i}") for i in range(20)]
+        tm_cap = m.aggregate_tool_calls(many_tools, None, ref, top_n=5)
+        check("aggregate_tool_calls: top_n caps the row count", len(tm_cap["by_tool"]) == 5, len(tm_cap["by_tool"]))
+
+        # render_markdown: section appears only when tool_metrics has data; absent when empty/None
+        meta_for_md = {"generated": "2026-09-21 00:00", "ref": ref.isoformat(), "window_days": 30, "events": str(events), "stats": {"lines": 0, "malformed": 0}}
+        md_with = m.render_markdown(c, meta_for_md, tm30)
+        check("render_markdown: tool reliability section present with real numbers", "## Tool call reliability (per call)" in md_with and "| Bash | builtin | 7 |" in md_with and "Total tool calls in this period: 12" in md_with, md_with)
+        md_without_data = m.render_markdown(c, meta_for_md, tm_empty)
+        check("render_markdown: section omitted when there are no tool-call records", "## Tool call reliability" not in md_without_data)
+        md_no_arg = m.render_markdown(c, meta_for_md)
+        check("render_markdown: tool_metrics is optional (backward compatible call)", "## Tool call reliability" not in md_no_arg)
+
+        # CLI end to end: tool_events.jsonl present alongside events.jsonl -> stdout + snapshot both reflect it
+        r = run_cli(["generate", "--now", "2026-09-21", "--window", "30", "--snapshot"], env)
+        check("CLI reports tool_calls summary line", r.returncode == 0 and "tool_calls=12 tool_lines=" in r.stdout and "tool_skipped=3" in r.stdout, r.stdout)
+        snap_md2 = md_path.read_text()
+        check("CLI snapshot carries the tool reliability section", "## Tool call reliability (per call)" in snap_md2 and "mcp__github__search_repositories" in snap_md2, snap_md2[-1200:])
+        check("tool-call data never leaks into dashboard.html (no new dashboard UI, per scope)", '"tool"' not in dash.read_text() and "mcp__github__search_repositories" not in dash.read_text())
+
+        # --tool-events CLI override and missing-file tolerance
+        alt_tool_events = tmp / "alt-tool-events.jsonl"
+        write_events(alt_tool_events, [trec(ref.isoformat(), "Grep")])
+        r = run_cli(["generate", "--now", "2026-09-21", "--tool-events", str(alt_tool_events)], env)
+        check("--tool-events override honoured", r.returncode == 0 and "tool_calls=1 " in r.stdout, r.stdout)
+        r = run_cli(["generate", "--now", "2026-09-21", "--tool-events", str(tmp / "does-not-exist.jsonl")], env)
+        check("missing tool_events file -> tool_calls=0, no crash", r.returncode == 0 and "tool_calls=0 " in r.stdout, r.stdout)
+
         # -- bounded: MAX_BYTES tail read (constant lowered for the test)
         write_events(events, [rec((ref - dt.timedelta(days=i)).isoformat()) for i in range(200)])
         saved = m.MAX_BYTES
