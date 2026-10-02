@@ -1,0 +1,4 @@
+# Never commit machine-specific config, credentials, or personal paths.
+hammerspoon/local_config.lua
+*.pyc
+__pycache__/

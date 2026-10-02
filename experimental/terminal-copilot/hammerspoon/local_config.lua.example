@@ -1,0 +1,16 @@
+-- Terminal Copilot — local machine configuration.
+--
+-- Copy this file to `local_config.lua` in this same directory (it is
+-- gitignored — never commit the copy). Only override what you need; any
+-- key you don't set here keeps its default from terminal_copilot.lua.
+
+return {
+    -- Change if cmd+alt+ctrl+C collides with something else on your machine.
+    -- hotkeyMods = { "cmd", "alt", "ctrl" },
+    -- hotkeyKey = "c",
+
+    -- Only needed if you installed the orchestrator somewhere other than
+    -- the default ~/.groundwork-copilot/bin/copilot_orchestrator.py
+    -- (install-local.sh sets this up for you at that default path).
+    -- orchestratorPath = "/absolute/path/to/copilot_orchestrator.py",
+}
