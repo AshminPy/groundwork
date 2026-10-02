@@ -62,7 +62,7 @@ def emit_error(message: str) -> None:
 
 
 def validate_tty(tty: str) -> str | None:
-    if _TTY_PATTERN.match(tty):
+    if _TTY_PATTERN.fullmatch(tty):
         return tty
     return None
 
@@ -147,12 +147,19 @@ def record_audio_bounded(max_seconds: float) -> str:
 
     fd, path = tempfile.mkstemp(suffix=".wav", prefix="groundwork-copilot-")
     os.close(fd)
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit PCM
-        wf.setframerate(SAMPLE_RATE)
-        pcm16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
-        wf.writeframes(pcm16.tobytes())
+    try:
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit PCM
+            wf.setframerate(SAMPLE_RATE)
+            pcm16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+            wf.writeframes(pcm16.tobytes())
+    except Exception:
+        # Never leave a partial/orphaned WAV behind — "never persist audio
+        # beyond this single request" must hold even when writing it fails.
+        if os.path.exists(path):
+            os.remove(path)
+        raise
 
     return path
 

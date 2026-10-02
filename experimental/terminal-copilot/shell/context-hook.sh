@@ -15,7 +15,8 @@
 
 GROUNDWORK_COPILOT_DIR="${GROUNDWORK_COPILOT_DIR:-$HOME/.groundwork-copilot}"
 GROUNDWORK_COPILOT_SESSIONS_DIR="$GROUNDWORK_COPILOT_DIR/sessions"
-mkdir -p "$GROUNDWORK_COPILOT_SESSIONS_DIR" 2>/dev/null
+mkdir -p -m 700 "$GROUNDWORK_COPILOT_SESSIONS_DIR" 2>/dev/null
+chmod 700 "$GROUNDWORK_COPILOT_SESSIONS_DIR" 2>/dev/null
 
 # Escapes a string for embedding in a JSON string value: backslash, double
 # quote, and control characters. Pure shell, no subprocess, so this stays
@@ -72,19 +73,29 @@ _groundwork_copilot_write_context() {
 
     _updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
 
-    {
-        printf '{'
-        printf '"tty":"%s",'          "$(_groundwork_copilot_json_escape "$_tty")"
-        printf '"cwd":"%s",'          "$(_groundwork_copilot_json_escape "$_cwd")"
-        printf '"repo_root":"%s",'    "$(_groundwork_copilot_json_escape "$_repo_root")"
-        printf '"git_branch":"%s",'   "$(_groundwork_copilot_json_escape "$_git_branch")"
-        printf '"shell":"%s",'        "$(_groundwork_copilot_json_escape "$_shell_name")"
-        printf '"last_command":"%s",' "$(_groundwork_copilot_json_escape "$_last_command")"
-        printf '"last_exit_code":%s,' "${_exit_code:-0}"
-        printf '"updated_at":"%s"'    "$(_groundwork_copilot_json_escape "$_updated_at")"
-        printf '}'
-    } > "$_tmp_file" 2>/dev/null && mv "$_tmp_file" "$_context_file" 2>/dev/null
-    chmod 600 "$_context_file" 2>/dev/null
+    # umask 077 for the write itself: the temp file must never be created
+    # world/group-readable even momentarily, not fixed up after the fact
+    # with a trailing chmod (that leaves a real, confirmed TOCTOU window —
+    # see docs/DECISIONS.md and the independent review that found it).
+    (
+        umask 077
+        {
+            printf '{'
+            printf '"tty":"%s",'          "$(_groundwork_copilot_json_escape "$_tty")"
+            printf '"cwd":"%s",'          "$(_groundwork_copilot_json_escape "$_cwd")"
+            printf '"repo_root":"%s",'    "$(_groundwork_copilot_json_escape "$_repo_root")"
+            printf '"git_branch":"%s",'   "$(_groundwork_copilot_json_escape "$_git_branch")"
+            printf '"shell":"%s",'        "$(_groundwork_copilot_json_escape "$_shell_name")"
+            printf '"last_command":"%s",' "$(_groundwork_copilot_json_escape "$_last_command")"
+            printf '"last_exit_code":%s,' "${_exit_code:-0}"
+            printf '"updated_at":"%s"'    "$(_groundwork_copilot_json_escape "$_updated_at")"
+            printf '}'
+        } > "$_tmp_file" 2>/dev/null
+    )
+    # mv preserves the source file's already-correct mode (0600 from the
+    # umask above) rather than inheriting the destination directory's
+    # default — no window where the final file is world-readable.
+    mv "$_tmp_file" "$_context_file" 2>/dev/null
 }
 
 # --- zsh wiring ---------------------------------------------------------
