@@ -428,7 +428,7 @@ def test_evidence_dispatches_and_uninstall_removes_it() -> None:
         direct = subprocess.run(["python3", str(installed), "--transcript", str(tp)], capture_output=True, text=True, env=e.env, timeout=30)
         via = e.run_cli("evidence", "--transcript", str(tp))
         check("groundwork evidence --transcript output and exit code are byte-identical to direct invocation",
-              via.stdout == direct.stdout and via.returncode == direct.returncode == 0 and "ceiling): LOW" in via.stdout, via.stdout + via.stderr)
+              via.stdout == direct.stdout and via.returncode == direct.returncode == 0 and "estimate): LOW" in via.stdout, via.stdout + via.stderr)
         top = e.run_cli("--help")
         check("groundwork --help lists the evidence subcommand", "evidence" in top.stdout, top.stdout[:600])
         u = e.run_uninstall()

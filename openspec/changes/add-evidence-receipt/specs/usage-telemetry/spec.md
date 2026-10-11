@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Evidence confidence in the per-turn record
-The per-turn record SHALL carry, under `observed`, the evidence-confidence ceiling derived from the transcript (`NONE` | `LOW` | `MEDIUM` | `HIGH`), its signals as counts and booleans only, and whether the model's stated label exceeds the ceiling (`true`, `false`, or null when either is not a recognised label); and under `declared`, the label the model stated (`none` | `low` | `medium` | `high` | `unknown`). It SHALL NOT contain any path, URL, command, repository identity or review text. If the derivation is unavailable or raises, the record SHALL be written without the evidence fields.
+The per-turn record SHALL carry, under `observed`, the evidence-confidence estimate derived from the transcript (`NONE` | `LOW` | `MEDIUM` | `HIGH`), its signals as counts and booleans only, and whether the model's stated label exceeds the estimate (`true`, `false`, or null when either is not a recognised label); and under `declared`, the label the model stated (`none` | `low` | `medium` | `high` | `unknown`). It SHALL NOT contain any path, URL, command, repository identity or review text. If the derivation is unavailable or raises, or the transcript is unreadable (nothing to derive from), the record SHALL be written without the evidence fields and without the comparison; a decorated stated label (`High.`, `**HIGH**`, `MEDIUM/HIGH`) SHALL still be read as the label it states.
 
 #### Scenario: An over-claim is an observed fact
 - **WHEN** a response states `Confidence: HIGH` after a turn whose transcript supports only `MEDIUM`

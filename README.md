@@ -161,7 +161,7 @@ groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
 
-groundwork evidence                  # what the last turn actually read/ran/reviewed, and the confidence ceiling
+groundwork evidence                  # what the last turn actually read/ran/reviewed, and the evidence-confidence estimate
 groundwork evidence --json           # the same, machine-readable (also: --transcript PATH)
 ```
 
@@ -176,10 +176,12 @@ forwards to the existing Routines execution/scheduling engine unchanged — see
 `groundwork evidence` prints the **evidence receipt** for the last turn, derived from the session
 transcript rather than from what the model says: references to the files, URLs, repository objects,
 test/runtime commands (with outcomes) and reviews that were actually used, and an evidence-confidence
-**ceiling** (`NONE`/`LOW`/`MEDIUM`/`HIGH`; `UNKNOWN` if the transcript cannot be read). Confidence,
-validation state and references are three separate things; the ceiling can be too low but never too
-high, because an unrecognised action counts for nothing. A `Confidence:` label stated in the response
-is compared with the ceiling, and an over-claim is shown. References are printed on demand and never
+**estimate** (`NONE`/`LOW`/`MEDIUM`/`HIGH`; `UNKNOWN` if the transcript cannot be read). Confidence,
+validation state and references are three separate things. The estimate is best effort, not a
+guarantee: a passing check counts only if nothing that could change the tree came after it, and a
+command it cannot read with certainty earns nothing, but it can still be too high where it cannot
+see (environment tricks, wrapper commands, remote effects — the module's docstring lists the known
+gaps). A `Confidence:` label stated in the response is compared with the estimate, and a label above it is shown. References are printed on demand and never
 stored; the Stop-hook record keeps only the label and counts. Limits: a test run piped through
 anything but `tail`/`head`/`tee`/`cat`/`wc` is not credited, and a review delivered as a background
 agent's later message (not a tool result) is not credited. See
@@ -291,7 +293,7 @@ groundwork/
 │   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ investigation continuity, harness version, profile) at session start
 │   ├── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
 │   ├── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
-│   └── groundwork_evidence.py         evidence receipt + confidence ceiling from the session transcript; imported by the telemetry hook, run as `groundwork evidence`
+│   └── groundwork_evidence.py         evidence receipt + confidence estimate from the session transcript; imported by the telemetry hook, run as `groundwork evidence`
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request

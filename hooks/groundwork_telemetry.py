@@ -46,9 +46,9 @@ except Exception:
     # matches nothing just means test-shaped commands stop being detected — degraded, not broken.
     TEST_CMD = re.compile(r"(?!x)x")
 try:
-    from groundwork_evidence import telemetry_summary, declared_exceeds  # evidence receipt (observed ceiling)
+    from groundwork_evidence import telemetry_summary, declared_exceeds, declared_label  # evidence receipt (observed ceiling)
 except Exception:
-    telemetry_summary = declared_exceeds = None  # fail-open: the evidence fields are simply omitted
+    telemetry_summary = declared_exceeds = declared_label = None  # fail-open: the evidence fields are simply omitted
 
 META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
 # Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
@@ -367,19 +367,24 @@ def build_record(data: dict, text: str) -> dict:
     validation = next((v for k, v in VALIDATION_STATES.items() if k in validation_raw), "unknown")
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
     playbook = playbook_raw[0] if playbook_raw and playbook_raw[0] in PLAYBOOKS else "unknown"
-    # Evidence confidence is a CEILING derived from the transcript (hooks/groundwork_evidence.py), recorded as a
-    # label plus counts/booleans only — never a path, URL or command. The model's own stated label is recorded
-    # separately under `declared`, and the comparison is an observed fact. Additive and fail-open.
+    # Evidence confidence is a best-effort estimate derived from the transcript (hooks/groundwork_evidence.py; its
+    # docstring lists the known gaps), recorded as a label plus counts/booleans only — never a path, URL or command.
+    # The model's own stated label is recorded separately under `declared`; the comparison is a derived fact, not
+    # proof of an over-claim. Additive and fail-open.
     ceiling, ev_obs = None, {}
-    if telemetry_summary is not None:
+    if telemetry_summary is not None and entries:  # an unreadable transcript is UNKNOWN: record no observed fact at all
         try:
             ev = telemetry_summary(entries)
             ceiling = ev["confidence"]
             ev_obs = {"evidence_confidence": ceiling, "evidence_signals": ev["signals"]}
         except Exception:
             ceiling, ev_obs = None, {}
-    stated = (meta.get("confidence") or meta.get("evidence confidence") or "").strip().strip("*").split()
-    declared_conf = stated[0].upper() if stated and stated[0].upper() in ("NONE", "LOW", "MEDIUM", "HIGH") else "unknown"
+    stated_raw = meta.get("confidence") or meta.get("evidence confidence") or ""
+    if declared_label is not None:
+        declared_conf = declared_label(stated_raw) or "unknown"  # tolerant: "High.", "**HIGH**", "MEDIUM/HIGH"
+    else:
+        stated = stated_raw.strip().strip("*").split()
+        declared_conf = stated[0].upper() if stated and stated[0].upper() in ("NONE", "LOW", "MEDIUM", "HIGH") else "unknown"
     if ceiling is not None and declared_exceeds is not None:
         ev_obs["declared_confidence_exceeds_observed"] = declared_exceeds(declared_conf, ceiling)
     cwd = data.get("cwd") or os.getcwd()

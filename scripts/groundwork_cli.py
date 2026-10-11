@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser(
         "evidence",
-        help="evidence receipt for the last turn: what was inspected or run, and the confidence ceiling (see 'groundwork evidence --help')",
+        help="evidence receipt for the last turn: what was inspected or run, and the evidence-confidence estimate (see 'groundwork evidence --help')",
         add_help=False,
     )
     sub.add_parser(
