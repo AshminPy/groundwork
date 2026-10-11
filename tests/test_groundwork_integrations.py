@@ -318,13 +318,18 @@ def test_acli_command_is_never_run_without_a_marker() -> None:
 
 
 def test_acli_mechanism_failure_never_yields_connected() -> None:
-    print("groundwork_integrations.py — Jira's acli mechanism: a failing or missing acli never yields connected")
+    print("groundwork_integrations.py — acli mechanism WITH a (synthetic) marker, i.e. the path that runs once a real "
+          "marker is observed: a failing or missing acli never yields connected")
+    from dataclasses import replace
     mod = load_module()
     jira = next(e for e in mod.CATALOG if e.name == "Jira")
-    acli_mech = next(m for m in jira.mechanisms if m.type == "cli" and m.cli_binary == "acli")
+    # the shipped mechanism has no marker and never spawns, so exercise the spawn path through a marker-bearing copy
+    acli_mech = replace(next(m for m in jira.mechanisms if m.type == "cli" and m.cli_binary == "acli"),
+                        cli_success_marker="SYNTHETIC-MARKER-FOR-TEST")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        _stub_bin(Path(tmpdir), "acli", 1)  # exits non-zero: not authenticated
+        # exits non-zero WHILE printing the marker: the exit code must still veto it
+        _stub_bin(Path(tmpdir), "acli", 1, stdout_text="SYNTHETIC-MARKER-FOR-TEST")
         old_path = os.environ.get("PATH")
         os.environ["PATH"] = tmpdir
         try:
@@ -350,12 +355,14 @@ def test_acli_mechanism_failure_never_yields_connected() -> None:
 
 
 def test_acli_mechanism_timeout_never_yields_connected() -> None:
-    print("groundwork_integrations.py — Jira's acli mechanism: a hanging check times out safely, never connected")
+    print("groundwork_integrations.py — acli mechanism WITH a (synthetic) marker: a hanging check times out safely, never connected")
+    from dataclasses import replace
     mod = load_module()
     jira = next(e for e in mod.CATALOG if e.name == "Jira")
-    acli_mech = next(m for m in jira.mechanisms if m.type == "cli" and m.cli_binary == "acli")
+    acli_mech = replace(next(m for m in jira.mechanisms if m.type == "cli" and m.cli_binary == "acli"),
+                        cli_success_marker="SYNTHETIC-MARKER-FOR-TEST")
     with tempfile.TemporaryDirectory() as tmpdir:
-        _stub_bin(Path(tmpdir), "acli", 0, sleep_s=5)
+        _stub_bin(Path(tmpdir), "acli", 0, stdout_text="SYNTHETIC-MARKER-FOR-TEST", sleep_s=5)
         old_path = os.environ.get("PATH")
         old_timeout = mod.CLI_AUTH_TIMEOUT_S
         os.environ["PATH"] = tmpdir + os.pathsep + (old_path or "")

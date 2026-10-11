@@ -159,7 +159,7 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
                 # only on success (and add a test that a not-logged-in output without it stays False).
             ),
         ),
-        trust="Vendor/official (atlassian/atlassian-mcp-server, GA 2026-02-04); delete/admin ops off by default",
+        trust="Vendor/official (atlassian/atlassian-mcp-server, GA 2026-02-04); delete/admin ops off by default. The acli CLI mechanism is UNVERIFIED: a PATH-name check only, never CONNECTED",
         config_requirements="OAuth 2.1 (default) or an API token",
         config_key=("integrations", "jira"),
         routine_access_values=("jira_mcp", "cli", "browser"),
