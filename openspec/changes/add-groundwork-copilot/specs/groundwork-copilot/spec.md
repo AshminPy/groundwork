@@ -72,7 +72,7 @@ The command SHALL capture a wide window, remove ANSI sequences and every control
 
 #### Scenario: Adversarial input is fast
 - **WHEN** 60 KB of repeated `token.` / `a.` / `authorization:` followed by spaces is redacted
-- **THEN** it completes in a few seconds at most
+- **THEN** it completes in under 0.3 s on 60 KB
 
 ### Requirement: No file can be attached through the prompt text
 Claude Code expands an `@path` mention found in the prompt into attached file contents even when the model is offered no tools. The command SHALL therefore replace every `@` in the final prompt (project facts, question and terminal text alike) that is not between two word characters with the full-width at sign, a character that cleaning does not remove, so that the prompt shown by `--dry-run` is the prompt that is sent and no local file is attached after redaction.

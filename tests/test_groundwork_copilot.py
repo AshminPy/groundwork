@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -906,6 +907,35 @@ def test_round4_review_fixes() -> None:
     assert q.index("ghp_") == 487
     code, out, _ = run_cli(m, ["--stdin", "--dry-run", "--json", "--question", q], "boom\n")
     check("a token straddling the 500-character cut of the question is redacted before the cut", code == 0 and "ghp_AAAA" not in json.loads(out)["prompt"], json.loads(out)["prompt"][:300])
+    # --- cookies and authorization headers in the shapes real tools print (found one round at a time by the reviews)
+    shapes = {
+        "multi-line backslash-continued curl": "curl 'https://x' \\\n  -H 'accept: */*' \\\n  -b 'sid=abc; connect.sid=ZZSECRET1' \\\n  --compressed",
+        "curl with the cookie option more than 400 characters in": "curl " + "x" * 500 + " -b 'a=1; b=ZZSECRET2'",
+        "glued -b": "curl -b'a=1; b=ZZSECRET3' https://x",
+        "option cluster -sSb": "curl -sSb 'a=1; b=ZZSECRET4' https://x",
+        "node console.log of headers": "{\n  'set-cookie': [\n    'session=ZZSECRET5; Path=/; HttpOnly'\n  ]\n}",
+        "pretty-printed JSON array": '{\n  "Cookie": [\n    "sid=ZZSECRET6"\n  ]\n}',
+        "YAML list": "Cookie:\n  - b=ZZSECRET7\n  - c=ZZSECRET7b\nnext: x",
+        "folded header": "Cookie: a=1;\n b=ZZSECRET8\nHost: x",
+        "JSON inside a JSON string": '{"headers":"{\\"Cookie\\":\\"sid=ZZSECRET9\\"}"}',
+        "escaped Authorization key": '{\\"Authorization\\":\\"Basic ZZSECRET10==\\"}',
+        "command inside a JSON string": 'curl -b \\"a=1; b=ZZSECRET11\\" https://x',
+        "escaped quote inside a quoted jar": 'curl -b "a=1; b=\\"ZZSECRET12\\"" https://x',
+        "HTTP trace": "Cookie: a=1; b=ZZSECRET13",
+        "wget --header": "wget --header='Cookie: a=1; b=ZZSECRET14' https://x",
+        "--cookie=": "curl --cookie='a=1; b=ZZSECRET15' https://x",
+    }
+    leaked = [k for k, v in shapes.items() if "ZZSECRET" in m.redact(v)[0]]
+    check("no cookie survives in any of the shapes real tools print", not leaked, str(leaked))
+    kept = ["git checkout -b feature", "x-cookie-policy: strict", "grep -b needle file", "Host: x", "Tokens: 1523", "max_tokens: 4096", "tokenizer_mode=auto"]
+    check("harmless lookalikes stay readable", all(m.redact(s) == (s, 0) for s in kept), str([s for s in kept if m.redact(s)[0] != s]))
+    check("a folded header's following line is not swallowed",
+          m.redact("Cookie: a=1;\n b=ZZSECRET8\nHost: x")[0].endswith("\nHost: x"))
+    check("a count under a secret-bearing name is still redacted",
+          all("[redacted]" in m.redact(s)[0] for s in ("tokens_secret=8675309123", "tokens_password: 1234567890", "tokens_api_key=12345678901234")))
+    t0 = time.monotonic()
+    m.redact(("curl -b '" * 3000 + "cookie\" " * 3000 + "Cookie:" * 3000))
+    check("cookie patterns stay fast on hostile input (unterminated quotes, repeated keys)", time.monotonic() - t0 < 1.0, f"{time.monotonic() - t0:.2f}s")
     benign = ["https://registry.npmjs.org/@babel/core", "https://host:8080/path@x", "bob@example.com", "git@github.com:org/repo.git", "https://example.com/a@b"]
     check("URLs without credentials are left alone", all(m.redact(s) == (s, 0) for s in benign), str([m.redact(s) for s in benign]))
 
@@ -968,7 +998,7 @@ def test_live_mention_canary() -> None:
         loose = m.call_claude(f"{ask}\n\nsee @{canary}")  # positive control: the un-neutralised mention DOES attach the file
         check("positive control: an un-neutralised @-mention makes the real claude see the file (so this test can fail)", "YES" in loose.upper(), loose)
         code, out, err = run_cli(m, ["--stdin", "--question", ask], f"make: *** [all] Error 1\nsee @{canary}\n(@{canary}) \"@{canary}\"\n@{canary}\n")
-        check("through the tool, the same mentions attach nothing", code == 0 and out.strip().upper().startswith("NO") and token not in out, out + err)
+        check("through the tool, the same mentions attach nothing", code == 0 and re.search(r"\bNO\b", out.upper()) is not None and token not in out, out + err)
     finish()
 
 

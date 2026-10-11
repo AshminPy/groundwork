@@ -83,7 +83,7 @@ _SECRET_PATTERNS = (
     # The two URL-credential patterns end their lookahead with (?![\w@-]|\.\w): the host (and optional port) must not be
     # followed by more name, another "@" (the password then contains an "@" and runs on) or ".<word>". Anything else —
     # "." "," "?" ")" "]" ";" "#" ":" "/" a quote, a space, the end — ends the URL, so the password is redacted.
-    (re.compile(r"(?i)\b((?:proxy-)?authorization[\"']?[ \t]{0,20}[=:][ \t]{0,20})(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)"), r"\1[redacted]"),
+    (re.compile(r"(?i)\b((?:proxy-)?authorization[\\\"']{0,4}[ \t]{0,20}[=:][ \t]{0,20})(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)"), r"\1[redacted]"),
     (re.compile(r"(?i)\b(bearer[ \t]{1,20})[A-Za-z0-9._~+/=-]{8,}"), r"\1[redacted]"),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://[^\s/@:]*:)[^\s/]*?@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?![\w@-]|\.\w))"), r"\1[redacted]@"),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://)[^\s/@:]+@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?![\w@-]|\.\w))"), r"\1[redacted]@"),
@@ -98,10 +98,13 @@ _SECRET_PATTERNS = (
     (re.compile(r"\b(SG\.)[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), r"\1[redacted]"),
     (re.compile(r"\b(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"), r"\1[redacted]"),
     (re.compile(r"\b(xox[abprs]-|xapp-)[A-Za-z0-9-]{8,}"), r"\1[redacted]"),
-    # a cookie header, also as a quoted key ('Cookie': '…', "set-cookie": […]): everything to the end of the line, since a jar holds several cookies
-    (re.compile(r"(?i)\b((?:set-)?cookie[\"']?[ \t]{0,5}:[ \t]{0,20})[^\r\n]+"), r"\1[redacted]"),
-    # curl -b / --cookie: a quoted jar is one value ('a=1; b=2' separates cookies with "; "), else up to the next blank
-    (re.compile(r"(?i)(\bcurl\b[^\n]{0,400}?\s(?:-b|--cookie)[ =]\s*)(?:'[^']*'|\"[^\"]*\"|\S+)"), r"\1[redacted]"),
+    # a cookie header, also as a quoted or escaped-quoted key ('Cookie': '…', "set-cookie": […], {\"Cookie\":…}): a bracketed list through its
+    # closing bracket (any number of lines), a value continued on indented lines after a ';' or an empty value (folded header, YAML list),
+    # else the rest of the line, since a jar holds several cookies
+    (re.compile(r'''(?i)\b((?:set-)?cookie[\\"']{0,4}[ \t]{0,5}:[ \t]{0,20})(?:\[[^\]]{0,4000}\]|(?:[^\r\n]*;)?[ \t]*(?:\r?\n[ \t]+[^\r\n]+){1,10}|[^\r\n]+)'''), r"\1[redacted]"),
+    # -b / --cookie on any command (curl, httpie, wget wrappers; not tied to a `curl` word on the same line): a quoted jar is one value
+    # ('a=1; b=2' separates cookies with "; "), escaped quotes included; an unquoted value must look like name=value, so `git checkout -b feature` is left alone
+    (re.compile(r'''(?:^|(?<=\s))((?:-[A-Za-z]*b|--cookie)(?:[ \t=]+|(?=['"\\])))(?:\\"[^"]{0,2000}?\\"|'[^']{0,2000}'|"(?:[^"\\]|\\.){0,2000}"|[^\s'"]*=\S*)'''), r"\1[redacted]"),
     (re.compile(r"(?:^|(?<=\s))(-u[ \t]{0,20}|--user[= ][ \t]{0,20}|--proxy-user[= ][ \t]{0,20})[^\s:]*:\S+"), r"\1[redacted]"),
     (re.compile(r"(?i)(\bdocker\s+login\b[^\n]{0,200}?\s-p[ =]?)\S+"), r"\1[redacted]"),
     (re.compile(r"(?i)(\bmysql\b[^\n]{0,200}?\s-p)\S+"), r"\1[redacted]"),
@@ -179,7 +182,8 @@ _VALUE_RE = re.compile(_VALUE)
 _NAME_CHAR = re.compile(r"[\w.-]")
 _TF_VALUE = re.compile(r'\{\s{0,20}"value"\s{0,5}:\s{0,20}')   # terraform state: "password": {"value": "x"}
 _COUNT_VALUE = re.compile(r"[\d,._]+")
-_TOKENIZER_NAME = re.compile(r"tokenizers?(?:[_.-](?:name|type|class|model|path|file|config|version))?")  # `tokenizer: gpt2` is a model name; tokenizer_secret is not
+_SECRET_WORD = re.compile(r"secret|passw|pwd|key|credential|passphrase|auth")
+_TOKENIZER_NAME = re.compile(r"tokenizers?(?:[_.-](?:name|type|class|model|path|file|config|version|mode|dir|kwargs|revision|parallelism|cache|args))?")  # `tokenizer: gpt2` is a model name; tokenizer_secret is not
 MAX_BLANKS = 40
 _TRAILING = ",;.)]}>"
 
@@ -236,7 +240,7 @@ def _redact_kv(text: str):
         name = text[m.start():end].lower()
         if not value or raw in _BENIGN_VALUES or value in _BENIGN_VALUES:
             continue  # plainly not a secret: "none", "required", "}", a bare punctuation mark
-        if (name.startswith("tokens") and _COUNT_VALUE.fullmatch(value)) or _TOKENIZER_NAME.fullmatch(name):
+        if (name.startswith("tokens") and _COUNT_VALUE.fullmatch(value) and not _SECRET_WORD.search(name)) or _TOKENIZER_NAME.fullmatch(name):
             continue  # `Tokens: 1523`, `max_tokens: 4096`, `tokenizer: gpt2`: counts and model names, not secrets
         if name == "pwd" and value[:1] in ("/", "~"):
             continue  # the shell's working-directory variable
@@ -552,7 +556,7 @@ def cmd_explain(args, env=None, stdin=None) -> int:
                 print("groundwork copilot: reading standard input; paste or pipe the output, then press Ctrl-D", file=sys.stderr)
             stdin_text = read_tail(fp)
         label, facts, output, redactions = gather(env, args.stdin, lines, stdin_text)
-        question = redact(" ".join(clean_text(args.question or "").split()))[0][:500]  # redact first, then cut: a token straddling the cut stays recognisable
+        question = redact(" ".join(clean_text((args.question or "")[:20_000]).split()))[0][:500]  # redact first, then cut: a token straddling the cut stays recognisable
         redactions += len(_REDACTED_MARK.findall(question))
         question = question or "What went wrong, and what should I check next?"
         boundary = secrets.token_hex(8)
