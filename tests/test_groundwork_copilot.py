@@ -1123,6 +1123,10 @@ def test_round9_review_fixes() -> None:
                    "a benign first word in a long quoted value": 'secret: "unknown ' + "y" * 72 + 'ZZR10"'}
     leaked = [k for k, v in quoted_long.items() if "ZZR10" in m.redact(v)[0]]
     check("a value opened with a quote whose closer is past the probe is read in full (escaped JSON, long phrases, a benign or empty first word)", not leaked, str(leaked))
+    t0 = time.monotonic()
+    m.redact("password: '" + "x " * 30000)
+    m.redact('secret: "' + "y" * 59000)
+    check("a quote-opened value with no closer is read in full in linear time (under half a second on 60 KB)", time.monotonic() - t0 < 0.5, f"{time.monotonic() - t0:.2f}s")
     check("a long value is never taken for a count: digits first, then letters",
           "ZZR9" not in m.redact("tokens: " + "1" * 70 + "ZZR9")[0] and m.redact("tokens: 4096")[0] == "tokens: 4096")
     check("exempt names and values stay readable, a secret flag inside an exempt value is still redacted",
