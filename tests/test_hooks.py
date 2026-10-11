@@ -653,7 +653,7 @@ def test_snapshot_worktrees() -> None:
         text = "\n".join(lines)
         check("summary counts each kind",
               lines[0].startswith("other worktrees of this repository: 5 with uncommitted changes, unpushed commits or no upstream, "
-                                  "1 clean and pushed, 1 with a missing or unusable directory (git worktree prune)"), lines[0])
+                                  "1 clean and pushed, 1 with a missing or unusable directory (check the location first; git worktree prune forgets it)"), lines[0])
         check("dirty sibling: branch, short HEAD, uncommitted counts, upstream state",
               re.search(r"wt-dirty: feat/wt-dirty @ [0-9a-f]{7}; 0 modified, 2 untracked; 0 ahead / 0 behind upstream", text) is not None, text)
         check("unpushed commit is reported as ahead",
@@ -770,9 +770,18 @@ def test_snapshot_worktrees() -> None:
               elapsed < 1.3 + 0.6 and any("not examined" in l for l in lines), f"{elapsed:.2f}s " + "\n".join(lines))
         mod.HOOK_DEADLINE_SECONDS = 8.0
         mod._T0 = time.monotonic() - 100.0
-        started = time.monotonic()
-        check("once the hook-level deadline has passed no git call is made and nothing is printed",
-              mod.worktree_facts(str(repo)) == [] and time.monotonic() - started < 0.2)
+        logshim = tmp / "logshim"
+        logshim.mkdir()
+        calls_log = tmp / "gitcalls.log"
+        (logshim / "git").write_text(f'#!/bin/sh\necho "$*" >> {calls_log}\nexec {shutil.which("git")} "$@"\n')
+        (logshim / "git").chmod(0o755)
+        os.environ["PATH"] = f"{logshim}:{old_path}"
+        try:
+            late = mod.worktree_facts(str(repo))
+        finally:
+            os.environ["PATH"] = old_path
+        check("once the hook-level deadline has passed no git process is started and nothing is printed",
+              late == [] and not calls_log.exists(), f"{late} {calls_log.read_text() if calls_log.exists() else ''}")
         mod._T0 = time.monotonic()
         mod.HOOK_DEADLINE_SECONDS = 10_000.0
 
@@ -934,16 +943,86 @@ def test_snapshot_worktrees_edge_cases() -> None:
         slow.mkdir()
         (slow / "git").write_text('#!/bin/sh\ncase "$*" in *"status"*) sleep 2.5;; esac\nexec ' + shutil.which("git") + ' "$@"\n')
         (slow / "git").chmod(0o755)
+        unreadable_before = re.search(r"(\d+) whose state git could not read", "\n".join(mod.worktree_facts(str(base))))
         os.environ["PATH"] = f"{slow}:{old_path}"
         try:
             mod.WORKTREE_BUDGET_SECONDS = 1.0
             started = time.monotonic()
-            mod.worktree_facts(str(base))
+            cut = mod.worktree_facts(str(base))
             elapsed = time.monotonic() - started
         finally:
             os.environ["PATH"] = old_path
             mod.WORKTREE_BUDGET_SECONDS = 3.0
         check("a single git call slower than the budget is cut at the budget, not allowed to run its full timeout", elapsed < 1.0 + 0.7, f"{elapsed:.2f}s")
+        check("and a call cut by the deadline is 'not examined', never 'could not read'",
+              bool(cut) and "not examined" in cut[0]
+              and (re.search(r"(\d+) whose state git could not read", cut[0]) or [None, "0"])[1] == (unreadable_before.group(1) if unreadable_before else "0"),
+              "\n".join(cut))
+
+        # --- the section never pushes the other facts out of the size cap
+        crowd = mk(tmp / "crowd")
+        (crowd / "Makefile").write_text("test:\n\tpytest\nlint:\n\truff check .\nbuild:\n\tdocker build .\n")
+        (crowd / ".gitignore").write_text(".claude/worktrees/\n")
+        for i in range(1, 5):
+            (crowd / "openspec" / "changes" / f"add-feature-{i}").mkdir(parents=True)
+            (crowd / "openspec" / "changes" / f"add-feature-{i}" / "tasks.md").write_text("- [x] 1\n- [ ] 2\n")
+        git(crowd, "add", "-A")
+        git(crowd, "commit", "-q", "-m", "layout")
+        for h in ("a2f7432b9f920166d", "a51105055062eee94", "afbddee6cbb0b6de7"):
+            wt = crowd / ".claude" / "worktrees" / f"agent-{h}"
+            git(crowd, "worktree", "add", "-q", "-b", f"worktree-agent-{h}", str(wt))
+            (wt / "new.py").write_text("w")
+        real_wf = mod.worktree_facts
+        mod.worktree_facts = lambda cwd, budget=None: []
+        without = mod.build_snapshot(str(crowd))
+        mod.worktree_facts = real_wf
+        full_section = "\n".join(real_wf(str(crowd)))
+        saved_cap = mod.MAX_CHARS
+        mod.MAX_CHARS = len(without) + 300  # room for the summary line and an overflow line, not for the rows
+        check("premise: the other facts fit under the cap and the full section would not (so the test can fail)",
+              len(without) < mod.MAX_CHARS and len(without) + 1 + len(full_section) > mod.MAX_CHARS, f"{len(without)} + {len(full_section)}")
+        crowded = mod.build_snapshot(str(crowd))
+        capped_at = mod.MAX_CHARS
+        sec_lines = real_wf(str(crowd), budget=5000)
+        mod.MAX_CHARS = len(without) + 1 + len(sec_lines[0]) + 1 + len(sec_lines[1]) + 10  # one row fits, row + overflow line does not
+        tight = mod.build_snapshot(str(crowd))
+        tight_cap = mod.MAX_CHARS
+        mod.MAX_CHARS = saved_cap
+        check("with worktree rows to show, the snapshot still has the verification commands and the closing instruction, uncut",
+              "verification commands" in crowded and 'On "continue this project"' in crowded
+              and "snapshot truncated" not in crowded and len(crowded) <= capped_at and "other worktrees of this repository:" in crowded,
+              f"{len(crowded)} chars; tail: {crowded[-160:]!r}")
+        check("the budget covers the whole section: when a row would leave no room for the '… N more' line, the row is not shown",
+              "snapshot truncated" not in tight and len(tight) <= tight_cap and 'On "continue this project"' in tight, f"{len(tight)} > {tight_cap}? tail: {tight[-200:]!r}")
+
+        # --- an empty .git directory is not a checkout: git would walk up and answer for the repository around it (also under a ':' path)
+        colon = mk(tmp / "c:olon" / "r")
+        cnest = colon / ".wt-nested"
+        git(colon, "worktree", "add", "-q", "-b", "feat/cn", str(cnest))
+        (cnest / ".git").unlink()
+        (cnest / ".git").mkdir()
+        lines = mod.worktree_facts(str(colon))
+        check("a sibling with an empty .git directory, under a path containing ':', is unreadable, not the parent's state",
+              bool(lines) and "1 whose state git could not read" in lines[0] and not any(".wt-nested:" in l for l in lines), "\n".join(lines))
+
+        # --- without `worktree list -z`, a newline in a path cannot forge an entry: the listing is reported as ambiguous
+        nz = tmp / "nozgit"
+        nz.mkdir()
+        (nz / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = "-z" ] && { echo "error: unknown switch z" >&2; exit 129; }; done\nexec ' + shutil.which("git") + ' "$@"\n')
+        (nz / "git").chmod(0o755)
+        nzbase = mk(tmp / "nzbase")
+        victim = tmp / "nzvictim"
+        git(nzbase, "worktree", "add", "-q", "-b", "feat/victim", str(victim))
+        evil_nl = tmp / ("nzevil\nworktree " + str(victim) + "\nHEAD 0000000\nbranch refs/heads/FORGED")
+        git(nzbase, "worktree", "add", "-q", "-b", "feat/evilnl", str(evil_nl))
+        saved_path2 = os.environ["PATH"]
+        os.environ["PATH"] = f"{nz}:{saved_path2}"
+        try:
+            lines = mod.worktree_facts(str(nzbase))
+        finally:
+            os.environ["PATH"] = saved_path2
+        check("no -z and a forged-looking path: reported as ambiguous, nothing forged is shown",
+              len(lines) == 1 and "ambiguous" in lines[0] and "FORGED" not in lines[0], "\n".join(lines))
 
         # --- the section can never cost the rest of the snapshot
         def boom(cwd):

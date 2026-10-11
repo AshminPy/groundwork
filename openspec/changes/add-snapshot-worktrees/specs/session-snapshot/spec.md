@@ -37,7 +37,7 @@ The snapshot SHALL list each other worktree of the repository that has uncommitt
 - **THEN** it is counted as unreadable or unusable and the surrounding repository's state is not reported as the sibling's
 
 ### Requirement: Bounded, data-framed and fail-open
-The section SHALL examine at most 12 worktrees, list at most 3 within a 700-character budget (counting the overflow), start every git call (the listing included) before one deadline — 3 seconds after the section starts or 8 seconds after the hook starts, whichever is earlier — with each call's timeout clamped to the time left, report worktrees it did not examine, read siblings without taking optional locks (so their indexes are not rewritten) and without letting git search above them for a repository, decode git's output so a path that is not valid UTF-8 is examined rather than reported as missing, pass every path and branch name through the snapshot's control-character stripping and length caps (cutting a long path from the left so its distinguishing end stays visible), read the listing NUL-separated when git supports it, never let an exception in the section affect the rest of the snapshot, sit inside the snapshot's data envelope, and print nothing when git fails or the directory is not a repository.
+The section SHALL be built after the other snapshot facts and take at most the room they leave under the snapshot's character cap, so it never displaces the verification commands or the closing instruction; it SHALL examine at most 12 worktrees, list at most 3 within a 700-character budget that covers the summary, the rows and the overflow line, start every git call (the listing included) before one deadline — 3 seconds after the section starts or 8 seconds after the hook starts, whichever is earlier — with each call's timeout clamped to the time left, report worktrees it did not examine, read siblings without taking optional locks (so their indexes are not rewritten), count a directory whose `.git` is an empty directory as unreadable instead of running git in it, treat a listing without `-z` that has a repeated key in one block as ambiguous and say so, decode git's output so a path that is not valid UTF-8 is examined rather than reported as missing, pass every path and branch name through the snapshot's control-character stripping and length caps (cutting a long path from the left so its distinguishing end stays visible), read the listing NUL-separated when git supports it, never let an exception in the section affect the rest of the snapshot, sit inside the snapshot's data envelope, and print nothing when git fails or the directory is not a repository.
 
 #### Scenario: More than three with unpushed work
 - **WHEN** nine other worktrees hold unpushed work
@@ -50,6 +50,14 @@ The section SHALL examine at most 12 worktrees, list at most 3 within a 700-char
 #### Scenario: Hook deadline already passed
 - **WHEN** the hook has already run for longer than its deadline
 - **THEN** the section makes no git call and prints nothing
+
+#### Scenario: Other facts are never displaced
+- **WHEN** the repository has a Makefile, several OpenSpec changes and three sibling worktrees with uncommitted files, and the character cap leaves room for the summary line and one row but not for a row plus its "… N more" line
+- **THEN** the snapshot still contains the verification commands and the closing instruction, is not cut by the cap, and shows the summary without the row
+
+#### Scenario: A listing that cannot be trusted
+- **WHEN** git rejects `-z` and a worktree path contains a newline followed by text shaped like another entry
+- **THEN** one line says the listing is ambiguous and no entry from it is shown
 
 #### Scenario: Long branch name and hostile path
 - **WHEN** a sibling's branch name is 100 characters long, or its path contains newlines and text shaped like another listing entry

@@ -1,13 +1,28 @@
 """Mutation check for the snapshot hook's worktree section: each mutant removes one safety or bounding clause and
-tests/test_hooks.py (-k worktrees) must then fail. Run from the repository root:
+tests/test_hooks.py (-k worktrees) must then fail. A mutant that makes the tests hang counts as caught. Run from the
+repository root:
 
     python3 tests/mutation/mutate_snapshot_worktrees.py
 
-The hook file is rewritten for every mutant and restored afterwards; do not edit it, or run other tests, while this
-runs. Not collected by pytest (the name does not start with test_)."""
-import subprocess, sys
+It works on a COPY of the tracked files in a temporary directory, so the working tree is never modified and an
+interrupted run cannot leave a mutated hook behind. Not collected by pytest (the name does not start with test_)."""
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-T = Path("hooks/groundwork_session_snapshot.py"); ORIG = T.read_text()
+
+ROOT = Path.cwd()
+WORK = Path(tempfile.mkdtemp(prefix="gw-mutate-snapshot-"))
+files = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True).stdout.split(b"\0")
+for rel in filter(None, files):
+    src = ROOT / rel.decode()
+    if src.is_file():
+        dst = WORK / rel.decode()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+T = WORK / "hooks" / "groundwork_session_snapshot.py"
+ORIG = T.read_text()
 M = [
  ("no deadline check", 'if left <= 0:\n            return _NO_TIME', 'if False:\n            return _NO_TIME'),
  ("git failure counted as pushed", 'elif state is None:\n            unreadable += 1', 'elif state is None:\n            pushed += 1'),
@@ -16,12 +31,11 @@ M = [
  ("owner checkout not examined", 'state_path = owner  # another checkout of the same repository, found through its git directory', 'continue'),
  ("index rewritten", 'env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}', 'env = None'),
  ("newline forges entry", 'records = listing.split("\\0") if nul else listing.splitlines()', 'records = listing.replace("\\0", "\\n").splitlines()'),
- ("no char budget", 'if used + len(row) > MAX_WORKTREE_CHARS:', 'if False:'),
+ ("no char budget", 'if used + 1 + len(row) + OVERFLOW_LINE_CHARS > budget:', 'if False:'),
  ("no examined cap", 'if examined >= MAX_WORKTREES_EXAMINED:', 'if False:'),
  ("strict decode of git output", 'text=True, errors=errors, timeout=timeout', 'text=True, timeout=timeout'),
  ("surrogates not preserved", 'env=call_env, errors="surrogateescape")', 'env=call_env, errors="replace")'),
- ("nested orphan trusted (no ceiling)", 'call_env = {**env, "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(path))}', 'call_env = env'),
- ("no .git check", 'if not os.path.exists(os.path.join(path, ".git")):', 'if False:'),
+ ("no .git check", 'if not os.path.exists(dot_git):', 'if False:'),
  ("no hook-level deadline", 'deadline = min(time.monotonic() + WORKTREE_BUDGET_SECONDS, _T0 + HOOK_DEADLINE_SECONDS)', 'deadline = time.monotonic() + WORKTREE_BUDGET_SECONDS'),
  ("gone upstream not named", '"upstream branch gone" if gone else', '"no upstream tracking branch" if gone else'),
  ("no listed cap", 'for row in local_only[:MAX_WORKTREES_LISTED]:', 'for row in local_only:'),
@@ -37,18 +51,33 @@ M = [
  ("bare repos listed", 'if "bare" not in e]', 'if True]'),
  ("locked not separated", 'if "locked" in entry:\n                locked_missing += 1', 'if False:\n                locked_missing += 1'),
  ("branch not clipped", '{_clip_path(branch, 40)}', '{branch}'),
+ ("section ignores the room left under the cap", 'worktree_facts(cwd, budget=min(MAX_WORKTREE_CHARS, max(0, room)))', 'worktree_facts(cwd)'),
+ ("overflow line not reserved", 'if used + 1 + len(row) + OVERFLOW_LINE_CHARS > budget:', 'if used + 1 + len(row) > budget:'),
+ ("deadline kill reported as unreadable", 'if out is None and time.monotonic() >= deadline:', 'if False:'),
+ ("empty .git directory trusted", 'if os.path.exists(dot_git) and not (os.path.isfile(dot_git) or os.path.isfile(os.path.join(dot_git, "HEAD"))):', 'if False:'),
+ ("ambiguous listing guessed", 'if key in current:\n            raise ValueError("ambiguous listing")', 'if False:\n            raise ValueError("ambiguous listing")'),
+ ("budget default bound at definition", 'budget = MAX_WORKTREE_CHARS if budget is None else budget', 'budget = 700 if budget is None else budget'),
 ]
+
 surv = []
 for name, old, new in M:
-    t = T.read_text()
+    t = ORIG
     if old not in t:
-        print("SKIP", name); surv.append(name + " [not found]"); continue
+        print(f"STALE (pattern not found): {name}")
+        surv.append(name + " [pattern not found]")
+        continue
     T.write_text(t.replace(old, new, 1))
     try:
-        r = subprocess.run([sys.executable, "-m", "pytest", "tests/test_hooks.py", "-q", "-k", "worktrees", "-x"], capture_output=True, text=True, timeout=300)
-        caught = r.returncode != 0
+        r = subprocess.run([sys.executable, "-m", "pytest", "tests/test_hooks.py", "-q", "-k", "worktrees", "-x"], cwd=WORK,
+                           capture_output=True, text=True, timeout=300)
+        caught, how = r.returncode != 0, "caught   "
+    except subprocess.TimeoutExpired:
+        caught, how = True, "caught (timeout) "
     finally:
         T.write_text(ORIG)
-    print(("caught   " if caught else "SURVIVED ") + name, flush=True)
-    if not caught: surv.append(name)
-print(f"{len(M)-len(surv)}/{len(M)} caught; survivors: {surv}")
+    print((how if caught else "SURVIVED ") + name, flush=True)
+    if not caught:
+        surv.append(name)
+shutil.rmtree(WORK, ignore_errors=True)
+print(f"{len(M) - len(surv)}/{len(M)} caught; survivors: {surv}")
+sys.exit(1 if surv else 0)

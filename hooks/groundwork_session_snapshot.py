@@ -57,7 +57,8 @@ MAX_RECENT_COMMITS = 5
 MAX_CHANGES = 8
 MAX_WORKTREES_LISTED = 3  # worktrees with unpushed/uncommitted work shown; the rest are counted
 MAX_WORKTREES_EXAMINED = 12  # worktrees whose state is read at all (one git call each)
-MAX_WORKTREE_CHARS = 700  # size budget for the whole section, so it cannot crowd out the other facts
+MAX_WORKTREE_CHARS = 700  # most the whole section may take (summary, rows, overflow line); build_snapshot() lowers it to the room left
+OVERFLOW_LINE_CHARS = 48  # room kept for the '… N more' line so the budget covers the whole section
 WORKTREE_BUDGET_SECONDS = 3.0  # wall-clock for the whole section, including the listing
 HOOK_DEADLINE_SECONDS = 8.0  # the section never runs past this many seconds after hook start (shipped hook timeout: 10 s)
 _T0 = time.monotonic()  # hook process start
@@ -173,6 +174,8 @@ def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
             current = {}
             continue
         key, _, value = record.partition(" ")
+        if key in current:
+            raise ValueError("ambiguous listing")  # without -z a newline inside a path can forge a block
         current[key] = value
     return entries
 
@@ -180,7 +183,7 @@ def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
 def _sibling_state(path: str, run) -> tuple | None | object:
     """(modified, untracked, upstream description, work_not_on_a_remote) from ONE `git status -b` call, or None
     when git could not read the checkout, or _NO_TIME when the deadline passed first."""
-    out = run(path, "status", "--porcelain", "-b", "--untracked-files=all", sibling=True)
+    out = run(path, "status", "--porcelain", "-b", "--untracked-files=all")
     if out is _NO_TIME or out is None:
         return out
     lines = out.splitlines()
@@ -201,7 +204,7 @@ def _sibling_state(path: str, run) -> tuple | None | object:
     return modified, untracked, upstream, unshared
 
 
-def worktree_facts(cwd: str) -> list[str]:
+def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
     """Other worktrees of this repository with uncommitted changes, commits no upstream has, or no upstream —
     work a fresh session cannot see from this checkout, and that is lost with an ephemeral machine. Facts only:
     `git worktree list --porcelain -z`, then one `git status -b` per worktree. Clean, level-with-upstream worktrees
@@ -210,18 +213,18 @@ def worktree_facts(cwd: str) -> list[str]:
     every git call (the listing included) must start before one deadline — WORKTREE_BUDGET_SECONDS from the start
     of the section or HOOK_DEADLINE_SECONDS from the start of the hook, whichever is earlier — with its timeout
     clamped to the time left. Any failure -> nothing."""
+    budget = MAX_WORKTREE_CHARS if budget is None else budget  # read now, not when the function was defined
     deadline = min(time.monotonic() + WORKTREE_BUDGET_SECONDS, _T0 + HOOK_DEADLINE_SECONDS)
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}  # reading siblings must not rewrite their indexes
 
-    def run(path, *args, sibling=False):
+    def run(path, *args):
         left = deadline - time.monotonic()
         if left <= 0:
-            return _NO_TIME
-        call_env = env
-        if sibling:
-            # a directory that is not itself a checkout must not be answered for by the repository around it
-            call_env = {**env, "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(path))}
-        return git(path, *args, timeout=min(GIT_TIMEOUT, left), env=call_env, errors="surrogateescape")
+            return _NO_TIME  # no git process is started once the deadline has passed
+        out = git(path, *args, timeout=min(GIT_TIMEOUT, left), env=env, errors="surrogateescape")
+        if out is None and time.monotonic() >= deadline:
+            return _NO_TIME  # cut by the deadline: not examined, which is different from unreadable
+        return out
 
     listing = run(cwd, "worktree", "list", "--porcelain", "-z")
     nul = True
@@ -229,7 +232,10 @@ def worktree_facts(cwd: str) -> list[str]:
         listing, nul = run(cwd, "worktree", "list", "--porcelain"), False
     if listing is None or listing is _NO_TIME:
         return []
-    entries = [e for e in _parse_worktrees(listing, nul) if "bare" not in e]
+    try:
+        entries = [e for e in _parse_worktrees(listing, nul) if "bare" not in e]
+    except ValueError:
+        return ["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"]
     if len(entries) < 2:
         return []  # a single checkout: nothing else to report
     top = run(cwd, "rev-parse", "--show-toplevel")
@@ -254,14 +260,18 @@ def worktree_facts(cwd: str) -> list[str]:
             unexamined += 1
             continue
         state_path = path
-        if not os.path.exists(os.path.join(path, ".git")):
+        dot_git = os.path.join(path, ".git")
+        if os.path.exists(dot_git) and not (os.path.isfile(dot_git) or os.path.isfile(os.path.join(dot_git, "HEAD"))):
+            unreadable += 1  # an empty .git directory: git would walk up and answer for the repository around it
+            continue
+        if not os.path.exists(dot_git):
             # Not a checkout root: either the repository's own git directory listed as its main worktree (this
             # session's checkout when it is a submodule or uses --separate-git-dir) or an orphaned directory nested
             # inside another repository (git would silently answer for the parent).
             if own_git_dir is not None and os.path.realpath(path) == own_git_dir:
                 continue
             if os.path.isfile(os.path.join(path, "HEAD")) and os.path.isdir(os.path.join(path, "objects")):
-                owner = run(path, "rev-parse", "--show-toplevel", sibling=True)
+                owner = run(path, "rev-parse", "--show-toplevel")
                 if owner is _NO_TIME:
                     unexamined += 1
                     continue
@@ -291,7 +301,7 @@ def worktree_facts(cwd: str) -> list[str]:
         return []
     parts = [f"{len(local_only)} with uncommitted changes, unpushed commits or no upstream", f"{pushed} clean and pushed"]
     if missing:
-        parts.append(f"{missing} with a missing or unusable directory (git worktree prune)")
+        parts.append(f"{missing} with a missing or unusable directory (check the location first; git worktree prune forgets it)")
     if locked_missing:
         parts.append(f"{locked_missing} locked with a missing or unusable directory (locked on purpose; check the location before unlocking)")
     if unreadable:
@@ -301,10 +311,10 @@ def worktree_facts(cwd: str) -> list[str]:
     lines = [f"other worktrees of this repository: {', '.join(parts)} (all: git worktree list)"]
     used, shown = len(lines[0]), 0
     for row in local_only[:MAX_WORKTREES_LISTED]:
-        if used + len(row) > MAX_WORKTREE_CHARS:
+        if used + 1 + len(row) + OVERFLOW_LINE_CHARS > budget:
             break
         lines.append(row)
-        used += len(row)
+        used += 1 + len(row)
         shown += 1
     if len(local_only) > shown:
         lines.append(f"  … {len(local_only) - shown} more (run: git worktree list)")
@@ -546,18 +556,22 @@ def build_snapshot(cwd: str) -> str:
     lines += investigation_facts(cwd)
     lines += git_lines or ["git: not a git repository"]
     lines += spec_lines
-    if git_lines:
-        try:
-            lines += worktree_facts(cwd)
-        except Exception:
-            pass  # this section must never cost the rest of the snapshot
     lines += signal_facts(cwd)
     lines += command_facts(cwd)
-    lines.append(DATA_END)
-    lines.append(
+    closing = [
+        DATA_END,
         'On "continue this project": follow engineering-workflow.md §7 — reconstruct the '
-        "DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED table from the repository before changing anything."
-    )
+        "DONE / PARTIAL / MISSING / BLOCKED / UNVERIFIED table from the repository before changing anything.",
+    ]
+    if git_lines:
+        # The worktree rows come LAST and get only the room the other facts leave under MAX_CHARS, so they can never
+        # push the verification commands or the closing instruction out of the cap (found by independent review).
+        room = MAX_CHARS - len("\n".join(lines + closing)) - 1  # the newline that joins the section to the rest
+        try:
+            lines += worktree_facts(cwd, budget=min(MAX_WORKTREE_CHARS, max(0, room)))
+        except Exception:
+            pass  # this section must never cost the rest of the snapshot
+    lines += closing
     text = "\n".join(lines)
     if len(text) > MAX_CHARS:
         marker = f"{DATA_END}\n[snapshot truncated at {MAX_CHARS} chars — run git status / openspec list for the rest]"

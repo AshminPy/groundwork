@@ -9,5 +9,6 @@
 - [x] 2.3 Run against this repository's real worktrees (listed the two with local-only work; the six pushed ones counted)
 - [x] 2.4 Full suite and `openspec validate --all --strict` against the main baseline
 - [x] 2.5 Independent fresh-context review (3 MUST FIX: unbounded budget, failures shown as clean, submodule listing itself); all fixed
-- [x] 2.6 Confirmation review (1 MUST FIX: a `--separate-git-dir` session counted its own checkout as unreadable; nice-to-haves: submodule owner checkout, ceiling directories, non-UTF-8 paths, left-clipped paths); all fixed
-- [ ] 2.7 Fresh confirmation review of the fixes from 2.6
+- [x] 2.6 Confirmation review (1 MUST FIX: a `--separate-git-dir` session counted its own checkout as unreadable; nice-to-haves: submodule owner checkout, non-UTF-8 paths, left-clipped paths); all fixed
+- [x] 2.7 Fresh confirmation review of the fixes from 2.6 (1 MUST FIX: the section could push the verification commands and the closing instruction out of the 2,500-character cap; fixed by building it last with only the room left. Nice-to-haves fixed: empty `.git` directory under a `:` path, deadline-killed call counted as unreadable, forged entry without `-z`, prune advice, overflow line outside the budget. Not changed: left-clipped branch names, linked worktree of a separate-git-dir repository; both documented)
+- [ ] 2.8 Fresh confirmation review of the fixes from 2.7
