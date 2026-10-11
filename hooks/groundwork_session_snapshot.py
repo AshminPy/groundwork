@@ -55,9 +55,13 @@ MAX_CHARS = 2500
 GIT_TIMEOUT = 3
 MAX_RECENT_COMMITS = 5
 MAX_CHANGES = 8
-MAX_WORKTREES_LISTED = 4  # worktrees with local-only work shown; the rest are counted
-MAX_WORKTREES_EXAMINED = 12  # worktrees whose state is read at all (each costs a few git calls)
-WORKTREE_BUDGET_SECONDS = 4.0  # wall-clock for the whole worktree section (each git call also has GIT_TIMEOUT)
+MAX_WORKTREES_LISTED = 3  # worktrees with unpushed/uncommitted work shown; the rest are counted
+MAX_WORKTREES_EXAMINED = 12  # worktrees whose state is read at all (one git call each)
+MAX_WORKTREE_CHARS = 700  # size budget for the whole section, so it cannot crowd out the other facts
+WORKTREE_BUDGET_SECONDS = 3.0  # wall-clock for the whole section, including the listing
+HOOK_DEADLINE_SECONDS = 8.0  # the section never runs past this many seconds after hook start (shipped hook timeout: 10 s)
+_T0 = time.monotonic()  # hook process start
+_NO_TIME = object()  # sentinel: the deadline passed before a git call could start
 MAX_WALK_DIRS = 400  # bound on directories visited per IaC root when discovering Terraform
 MAX_INVESTIGATION_CHARS = 800  # keeps one oversized investigation file from crowding out git/OpenSpec facts
 
@@ -108,10 +112,10 @@ def strip_control_chars(text: str) -> str:
     return MULTILINE_CONTROL_CHARS.sub("", text)
 
 
-def git(cwd: str, *args: str):
+def git(cwd: str, *args: str, timeout: float = GIT_TIMEOUT, env: dict | None = None):
     try:
         result = subprocess.run(
-            ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT
+            ["git", "-C", cwd, *args], capture_output=True, text=True, errors="replace", timeout=timeout, env=env
         )
     except Exception:
         return None
@@ -150,57 +154,141 @@ def git_facts(cwd: str) -> list[str]:
     return lines
 
 
-def worktree_facts(cwd: str) -> list[str]:
-    """Other worktrees of this repository that hold work existing only on this machine
-    (uncommitted changes, commits no upstream has, or no upstream at all). Such work is invisible
-    to `git status`/`git log` in this checkout, so without this line a fresh session cannot know
-    it exists. Facts only: `git worktree list --porcelain` plus the same per-checkout state as
-    the git line; clean, fully-pushed worktrees are counted, not listed. Bounded in worktrees
-    examined, lines shown and wall-clock time; any failure -> nothing."""
-    listing = git(cwd, "worktree", "list", "--porcelain")
-    if not listing:
-        return []
-    here = os.path.realpath(git(cwd, "rev-parse", "--show-toplevel") or cwd)
+def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
+    """Blocks of `git worktree list --porcelain`: key/value pairs, blocks separated by an empty record.
+    With -z records are NUL-separated, so a newline inside a path cannot forge an entry."""
+    records = listing.split("\0") if nul else listing.splitlines()
     entries, current = [], {}
-    for line in listing.splitlines() + [""]:
-        if not line.strip():
+    for record in records + [""]:
+        if not record.strip():
             if current.get("worktree"):
                 entries.append(current)
             current = {}
             continue
-        key, _, value = line.partition(" ")
+        key, _, value = record.partition(" ")
         current[key] = value
-    others = [e for e in entries if "bare" not in e and os.path.realpath(e["worktree"]) != here]
-    deadline = time.monotonic() + WORKTREE_BUDGET_SECONDS
-    local_only, pushed, missing, unexamined = [], 0, 0, 0
-    for entry in others:
+    return entries
+
+
+def _sibling_state(path: str, run) -> tuple | None | object:
+    """(modified, untracked, upstream description, work_not_on_a_remote) from ONE `git status -b` call, or None
+    when git could not read the checkout, or _NO_TIME when the deadline passed first."""
+    out = run(path, "status", "--porcelain", "-b", "--untracked-files=all")
+    if out is _NO_TIME or out is None:
+        return out
+    lines = out.splitlines()
+    if not lines or not lines[0].startswith("## "):
+        return None
+    header, rows = lines[0], [line for line in lines[1:] if line.strip()]
+    untracked = sum(1 for line in rows if line.startswith("??"))
+    modified = len(rows) - untracked
+    has_upstream, gone = "..." in header, "[gone]" in header
+    ahead = re.search(r"ahead (\d+)", header)
+    behind = re.search(r"behind (\d+)", header)
+    if has_upstream and not gone:
+        upstream = f"{ahead.group(1) if ahead else 0} ahead / {behind.group(1) if behind else 0} behind upstream"
+        unshared = bool(rows) or bool(ahead)
+    else:
+        upstream = "upstream branch gone" if gone else "no upstream tracking branch"
+        unshared = True
+    return modified, untracked, upstream, unshared
+
+
+def worktree_facts(cwd: str) -> list[str]:
+    """Other worktrees of this repository with uncommitted changes, commits no upstream has, or no upstream —
+    work a fresh session cannot see from this checkout, and that is lost with an ephemeral machine. Facts only:
+    `git worktree list --porcelain -z`, then one `git status -b` per worktree. Clean, level-with-upstream worktrees
+    are counted, not listed; a worktree git could not read is counted as such (never reported as clean).
+    Bounded: at most MAX_WORKTREES_EXAMINED examined, MAX_WORKTREES_LISTED listed, MAX_WORKTREE_CHARS of output, and
+    every git call (the listing included) must start before one deadline — WORKTREE_BUDGET_SECONDS from the start
+    of the section or HOOK_DEADLINE_SECONDS from the start of the hook, whichever is earlier — with its timeout
+    clamped to the time left. Any failure -> nothing."""
+    deadline = min(time.monotonic() + WORKTREE_BUDGET_SECONDS, _T0 + HOOK_DEADLINE_SECONDS)
+    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}  # reading siblings must not rewrite their indexes
+
+    def run(path, *args):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return _NO_TIME
+        return git(path, *args, timeout=min(GIT_TIMEOUT, left), env=env)
+
+    listing = run(cwd, "worktree", "list", "--porcelain", "-z")
+    nul = True
+    if listing is None:  # git older than 2.36 has no -z
+        listing, nul = run(cwd, "worktree", "list", "--porcelain"), False
+    if listing is None or listing is _NO_TIME:
+        return []
+    entries = [e for e in _parse_worktrees(listing, nul) if "bare" not in e]
+    if len(entries) < 2:
+        return []  # a single checkout: nothing else to report
+    top = run(cwd, "rev-parse", "--show-toplevel")
+    if top is None or top is _NO_TIME:
+        return []
+    here = os.path.realpath(top)
+    local_only, pushed, missing, locked_missing, unreadable, unexamined = [], 0, 0, 0, 0, 0
+    examined = 0
+    for entry in entries:
         path = entry["worktree"]
-        if not os.path.isdir(path):
-            missing += 1
+        if os.path.realpath(path) == here:
             continue
-        if len(local_only) + pushed >= MAX_WORKTREES_EXAMINED or time.monotonic() > deadline:
+        if "prunable" in entry or not os.path.isdir(path):
+            if "locked" in entry:
+                locked_missing += 1
+            else:
+                missing += 1
+            continue
+        if examined >= MAX_WORKTREES_EXAMINED:
             unexamined += 1
             continue
-        modified, untracked, upstream, unshared = branch_state(path)
-        if not unshared:
-            pushed += 1
+        if not os.path.exists(os.path.join(path, ".git")):
+            # Not a checkout root: either the repository's own git directory listed as its main worktree (a
+            # submodule or --separate-git-dir session: that IS this checkout) or an orphaned directory nested
+            # inside another repository (git would silently answer for the parent).
+            if os.path.isfile(os.path.join(path, "HEAD")) and os.path.isdir(os.path.join(path, "objects")):
+                owner = run(path, "rev-parse", "--show-toplevel")
+                if owner is _NO_TIME:
+                    unexamined += 1
+                elif owner is not None and os.path.realpath(owner) == here:
+                    continue
+                else:
+                    unreadable += 1
+            else:
+                unreadable += 1
             continue
-        branch = entry.get("branch", "").removeprefix("refs/heads/") or "detached HEAD"
-        state = f"{modified} modified, {untracked} untracked" if modified or untracked else "clean"
-        local_only.append(
-            f"  {clip(path, 100)}: {clip(branch, 60)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {state}; {upstream}"
-        )
-    if not local_only and not missing and not unexamined:
+        examined += 1
+        state = _sibling_state(path, run)
+        if state is _NO_TIME:
+            unexamined += 1
+        elif state is None:
+            unreadable += 1
+        elif not state[3]:
+            pushed += 1
+        else:
+            modified, untracked, upstream, _ = state
+            branch = entry.get("branch", "").removeprefix("refs/heads/") or "detached HEAD"
+            what = f"{modified} modified, {untracked} untracked" if modified or untracked else "clean"
+            local_only.append(f"  {clip(path, 90)}: {clip(branch, 40)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {what}; {upstream}")
+    if not (local_only or missing or locked_missing or unreadable or unexamined):
         return []
-    summary = [f"{len(local_only)} with work only on this machine", f"{pushed} clean and pushed"]
+    parts = [f"{len(local_only)} with uncommitted changes, unpushed commits or no upstream", f"{pushed} clean and pushed"]
     if missing:
-        summary.append(f"{missing} with a missing directory (git worktree prune)")
+        parts.append(f"{missing} with a missing directory (git worktree prune)")
+    if locked_missing:
+        parts.append(f"{locked_missing} locked with a missing directory (git worktree unlock, then prune)")
+    if unreadable:
+        parts.append(f"{unreadable} whose state git could not read")
     if unexamined:
-        summary.append(f"{unexamined} not examined")
-    lines = [f"other worktrees of this repository: {', '.join(summary)} (all: git worktree list)"]
-    lines += local_only[:MAX_WORKTREES_LISTED]
-    if len(local_only) > MAX_WORKTREES_LISTED:
-        lines.append(f"  … {len(local_only) - MAX_WORKTREES_LISTED} more (run: git worktree list)")
+        parts.append(f"{unexamined} not examined (time or count limit)")
+    lines = [f"other worktrees of this repository: {', '.join(parts)} (all: git worktree list)"]
+    used, shown = len(lines[0]), 0
+    for row in local_only[:MAX_WORKTREES_LISTED]:
+        if used + len(row) > MAX_WORKTREE_CHARS:
+            break
+        lines.append(row)
+        used += len(row)
+        shown += 1
+    if len(local_only) > shown:
+        lines.append(f"  … {len(local_only) - shown} more (run: git worktree list)")
     return lines
 
 

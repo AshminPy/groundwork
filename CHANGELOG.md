@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Session snapshot lists unpushed work in other worktrees**: a new session started in one checkout now sees other worktrees of the same repository that hold work existing only on this machine (uncommitted changes, commits no upstream has, or no upstream), with branch, short HEAD and state. Reproduced gap: eight worktrees existed, two held local-only work, and the snapshot mentioned none. Clean, fully pushed worktrees are only counted; nothing is printed when there is nothing to report. Bounded (12 examined, 4 listed, 4-second budget), fail-open, no new files or state. See `openspec/changes/add-snapshot-worktrees/`.
+- **Session snapshot lists unpushed work in other worktrees**: a new session started in one checkout now sees other worktrees of the same repository with uncommitted changes, commits no upstream has, or no upstream, with branch, short HEAD and state. Reproduced gap: eight worktrees existed, two held unpushed work, and the snapshot mentioned none. Clean, level-with-upstream worktrees are only counted; a worktree git could not read is counted as such, never as clean; nothing is printed when there is nothing to report; a submodule session never lists itself. Bounded (12 examined, 3 listed, 700 characters, one deadline of 3 s from the section start or 8 s from the hook start, each git call clamped to the time left), fail-open, no new files or state, siblings read with `GIT_OPTIONAL_LOCKS=0`. Two independent reviews found a budget that was not a real bound, failures reported as clean, and a submodule listing itself; all fixed. See `openspec/changes/add-snapshot-worktrees/`.
 
 ## 2.3.0 — 2026-09-30
 

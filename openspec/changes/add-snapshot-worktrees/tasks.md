@@ -8,4 +8,5 @@
 - [x] 2.2 Six mutation checks, all caught
 - [x] 2.3 Run against this repository's real worktrees (listed the two with local-only work; the six pushed ones counted)
 - [x] 2.4 Full suite and `openspec validate --all --strict` against the main baseline
-- [ ] 2.5 Independent fresh-context review; fix MUST FIX
+- [x] 2.5 Independent fresh-context review (3 MUST FIX: unbounded budget, failures shown as clean, submodule listing itself); all fixed
+- [ ] 2.6 Fresh confirmation review

@@ -4,17 +4,17 @@ Verified on this host (git 2.43.0): `git worktree list --porcelain` prints block
 
 ## Decisions
 
-DECISION            Surface only worktrees that hold work existing only on this machine; count the rest.
+DECISION            Surface only worktrees with uncommitted changes, unpushed commits or no upstream; count the rest, including those git could not read.
 EVIDENCE            Measured on this repository: listing all eight siblings pushed the snapshot to its 2,500-character cap and cut off the verification-command line; listing only the two with local-only work (six pushed ones counted) was 341 characters, the whole snapshot 2,349, and everything else was kept.
 WHY                 The value is "this work can be lost"; a clean, fully pushed worktree's work is on the remote and findable through branches and PRs. Alternatives that lost: list everything (noise, truncation); persist a model-written list of worktrees (a second source of truth that goes stale, which the repository state does not).
-TRADEOFFS           A fresh session sees nothing about pushed siblings beyond a count; a branch whose upstream was deleted counts as having no upstream (VERIFIED: `git rev-list @{upstream}...HEAD` exits 128 after the remote branch is pruned), which over-reports rather than hides.
+TRADEOFFS           A fresh session sees nothing about pushed siblings beyond a count; "No upstream" does not prove the commits are not on a remote (a fresh branch at a pushed commit is listed); the line says what it knows ("no upstream tracking branch", "upstream branch gone") rather than claiming the work is local-only. Over-reporting is accepted; hiding is not: a git failure, a timeout or a broken checkout is counted as "could not read", never as clean.
 VALIDATION METHOD   Real git repositories with a bare origin in tests (dirty, ahead, no-upstream, detached, missing directory, cap, exhausted budget), six mutation checks, a run against this repository's real worktrees.
-UNCERTAINTY         Locked or slow worktrees on network filesystems: the 4-second section budget and the 3-second per-call timeout bound the cost, but this is not tested on such a filesystem (RUNTIME VALIDATION REQUIRED there).
+UNCERTAINTY         A hard-mounted dead network path blocks in the kernel, where no Python timeout can interrupt it (the in-process `isdir`/`realpath` calls); the 10-second hook timeout then drops the whole snapshot. Not testable here (RUNTIME VALIDATION REQUIRED).
 
 ## Architecture-quality answers
 
 - **What changes / what is configuration?** The limits are module constants beside the existing ones; nothing is configurable because a larger listing would crowd out the other facts.
-- **Dependency unavailable?** `git` missing or failing: nothing printed for the section. A deleted worktree directory: counted as missing. The rest of the snapshot is unaffected (fail-open, as before).
+- **Dependency unavailable?** `git` missing or failing for the listing: nothing printed for the section. A sibling git cannot read, or whose directory is missing or has lost its `.git`: counted as such. The rest of the snapshot is unaffected (fail-open, as before).
 - **Observability?** The section is the observation; `git worktree list` is named in the line for the full picture.
-- **Security boundary?** Branch names and paths are attacker-controlled in a hostile repository: they pass through the existing `clip()` (control characters stripped, per-field cap) and sit inside the existing data envelope.
-- **Cost?** At most 12 worktrees x 2 git calls, time-boxed to 4 seconds in total; typically 0 to 2 worktrees exist.
+- **Security boundary?** Branch names and paths are attacker-controlled in a hostile repository: they pass through the existing `clip()` (control characters stripped, per-field cap) and sit inside the existing data envelope; the listing uses `-z` (NUL-separated) when git supports it so a newline in a path cannot forge an entry. Siblings are read with `GIT_OPTIONAL_LOCKS=0`; the hook runs no other command in them.
+- **Cost?** The listing, one `rev-parse`, and at most 12 x one `git status -b`, all started before one deadline (3 s from section start, 8 s from hook start; each call's timeout clamped to the time left). Typically 0 to 2 siblings exist. Measured: with every git call slowed by 0.4 s and a 1.3 s budget the section ended in about 1.5 s with the remainder counted as not examined (test).
