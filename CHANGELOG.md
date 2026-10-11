@@ -2,21 +2,16 @@
 
 ## Unreleased
 
-- **Jira can now report `CONNECTED`**: the Integration Catalog's Jira entry (`scripts/groundwork_integrations.py`)
-  gains a second access mechanism — Atlassian's official `acli` CLI (`acli jira auth status`) — alongside
-  the existing Atlassian MCP mechanism, following the same `shutil.which` + `subprocess` + timeout pattern
-  already used for GitHub's `gh` CLI check. Previously Jira could only ever show `AVAILABLE` at best, since
-  the only mechanism it had (Atlassian MCP) has no real connectivity probe implemented. **Known limitation,
-  documented rather than hidden**: `acli` was not installed in the environment this was implemented and
-  reviewed in, and the official Atlassian reference docs could not be fetched from there either (network
-  egress to `developer.atlassian.com` is blocked), so the exact success-marker substring `acli jira auth
-  status` prints on a real login could not be observed or confirmed from any source. Rather than invent a
-  plausible-looking string, the marker is left unset, so this check currently falls back to exit-code-only
-  success detection (`gh`'s own check additionally requires the literal substring `"Logged in to"` in its
-  output — a materially stronger guarantee). This is flagged `UNVERIFIED` here, in `docs/INTEGRATIONS.md`,
-  and in a code comment on the mechanism itself, pending a real `acli` install to observe its output and add
-  a matching marker. No credential is stored or read by this change — only `acli`'s own existing login state
-  is checked, exactly like the `gh` mechanism it mirrors.
+- **Jira's Atlassian CLI (`acli`) is now detected as an access mechanism**: the Integration Catalog's Jira
+  entry (`scripts/groundwork_integrations.py`) gains `acli` alongside the Atlassian MCP mechanism, so Jira
+  shows `AVAILABLE` when `acli` is on PATH. It deliberately does **not** report `CONNECTED`:
+  `acli` was not installed where this was built and the Atlassian reference pages were unreachable
+  (network egress blocked), so neither the `acli jira auth status` command nor its success output has
+  been observed (`UNVERIFIED`). Because a stub `acli` that prints "not logged in" and exits 0 was
+  reproduced as `CONNECTED` under the original exit-code-only design, the catalog now fails closed:
+  a mechanism with an auth command but no observed success marker is never `CONNECTED`. To enable it,
+  run the command on a real authenticated install, then set `cli_success_marker` to the observed
+  substring. No credential is stored or read by this change.
 
 ## 2.3.0 — 2026-09-30
 

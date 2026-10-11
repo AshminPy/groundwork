@@ -18,11 +18,12 @@ is forced to imply another:
               profile's cloud/platform/integrations lists in config.json).
   connected   a real reachability/authentication check for a specific mechanism actually ran and
               succeeded. Only ever set true by a check that actually ran; never inferred from
-              availability or configuration alone. Today two CLI mechanisms have one: GitHub's `gh`
-              CLI (`gh auth status`, the same command already trusted by groundwork_routines.py's
-              check_access()), and Jira's `acli` CLI (`acli jira auth status`, exit-code-only today —
-              see AccessMechanism.cli_success_marker's docstring on the Jira entry for why no success
-              marker is set yet). Every other mechanism's `connected` stays False, honestly, until a
+              availability or configuration alone. Today only the GitHub `gh` CLI mechanism can reach
+              it (`gh auth status` plus its observed success marker, the same command already trusted
+              by groundwork_routines.py's check_access()). Jira's `acli` CLI (`acli jira auth status`)
+              is declared but has no OBSERVED success marker yet, so it can only ever be AVAILABLE: a
+              mechanism with a cli_auth_cmd and no cli_success_marker is never CONNECTED (exit code 0
+              alone is not proof). Every other mechanism's `connected` stays False, honestly, until a
               real check for it is implemented.
 
 `used` is a separate, task/session observation (True / False / None-for-unknown), read from
@@ -84,7 +85,7 @@ class AccessMechanism:
     cli_binary: Optional[str] = None                  # presence check target for a "cli" mechanism
     mcp_server_name: Optional[str] = None              # presence-in-`claude mcp list` target for "mcp"
     cli_auth_cmd: Optional[Tuple[str, ...]] = None      # a REAL connectivity check; only set where one is safely known
-    cli_success_marker: Optional[str] = None            # required substring in cli_auth_cmd's output; exit code 0 alone is not proof
+    cli_success_marker: Optional[str] = None            # substring cli_auth_cmd's output must contain for CONNECTED; REQUIRED for any CONNECTED (None => never CONNECTED); exit code 0 alone is not proof
     # (`gh auth status` was observed, live, to exit 0 while printing "Failed to log in ... token is invalid" —
     # an env-supplied GH_TOKEN it cannot validate. Exit code alone is not a trustworthy success signal for it.)
 
@@ -148,21 +149,14 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
             AccessMechanism("mcp", "Atlassian MCP", mcp_server_name="atlassian"),
             AccessMechanism(
                 "cli", "acli CLI", cli_binary="acli", cli_auth_cmd=("acli", "jira", "auth", "status"),
-                # UNVERIFIED success marker (documented 2026-10-01): `acli` was not installed in the
-                # sandbox this mechanism was added in, and the official reference page
-                # (developer.atlassian.com/cloud/acli/reference/commands/jira-auth-status/) could not
-                # be fetched from here either (network egress to that host is blocked), so the exact
-                # substring `acli jira auth status` prints on a real successful login has never been
-                # observed and is deliberately left unset rather than guessed (see
-                # AccessMechanism.cli_success_marker's own docstring: gh_cli's own marker exists
-                # precisely because exit code 0 was observed to be insufficient for IT). Leaving
-                # cli_success_marker unset makes _mechanism_connected() fall back to its existing
-                # exit-code-only path (same fallback every other marker-less mechanism already uses),
-                # so connected=True here currently means only "acli is on PATH and exited 0" — weaker
-                # confidence than the gh_cli mechanism's marker-checked CONNECTED. Replace
-                # cli_success_marker with a real, observed substring the first time this is run
-                # against a real, authenticated `acli` install (see docs/INTEGRATIONS.md's matching
-                # caveat).
+                # No success marker is set on purpose, which means this mechanism can report
+                # AVAILABLE (binary on PATH) but never CONNECTED: _mechanism_connected() fails closed
+                # without an observed marker. `acli` was not installed where this was written and the
+                # Atlassian reference pages were unreachable (network egress blocked), so neither the
+                # command name below nor its success output has been observed (UNVERIFIED, 2026-10-11).
+                # To enable CONNECTED: run `acli jira auth status` on a real authenticated install,
+                # confirm the command exists, then set cli_success_marker to a substring that appears
+                # only on success (and add a test that a not-logged-in output without it stays False).
             ),
         ),
         trust="Vendor/official (atlassian/atlassian-mcp-server, GA 2026-02-04); delete/admin ops off by default",
@@ -310,9 +304,9 @@ def _mechanism_connected(mech: AccessMechanism) -> bool:
         if r.returncode != 0:
             return False
         if mech.cli_success_marker is None:
-            return True
-        # Exit code 0 alone is not proof: require the tool's own explicit success confirmation too
-        # (see cli_success_marker's docstring — gh auth status can exit 0 on a failed check).
+            # Exit code 0 alone is not proof (gh auth status was observed to exit 0 on a failed check),
+            # and nobody has observed this tool's success output yet: fail closed, never CONNECTED.
+            return False
         return mech.cli_success_marker in (r.stdout or "") + (r.stderr or "")
     except Exception:
         return False  # timeout, missing binary, or any other error: fail safe, never CONNECTED

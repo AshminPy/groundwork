@@ -234,25 +234,36 @@ def test_exit_zero_without_success_marker_never_yields_connected() -> None:
     finish()
 
 
-def test_acli_mechanism_success_via_exit_code_fallback() -> None:
-    print("groundwork_integrations.py — Jira's acli mechanism: no success marker is set (documented "
-          "UNVERIFIED), so a present binary + exit 0 is treated as connected via the existing "
-          "marker-less fallback path (same path any other marker-less mechanism already uses)")
+def test_acli_mechanism_is_available_but_never_connected_without_a_marker() -> None:
+    print("groundwork_integrations.py — Jira's acli mechanism: no OBSERVED success marker exists, so it "
+          "can be AVAILABLE but never CONNECTED; exit code 0 alone is not proof (a stub that prints "
+          "'not logged in' and exits 0 was reproduced as CONNECTED before this fail-closed rule)")
+    from dataclasses import replace
     mod = load_module()
     jira = next(e for e in mod.CATALOG if e.name == "Jira")
     acli_mech = next(m for m in jira.mechanisms if m.type == "cli" and m.cli_binary == "acli")
-    check("acli mechanism has no cli_success_marker set (documented as UNVERIFIED, not guessed)",
+    check("acli mechanism has no cli_success_marker set (UNVERIFIED, not guessed)",
           acli_mech.cli_success_marker is None, acli_mech)
-    check("acli mechanism does define a real cli_auth_cmd", acli_mech.cli_auth_cmd == ("acli", "jira", "auth", "status"),
+    check("acli mechanism declares its auth-status command", acli_mech.cli_auth_cmd == ("acli", "jira", "auth", "status"),
           acli_mech)
     with tempfile.TemporaryDirectory() as tmpdir:
-        _stub_bin(Path(tmpdir), "acli", 0, stdout_text="some acli output")
+        _stub_bin(Path(tmpdir), "acli", 0, stdout_text="You are not logged in. Run: acli jira auth login")
         old_path = os.environ.get("PATH")
         os.environ["PATH"] = tmpdir
         try:
-            check("acli present, exit 0 => available True", mod._mechanism_available(acli_mech) is True)
-            check("acli present, exit 0, no marker required => connected True (exit-code-only fallback)",
-                  mod._mechanism_connected(acli_mech) is True)
+            check("acli present => available True", mod._mechanism_available(acli_mech) is True)
+            check("exit 0 printing 'not logged in' => connected False (the reproduced false positive)",
+                  mod._mechanism_connected(acli_mech) is False)
+            _stub_bin(Path(tmpdir), "acli", 0, stdout_text="something that looks like success")
+            check("exit 0 with success-looking text but no observed marker => still connected False (never inferred)",
+                  mod._mechanism_connected(acli_mech) is False)
+            # What changes once a marker has really been observed: a SYNTHETIC marker, used only to prove the
+            # mechanism works through the marker path; it is not claimed to be acli's real output.
+            with_marker = replace(acli_mech, cli_success_marker="SYNTHETIC-MARKER-FOR-TEST")
+            _stub_bin(Path(tmpdir), "acli", 0, stdout_text="SYNTHETIC-MARKER-FOR-TEST ok")
+            check("once a marker is set, output containing it => connected True", mod._mechanism_connected(with_marker) is True)
+            _stub_bin(Path(tmpdir), "acli", 0, stdout_text="You are not logged in.")
+            check("once a marker is set, exit 0 without it => connected False", mod._mechanism_connected(with_marker) is False)
         finally:
             if old_path is None:
                 os.environ.pop("PATH", None)
@@ -316,9 +327,9 @@ def test_acli_mechanism_timeout_never_yields_connected() -> None:
     finish()
 
 
-def test_jira_end_to_end_can_report_connected_via_acli() -> None:
-    print("groundwork_integrations.py — end-to-end: Jira's summary_state reaches CONNECTED when acli "
-          "is present and its auth-status check exits 0 (Atlassian MCP mechanism absent/not listed)")
+def test_jira_with_acli_reaches_available_not_connected() -> None:
+    print("groundwork_integrations.py — end-to-end: with acli present and its auth-status command exiting 0, "
+          "Jira's summary_state is AVAILABLE, not CONNECTED (Atlassian MCP mechanism absent/not listed)")
     mod = load_module()
     with tempfile.TemporaryDirectory() as tmpdir:
         _stub_bin(Path(tmpdir), "acli", 0, stdout_text="some acli output")
@@ -328,9 +339,9 @@ def test_jira_end_to_end_can_report_connected_via_acli() -> None:
         try:
             jira = next(e for e in mod.CATALOG if e.name == "Jira")
             obs = mod.determine_observation(jira, {})
-            check("end-to-end determine_observation reflects acli's successful check",
-                  obs.available is True and obs.connected is True, obs)
-            check("summary_state is CONNECTED for Jira via the acli mechanism", mod.summary_state(obs) == "CONNECTED")
+            check("end-to-end determine_observation: available True, connected False",
+                  obs.available is True and obs.connected is False, obs)
+            check("summary_state is AVAILABLE for Jira via the acli mechanism", mod.summary_state(obs) == "AVAILABLE")
         finally:
             mod._mcp_list_cache, mod._mcp_list_attempted = None, False
             if old_path is None:
@@ -602,8 +613,8 @@ if __name__ == "__main__":
                test_presence_alone_never_yields_connected, test_successful_real_check_yields_connected,
                test_failed_check_never_yields_connected,
                test_exit_zero_without_success_marker_never_yields_connected, test_timeout_never_yields_connected,
-               test_acli_mechanism_success_via_exit_code_fallback, test_acli_mechanism_failure_never_yields_connected,
-               test_acli_mechanism_timeout_never_yields_connected, test_jira_end_to_end_can_report_connected_via_acli,
+               test_acli_mechanism_is_available_but_never_connected_without_a_marker, test_acli_mechanism_failure_never_yields_connected,
+               test_acli_mechanism_timeout_never_yields_connected, test_jira_with_acli_reaches_available_not_connected,
                test_malformed_or_missing_config_fails_safe, test_used_observation,
                test_list_command, test_show_command, test_doctor_command, test_routines_dependency_is_deterministic,
                test_no_secret_exposure, test_doc_consistency_with_integrations_md):
