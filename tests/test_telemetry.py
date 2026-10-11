@@ -411,6 +411,13 @@ def test_tool_call_telemetry() -> None:
         check("malformed input -> exit 0, silent", r.returncode == 0 and r.stdout == "")
         r = run(payload, {**env, "GROUNDWORK_TOOL_TELEMETRY_PATH": "/nonexistent-root-dir/tool_events.jsonl"})
         check("unwritable path -> exit 0, silent", r.returncode == 0 and r.stdout == "" and r.stderr == "")
+        # the path above is creatable when the tests run as root, so also use a parent that is a regular
+        # file — the OSError path fails for every user, root included
+        a_file = tmp / "not-a-dir"
+        a_file.write_text("x")
+        r = run(payload, {**env, "GROUNDWORK_TOOL_TELEMETRY_PATH": str(a_file / "tool_events.jsonl")})
+        check("path under a regular file (fails even as root) -> exit 0, silent",
+              r.returncode == 0 and r.stdout == "" and r.stderr == "" and a_file.read_text() == "x")
 
         # the per-turn Stop record is completely unaffected: still written to its own file, untouched by tool-call traffic
         t = transcript(tmp, [[{"name": "Bash", "input": {"command": "pytest -q"}}]], "turn.jsonl")

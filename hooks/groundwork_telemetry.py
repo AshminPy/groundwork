@@ -420,7 +420,7 @@ def build_tool_record(data: dict, event: str) -> dict:
     record = {
         "schema": 1,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "session_id": data.get("session_id") or "unknown",
+        "session_id": str(data.get("session_id") or "unknown")[:64],
         "tool": tool_name[:TOOL_NAME_CAP],
         "category": category,
         "success": event != "PostToolUseFailure",

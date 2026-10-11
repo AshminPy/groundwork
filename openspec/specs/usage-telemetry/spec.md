@@ -46,7 +46,7 @@ The installer SHALL register the hook idempotently and write `~/.claude/groundwo
 
 #### Scenario: Round trip
 - **WHEN** install runs twice then uninstall
-- **THEN** exactly one telemetry hook entry existed, and the records file survives the uninstall
+- **THEN** exactly three telemetry hook entries existed (one each on Stop, PostToolUse and PostToolUseFailure, all the same script), and the records files survive the uninstall
 
 ### Requirement: Record layout separates observed from declared
 Each record SHALL contain an `observed` object (facts the hook determined from the transcript and environment: profile, tools, MCP servers, agent calls and types, files changed, tests run, implementation and deployment flags) and a `declared` object (fields taken from the model's response: playbook, execution mode, agent count and roles, evidence sources, validation, environment, outcome, clarification flag). Declared fields SHALL be recorded as stated, never presented as verified.
@@ -72,7 +72,7 @@ prefix test the per-turn record already uses, with the server slug when `mcp`), 
 `is_interrupt: true`. It SHALL NOT read or store `tool_input`, `tool_response` or `error` — only the
 event's own `tool_name`, `session_id` and the boolean `is_interrupt`. It SHALL share the per-turn
 record's permission model (0600 file, 0700 directory), fail-open behaviour, and `GROUNDWORK_TELEMETRY=off`
-switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`.
+switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`. `success` means Claude Code reported the call as completed; the hook never reads `tool_response`, so for example a Bash command that timed out into the background is still a completed call (observed in an independent review run). `interrupted` follows the documented `is_interrupt` flag; no real abort could be produced in a headless run, so that path is covered by payload tests only (RUNTIME VALIDATION REQUIRED).
 
 #### Scenario: A tool call succeeds
 - **WHEN** a `PostToolUse` event fires for `mcp__github__search_repositories`

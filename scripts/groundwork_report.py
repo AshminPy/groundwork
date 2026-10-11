@@ -720,8 +720,9 @@ def main(argv=None) -> int:
         res = generate(args)
         for w in res["written"]:
             print(w)
-        print(f"records={res['records']} buckets={res['buckets']} skipped={res['stats']['malformed']}")
+        # tool-call line first: setup.sh shows `generate | tail -1`, which must stay the records= summary line
         print(f"tool_calls={res['tool_calls']} tool_lines={res['tool_stats']['lines']} tool_skipped={res['tool_stats']['malformed']}")
+        print(f"records={res['records']} buckets={res['buckets']} skipped={res['stats']['malformed']}")
         return 0
     if args.cmd == "schedule":
         print(json.dumps(schedule(args.frequency, args.hour)))
