@@ -924,18 +924,49 @@ def test_round4_review_fixes() -> None:
         "HTTP trace": "Cookie: a=1; b=ZZSECRET13",
         "wget --header": "wget --header='Cookie: a=1; b=ZZSECRET14' https://x",
         "--cookie=": "curl --cookie='a=1; b=ZZSECRET15' https://x",
+        "quoted jar over 2,000 characters": "curl -sS https://x.example/api -b '" + "_ga=GA1.2.1234567890.1700000000; " * 60 + "sid=ZZSECRET16'",
+        "double-quoted jar over 2,000 characters": 'curl -sS https://x.example/api --cookie "' + "_ga=GA1.2.1234567890.1700000000; " * 60 + 'sid=ZZSECRET17"',
+        "bracketed list over 4,000 characters": "{'set-cookie': [\n 'sess0=" + "A" * 2300 + "; Path=/',\n 'sess1=" + "B" * 2300 + "ZZSECRET18'\n]}",
+        "Authorization first in a raw request dump": "send: b'GET /a HTTP/1.1\\r\\nAuthorization: Basic ZZSECRET39dXNlcjpwYXNz\\r\\nHost: x\\r\\n\\r\\n'",
+        "bracketed list whose closing bracket is over 16,000 characters away": "{'set-cookie': [\n 'sess=ZZSECRET40; Path=/',\n 'x=" + "A" * 17000 + "'\n]}",
+        "ANSI-C quoted -b": "curl -sS -b $'session=ZZSECRET19' https://x",
+        "ANSI-C quoted --cookie": "curl --cookie $'sid=ZZSECRET20' https://x",
+        "ANSI-C quoted --cookie=": "curl --cookie=$'sid=ZZSECRET21' https://x",
+        "python http.client debug output": "send: b'GET /a HTTP/1.1\\r\\nHost: 127.0.0.1:18765\\r\\nCookie: sid=ZZSECRET22\\r\\nAuthorization: Basic ZZSECRET23dXNlcjpwYXNz\\r\\n\\r\\n'",
+        "curl -v added cookie": '* Added cookie session="ZZSECRET24" for domain 127.0.0.1, path /, expire 0',
+        "curl -v replaced cookie": '* Replaced cookie sid="ZZSECRET25" for domain x, path /, expire 0',
+        "node rawHeaders": "[\n  'Authorization',\n  'Basic ZZSECRET26dXNlcjpwYXNz',\n  'Cookie',\n  'sid=ZZSECRET27',\n]",
+        "node client set-cookie": "'Set-Cookie',\n    'session=ZZSECRET28; Path=/; HttpOnly'",
+        "python header tuples": "[('Set-Cookie', 'session=ZZSECRET29; Path=/')]",
+        "kubernetes httpHeaders": "httpHeaders:\n  - name: Authorization\n    value: Basic ZZSECRET30==",
+        "postman JSON": '{"key":"Authorization","value":"Basic ZZSECRET31=="}',
+        "HAR JSON": '{"name":"Cookie","value":"sid=ZZSECRET32"}',
+        "nginx directive": 'proxy_set_header Authorization "Basic ZZSECRET33==";',
+        "apache directive": 'RequestHeader set Authorization "Basic ZZSECRET34=="',
+        "pretty-printed Authorization array": '{\n  "Authorization": [\n    "Basic ZZSECRET36=="\n  ]\n}',
+        "YAML list at column 0": "Cookie:\n- a=1\n- b=ZZSECRET38\nnext: x",
+        "YAML list of more than ten items": "cookie:\n" + "".join(f"  - c{i}=v\n" for i in range(11)) + "  - c11=ZZSECRET37\nnext: x",
     }
     leaked = [k for k, v in shapes.items() if "ZZSECRET" in m.redact(v)[0]]
     check("no cookie survives in any of the shapes real tools print", not leaked, str(leaked))
-    kept = ["git checkout -b feature", "x-cookie-policy: strict", "grep -b needle file", "Host: x", "Tokens: 1523", "max_tokens: 4096", "tokenizer_mode=auto"]
+    kept = ["git checkout -b feature", "x-cookie-policy: strict", "grep -b needle file", "grep -b 'needle' file", "rsync -avzb 'user@host:/data/' ./backup/",
+            "cp -b 'a b' c", "Host: x", "Tokens: 1523", "max_tokens: 4096", "tokenizer_mode=auto", "tokens_cache_key_hits: 55", "tokens_authorized: 10",
+            "curl --cookie-jar jar.txt https://x"]
     check("harmless lookalikes stay readable", all(m.redact(s) == (s, 0) for s in kept), str([s for s in kept if m.redact(s)[0] != s]))
     check("a folded header's following line is not swallowed",
           m.redact("Cookie: a=1;\n b=ZZSECRET8\nHost: x")[0].endswith("\nHost: x"))
     check("a count under a secret-bearing name is still redacted",
           all("[redacted]" in m.redact(s)[0] for s in ("tokens_secret=8675309123", "tokens_password: 1234567890", "tokens_api_key=12345678901234")))
-    t0 = time.monotonic()
-    m.redact(("curl -b '" * 3000 + "cookie\" " * 3000 + "Cookie:" * 3000))
-    check("cookie patterns stay fast on hostile input (unterminated quotes, repeated keys)", time.monotonic() - t0 < 1.0, f"{time.monotonic() - t0:.2f}s")
+    hostile = {"repeated open bracket": "cookie:[\n" * 6000, "repeated -b quote": "curl -b '" * 6000, 'repeated -b double quote': 'curl -b "' * 7000,
+               "quoted key and comma": "'Cookie',\n" * 5000, "name lines": "name: Cookie\n" * 5000, "added cookie": "* Added cookie a=\n" * 4000,
+               "directives": "add_header Cookie " * 4000, "escaped keys": "\\r\\nCookie" * 7000, "folded values": "cookie: a;\n x\n" * 4000,
+               "one long open quote": "-b '" + "a" * 59000, "one long open bracket": "cookie: [" + "x" * 59000}
+    slow = {}
+    for name, text in hostile.items():
+        t0 = time.monotonic()
+        m.redact(text)
+        slow[name] = time.monotonic() - t0
+    check("every cookie / Authorization pattern stays fast on 60 KB of hostile input (spec: under 0.3 s each)", max(slow.values()) < 0.3, str({k: round(v, 3) for k, v in slow.items() if v >= 0.3}))
     benign = ["https://registry.npmjs.org/@babel/core", "https://host:8080/path@x", "bob@example.com", "git@github.com:org/repo.git", "https://example.com/a@b"]
     check("URLs without credentials are left alone", all(m.redact(s) == (s, 0) for s in benign), str([m.redact(s) for s in benign]))
 
@@ -998,7 +1029,8 @@ def test_live_mention_canary() -> None:
         loose = m.call_claude(f"{ask}\n\nsee @{canary}")  # positive control: the un-neutralised mention DOES attach the file
         check("positive control: an un-neutralised @-mention makes the real claude see the file (so this test can fail)", "YES" in loose.upper(), loose)
         code, out, err = run_cli(m, ["--stdin", "--question", ask], f"make: *** [all] Error 1\nsee @{canary}\n(@{canary}) \"@{canary}\"\n@{canary}\n")
-        check("through the tool, the same mentions attach nothing", code == 0 and re.search(r"\bNO\b", out.upper()) is not None and token not in out, out + err)
+        answer = out.split("\n\n— Source:")[0]  # the footer ("No command was run") is not the model's answer
+        check("through the tool, the same mentions attach nothing", code == 0 and re.match(r"\W*NO\b", answer.upper()) is not None and token not in answer, out + err)
     finish()
 
 
