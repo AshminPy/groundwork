@@ -160,6 +160,10 @@ groundwork routines run pr_followup  # run one routine now (same fail-closed pat
 groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
+
+groundwork copilot explain           # read-only: what went wrong in THIS terminal (tmux), and what to check next
+groundwork copilot explain --dry-run # show exactly what would be sent; send nothing
+some_cmd 2>&1 | groundwork copilot explain --stdin   # any terminal: explain the output you pipe in
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
@@ -170,6 +174,17 @@ model. `groundwork update`/`rollback` never reimplement the installer — see
 [docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
 forwards to the existing Routines execution/scheduling engine unchanged — see
 [docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
+`groundwork copilot explain` is **read-only help with a failure in the terminal you typed it in**. In a tmux
+pane it reads a bounded slice (default 120 lines) of that pane's recent output, proven to be yours by
+`$TMUX_PANE` plus your process's own controlling tty (there is no option to read another pane; a spoofed
+pane id is refused), adds project facts from git, redacts secret-shaped text, and makes one
+`claude -p --tools ""` call: the model has **no tools**, so it cannot run, read or change anything even if the
+output contains instructions (the output is fenced as untrusted data). It prints the answer and "No command
+was run". Use `--dry-run` to see exactly what would be sent. Limits: retroactive reading works only in tmux (other
+terminals pipe the output with `--stdin`; iTerm2 and Terminal.app readers are not built and not validated);
+without tools it cannot open your files, so it often ends with "UNKNOWN — show me X"; redaction is best effort;
+it never executes a suggestion — authorized execution is deliberately not built.
+See [openspec/changes/add-groundwork-copilot/](openspec/changes/add-groundwork-copilot/).
 
 Per project, once, if you want spec-driven work there:
 ```bash
@@ -282,6 +297,7 @@ groundwork/
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
 │   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
 │   ├── groundwork_integrations.py     Integration Catalog: capability ids, approved mechanisms, truthful available/configured/connected/used observations; `refresh` persists a cache for the statusLine
+│   ├── groundwork_copilot.py          `groundwork copilot explain`: read-only, session-bound help with the output of the terminal it is typed in (no tools, nothing executed)
 │   ├── groundwork_statusline.py       Claude Code statusLine: LIVE/LAST-COMPLETED-TURN/CACHED/UNAVAILABLE data-source contract, session-isolated, never probes integrations itself
 │   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams, statusLine)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)

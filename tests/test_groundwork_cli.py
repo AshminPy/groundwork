@@ -406,11 +406,34 @@ def test_statusline_dispatches_not_reimplements() -> None:
     finish()
 
 
+def test_copilot_dispatches_not_reimplements() -> None:
+    print("groundwork_cli.py — `copilot` forwards verbatim to the installed groundwork_copilot.py (no terminal, "
+          "redaction or model logic duplicated here)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-600:])
+        installed = e.cfg / "groundwork" / "bin" / "groundwork_copilot.py"
+        check("install.sh copies groundwork_copilot.py into the installed bin dir", installed.is_file())
+        help_direct = subprocess.run(["python3", str(installed), "explain", "--help"], capture_output=True, text=True, env=e.env, timeout=30)
+        help_cli = e.run_cli("copilot", "explain", "--help")
+        check("groundwork copilot explain --help is byte-identical to the module's own help",
+              help_cli.stdout == help_direct.stdout and help_cli.returncode == help_direct.returncode == 0, help_cli.stdout[:300] + help_cli.stderr[:300])
+        outside = subprocess.run(["python3", str(installed), "explain"], capture_output=True, text=True, env={k: v for k, v in e.env.items() if not k.startswith("TMUX")}, timeout=30)
+        via = subprocess.run(["python3", str(e.cfg / "groundwork" / "bin" / "groundwork"), "copilot", "explain"], capture_output=True, text=True,
+                             env={k: v for k, v in e.env.items() if not k.startswith("TMUX")}, timeout=30)
+        check("outside tmux both refuse identically and point at --stdin (exit 1)", outside.returncode == via.returncode == 1 and outside.stderr == via.stderr and "--stdin" in via.stderr, via.stderr)
+        top = e.run_cli("--help")
+        check("groundwork --help lists the copilot subcommand", "copilot" in top.stdout, top.stdout[:600])
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
               test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
               test_integrations_dispatches_not_reimplements, test_update_rollback_dispatches_not_reimplements,
-              test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements):
+              test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements,
+              test_copilot_dispatches_not_reimplements):
         try:
             t()
         except AssertionError:
