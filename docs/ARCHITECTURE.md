@@ -115,6 +115,7 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 | No direct push to main/master/production, no force-push | **Enforced** for every `git push` the parser can see — `hooks/block_protected_push.py`, a PreToolUse hook: shell chains, `sh/bash/zsh -c`, `eval`, `HEAD`/`@`, multi-refspec, `:branch` deletion, `--all`/`--mirror`. Not parsed: other wrappers (`xargs`, `python -c`, a script that pushes) and non-exact branch names (`Main`, `release/1.2`). Claude Code's own Bash permission prompt is the backstop for those |
 | Investigate before first edit of a file / destructive Bash | **Enforced** — ECC's own GateGuard hook |
 | No `--no-verify` git bypass | **Enforced** — ECC's own `block-no-verify` hook |
+| Groundwork's own settings-file hooks (push guard, review gate, telemetry) **against an installed Claude Code mod** | **Not enforced against a mod** — Claude Code runs a mod's handlers before `PreToolUse` hooks from any settings file other than managed settings, and a mod can answer a tool call without calling `next` or approve a call such a hook blocked (official docs, `plugins/mods/events` and `plugins/mods/overview`, read 2026-10-11). Treat an installed mod as trusted code; the organization-level control is `allowManagedModsOnly` in managed settings. Whether `Stop` hooks can be pre-empted the same way is UNVERIFIED. Details and the evaluated mods: [CLAUDE-MODS.md](CLAUDE-MODS.md) |
 | Completion status block format and hard rules | Advisory |
 
 ## `require_material_review.py` — how the gate actually works
