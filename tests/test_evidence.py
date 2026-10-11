@@ -61,7 +61,9 @@ def read(path="/repo/a.py"):
     return ("Read", {"file_path": path}, "contents", False)
 
 
-def bash(cmd, ok=True, text="done"):
+def bash(cmd, ok=True, text=None):
+    if text is None:  # a real runner prints its summary; other commands just print something
+        text = "5 passed in 0.1s" if "pytest" in cmd else "done"
     return ("Bash", {"command": cmd}, text if ok else "Exit code 1\n" + text, not ok)
 
 
@@ -113,7 +115,7 @@ def test_label_rule() -> None:
     check("GitHub MCP read -> LOW (repo inspected)", label(m, ("mcp__github__pull_request_read", {"owner": "o", "repo": "r", "pullNumber": 7}, "pr", False)) == "LOW")
     check("another MCP server's read tool -> MEDIUM (external source)", label(m, ("mcp__datadog__list_monitors", {}, "monitors", False)) == "MEDIUM")
     check("an MCP write tool contributes nothing -> NONE", label(m, ("mcp__github__create_issue", {"owner": "o", "repo": "r"}, "created", False)) == "NONE")
-    check("an unrecognised command contributes nothing (label can only be too low) -> NONE", label(m, bash("my-custom-checker --all")) == "NONE")
+    check("an unrecognised command verifies nothing, and it may have changed things -> LOW (never NONE, never higher)", label(m, bash("my-custom-checker --all")) == "LOW")
     fetch = ("WebFetch", {"url": "https://docs.example.com/a"}, "page", False)
     check("a failing test caps the label even when a source was fetched (-> LOW, not MEDIUM)", label(m, fetch, bash("pytest -q", ok=False)) == "LOW")
     check("a failing test caps the label even when a runtime check succeeded (-> LOW)", label(m, bash("kubectl get pods"), bash("pytest -q", ok=False)) == "LOW")
@@ -133,7 +135,7 @@ def test_command_attribution() -> None:
     check("`FOO=1 pytest` is a test run", tests(bash("FOO=1 pytest")) == 1)
     check("`python3 tests/test_x.py` is a test run", tests(bash("python3 tests/test_x.py")) == 1)
     check("`pytest; echo done` is NOT credited (exit status is echo's)", tests(bash("pytest; echo done")) == 0)
-    check("`pytest | tee out` is NOT credited (exit status is tee's)", tests(bash("pytest | tee out.txt")) == 0)
+    check("`pytest | tee out` with no runner summary is NOT credited (exit status is tee's)", tests(bash("pytest | tee out.txt", text="done")) == 0)
     check("`echo start; pytest` IS credited (pytest is last)", tests(bash("echo start; pytest")) == 1)
     check("a failed `a && pytest` chain records the test as failed",
           m.derive_evidence(turn(bash("cd x && pytest", ok=False)))["signals"]["tests_last_ok"] is False)
@@ -363,7 +365,8 @@ def test_differential_against_real_bash() -> None:
             return m.derive_evidence(turn(("Bash", {"command": cmd}, text, code != 0)))["signals"]["tests_last_ok"] is True
 
         parts = ["pytest -q", "echo hi", "true", "false", "cd .", "exit 0", "! pytest -q", "pytest -q | tail -3",
-                 "pytest -q || true", "echo ok # x", "echo ${X:-a}", "set -o pipefail", "(pytest -q)", "{ pytest -q; }"]
+                 "pytest -q || true", "echo ok # x", "echo ${X:-a}", "set -o pipefail", "(pytest -q)", "{ pytest -q; }",
+                 "'exit' 0", "\\exit 0", ">/dev/null exit 0", "command exit 0", "echo hi \\\n# x", "set +o pipefail", "set -o pipefail | pytest -q | wc -l"]
         conns = [" && ", "; ", " | ", " || ", "\n"]
         bad, total, credited_n = [], 0, 0
         for a in parts:
@@ -378,6 +381,21 @@ def test_differential_against_real_bash() -> None:
                     code1, out1, _ = run(cmd, 1)
                     if ran0 == 0 or credited(cmd, code1, out1):
                         bad.append(cmd)
+        triples = ["pytest -q", "'exit' 0", "echo hi", "true", "pytest -q | tail -3", "set -o pipefail", "false"]
+        for a in triples:
+            for c1 in (" && ", "; ", " || "):
+                for b in triples:
+                    for c2 in (" && ", "; ", " | "):
+                        for d in triples:
+                            cmd = a + c1 + b + c2 + d
+                            total += 1
+                            code0, out0, ran0 = run(cmd, 0)
+                            if not credited(cmd, code0, out0):
+                                continue
+                            credited_n += 1
+                            code1, out1, _ = run(cmd, 1)
+                            if ran0 == 0 or credited(cmd, code1, out1):
+                                bad.append(cmd)
         check(f"{total} compositions: none credited as a pass unless pytest ran and a failing pytest would not be credited ({credited_n} were credited)",
               not bad, repr(bad[:5]))
         check("the differential test is not vacuous (a good share of compositions are credited)", credited_n >= 20, str(credited_n))
@@ -483,6 +501,158 @@ def test_declared_label_parsing() -> None:
                          ("\x1b[1mHIGH\x1b[0m", "HIGH"), ("low", "LOW"), ("very sure", None), ("", None), (None, None)):
         check(f"declared_label({stated!r}) -> {want}", m.declared_label(stated) == want, str(m.declared_label(stated)))
     check("'MEDIUM/HIGH' over a LOW ceiling exceeds", m.declared_exceeds("MEDIUM/HIGH", "LOW") is True)
+    finish()
+
+
+def test_round3_regressions() -> None:
+    print("groundwork_evidence.py — second-round review fixes: splitter bypasses, spoofed policy banner, runtime writes, unknown tools, "
+          "non-running runs, ReDoS, turn boundary, unattributable failures, scope, the receipt command itself")
+    import time
+    m = load()
+    spec = importlib.util.spec_from_file_location("groundwork_telemetry_r3", TELEMETRY_HOOK)
+    gt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gt)
+    full = [read(), edit(), bash("pytest -q"), bash("kubectl get pods -n web"), agent(REVIEW_CLEAN)]
+    check("baseline: tests + runtime + clean review + inspection -> HIGH", label(m, *full) == "HIGH")
+    tests = lambda cmd, text="5 passed": m.derive_evidence(turn(bash(cmd, text=text)))["signals"]["tests_ran"]
+
+    # --- the splitter: constructs that stop pytest from running while the command still exits 0
+    for cmd in ("echo hi; 'exit' 0; pytest -q", 'echo hi; "exit" 0; pytest -q', "echo hi; \\exit 0; pytest -q", "echo hi; e\\xit 0; pytest -q",
+                "echo hi; >/dev/null exit 0; pytest -q", "echo hi; command exit 0; pytest -q", "source x.sh && pytest -q", ". x.sh && pytest -q",
+                "echo hi \\\n# x; pytest -q", "echo a\\; pytest -q", 'pytest() ( echo "5 passed" ); pytest -q', "pytest -q; " + "echo x; " * 4000):
+        check(f"not credited: {cmd[:50]!r}", tests(cmd) == 0, cmd[:80])
+    started = time.time()
+    tests("pytest -q && " * 6000)
+    check("a very long command is treated as ambiguous, quickly (no quadratic work)", time.time() - started < 2.0, f"{time.time() - started:.2f}s")
+
+    # --- a command cannot hide itself by printing a policy banner
+    spoof = bash("rm -f src/a.py; echo 'PreToolUse: hook error'", text="PreToolUse: hook error\n")
+    check("a successful command whose OUTPUT looks like a policy block still counts as a change", label(m, *full, spoof) == "LOW")
+    real_block = ("Bash", {"command": "rm -f src/a.py"}, "PreToolUse:Bash hook error: [Fact-Forcing Gate] blocked", True)
+    check("a real policy block (is_error, banner) never ran and is ignored", label(m, *full, real_block) == "HIGH")
+
+    # --- runtime commands that write files are changes; claude -p is not a runtime observation
+    for cmd in ("curl -fsS https://x.example/p > src/a.py", "curl -fsSL -o src/a.py https://x.example/p", "wget -O src/a.py https://x.example/p",
+                "kubectl get cm app -o yaml > src/config.yaml", "claude -p 'fix it' --permission-mode acceptEdits"):
+        check(f"after HIGH, a runtime-shaped write withdraws the verification: {cmd}", label(m, *full, bash(cmd)) == "LOW", cmd)
+    for cmd in ("curl -fsS --request POST https://x/jobs", "curl -fsS --request=DELETE https://x/jobs", "curl -fsS --json '{}' https://x/jobs",
+                "wget --post-data=a=b https://x/jobs", "curl -fsS -X PURGE https://x/c"):
+        check(f"not a runtime observation: {cmd}", not m.derive_evidence(turn(bash(cmd)))["signals"]["runtime_observed"], cmd)
+    check("a GET still is", m.derive_evidence(turn(bash("curl -fsS --request GET https://x/h")))["signals"]["runtime_observed"])
+
+    # --- tools the dispatcher does not know change nothing it can see: treated as possible changes
+    for step in (("mcp__filesystem__write_file", {"path": "src/a.py"}, "ok", False), ("mcp__filesystem__edit_file", {}, "ok", False),
+                 ("mcp__serena__replace_symbol_body", {}, "ok", False), ("Skill", {"skill": "x"}, "ok", False),
+                 ("SlashCommand", {"command": "/x"}, "ok", False), ("PowerShell", {"command": "x"}, "ok", False),
+                 ("BrandNewTool", {}, "ok", False)):
+        check(f"after HIGH, an unknown or writing tool withdraws the verification: {step[0]}", label(m, *full, step) == "LOW", step[0])
+    check("a GitHub MCP read keeps HIGH", label(m, *full, ("mcp__github__pull_request_read", {"owner": "o", "repo": "r", "pullNumber": 1}, "pr", False)) == "HIGH")
+    check("a GitHub MCP write changes only the remote: keeps HIGH", label(m, *full, ("mcp__github__create_pull_request", {}, "created", False)) == "HIGH")
+    check("TodoWrite cannot change the tree: keeps HIGH", label(m, *full, ("TodoWrite", {"todos": []}, "ok", False)) == "HIGH")
+    check("a hyphenated MCP read tool name counts as an external source", label(m, ("mcp__notion__notion-search", {}, "results: a, b", False)) == "MEDIUM")
+
+    # --- invocations that run no tests
+    for cmd in ("python3 -m pytest -q --collectonly", "PYTEST_ADDOPTS=--collect-only pytest -q", "tox --notest", "make test-clean",
+                "make test-fixtures", "npm run test:clean", "PATH=./fake:$PATH pytest -q"):
+        check(f"not a test run: {cmd}", tests(cmd, text="2 tests collected in 0.00s") == 0, cmd)
+    check("an unpiped pytest run with no summary is not a pass", tests("pytest -q", text="done") == 0)
+    check("unittest that ran 0 tests is not a pass", tests("python3 -m unittest", text="Ran 0 tests in 0.000s\n\nOK") == 0)
+    check("unittest that ran tests is", tests("python3 -m unittest", text="Ran 3 tests in 0.1s\n\nOK") == 1)
+    check("cargo test with 0 passed is not a pass; with passes it is", tests("cargo test", text="test result: ok. 0 passed; 0 failed") == 0
+          and tests("cargo test", text="test result: ok. 3 passed; 0 failed") == 1)
+    check("go test over packages some of which have no tests is still a pass", tests("go test ./...", text="?   \tx/y\t[no test files]\nok  \tx/z\t0.01s") == 1)
+    check("npm test printing 'no tests found' is not a pass", tests("npm test", text="No tests found, exiting with code 0") == 0)
+
+    # --- ReDoS in the review field matcher
+    started = time.time()
+    m._review_state("REVIEW RESULT\nVerdict: approve\n" + "a" + " " * 20000 + "b: c\n")
+    m._review_state("REVIEW RESULT\n" + "a" + " " * 6000 + ":\n")
+    check("a hostile review line cannot stall the parser", time.time() - started < 1.0, f"{time.time() - started:.2f}s")
+    quoted = "Quoting the template:\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\n\n" + "Actually, on closer inspection I found a real problem. " * 30
+    check("a REVIEW RESULT block quoted in the middle of a longer report is not the final result", m._review_state(quoted)[0] == "unparsed")
+    check("a REVIEW RESULT block at the end of a long report is", m._review_state("x " * 2000 + "\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\n")[0] == "clean")
+
+    # --- the turn boundary: hook feedback and notifications do not start a new turn
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        entries = turn(*full)
+        meta = {"type": "user", "isMeta": True, "message": {"role": "user", "content": "Stop hook feedback:\n[x]: uncommitted changes"}}
+        note = {"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "<task-notification>x</task-notification>"}}
+        handback = {"type": "user", "isMeta": True, "origin": {"body": "[Subagent hand-back]"}, "message": {"role": "user", "content": "Another Claude session sent a message"}}
+        entries[9:9] = [meta, note, handback]  # between the runtime check and the review
+        path = tmp / "t.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        check("the whole turn is read across hook feedback, task notifications and sub-agent hand-backs", len(gt.current_turn(str(path))) == len(entries))
+        check("...so the designed flow (verify, hook feedback, then review) is still HIGH", m.derive_evidence(gt.current_turn(str(path)))["confidence"] == "HIGH")
+        human2 = {"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": "a new question"}}
+        path.write_text("\n".join(json.dumps(e) for e in [*entries, human2]) + "\n")
+        check("a real human prompt still starts a new turn", len(gt.current_turn(str(path))) == 1)
+
+    # --- an unattributable run that visibly failed still caps the label
+    for cmd in ('pytest -q; echo "exit=$?"', "pytest -q || true", "pytest -q | grep -E 'passed|failed'"):
+        s = m.derive_evidence(turn(read(), bash(cmd, text="1 failed, 4 passed in 0.1s"), bash("kubectl get pods")))
+        check(f"a visible failure behind an unattributable wrapper -> LOW: {cmd}", s["confidence"] == "LOW" and s["signals"]["tests_last_ok"] is False, json.dumps(s["signals"]))
+
+    # --- failing-scope bookkeeping
+    sig = lambda *steps: m.derive_evidence(turn(*steps))["signals"]
+    fail = lambda cmd: bash(cmd, ok=False, text="1 failed, 4 passed")
+    for narrower in ("pytest tests --deselect=tests/test_a.py::test_bad", "pytest tests --ignore=tests/test_bad.py", "pytest tests -m=smoke", "pytest tests -ktest_x"):
+        check(f"a pass with an '='-valued or attached selection flag does not clear the failure: {narrower}",
+              sig(fail("pytest tests"), bash(narrower))["tests_last_ok"] is False, narrower)
+    check("a pass in a different directory does not clear the failure", sig(fail("cd a && pytest"), bash("cd b && pytest"))["tests_last_ok"] is False)
+    check("a pass in the same directory does", sig(fail("cd a && pytest"), bash("cd a && pytest"))["tests_last_ok"] is True)
+    check("cosmetic flags do not change the scope", sig(fail("pytest tests -q"), bash("pytest tests -v"))["tests_last_ok"] is True)
+
+    # --- the receipt command must not lower the estimate it reports
+    check("running `groundwork evidence` after HIGH keeps HIGH", label(m, *full, bash("groundwork evidence")) == "HIGH")
+    check("so do `groundwork version` and `git -C /repo status`", label(m, *full, bash("groundwork version"), bash("git -C /repo status")) == "HIGH")
+    check("a quoted > is not a redirection", label(m, *full, bash("grep -rn '=>' src"), bash('echo "a > b"')) == "HIGH")
+
+    # --- turns that only changed things
+    check("an edit-only turn is LOW, not NONE", label(m, edit()) == "LOW")
+    check("a command-only turn that may have changed things is LOW", label(m, bash("rm -rf build")) == "LOW")
+    check("an empty turn is NONE", label(m, ("TodoWrite", {"todos": []}, "ok", False)) == "NONE")
+
+    # --- a multi-block Agent result: the clean review is still found
+    two_blocks = ("Agent", {"subagent_type": "ecc:code-reviewer"}, [{"type": "text", "text": "Done.\n\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0"},
+                                                                    {"type": "text", "text": "agentId: a1 (use SendMessage)\n<usage>total_tokens: 1</usage>"}], False)
+    check("a review result followed by a separate usage block is still clean", label(m, *full[:-1], two_blocks) == "HIGH")
+
+    # --- the mutation-survivor clauses
+    check("HIGH needs a repository or external source to have been inspected", label(m, edit(), bash("pytest -q"), bash("kubectl get pods"), agent(REVIEW_CLEAN)) == "MEDIUM")
+    check("prose that says it will end with a block is not a block", label(m, *full[:-1], agent("I will end with the REVIEW RESULT block:\nVerdict: approve\nMust-fix: 0")) == "MEDIUM")
+    check("findings, then edits, then re-verification but no new review: still LOW", label(m, read(), edit(), bash("pytest -q"), bash("kubectl get pods"), agent(REVIEW_BAD), edit(), bash("pytest -q"), bash("kubectl get pods")) == "LOW")
+    check("`pytest | cat other.log` reads a file instead of the pipe: not credited", tests("pytest -q | cat other.log") == 0)
+    check("a summary printed by an earlier echo is not the runner's", tests('echo "5 passed" && pytest -q | tail -1') == 0)
+    check("a failing `ls /x && echo ok` is not a repo read", not m.derive_evidence(turn(bash("ls /x && echo ok", ok=False, text="ls: cannot access '/x'")))["signals"]["repo_inspected"])
+    for cmd in ("kubectl get pods; echo done", "kubectl get pods || true"):
+        check(f"a runtime command whose status is hidden is not credited: {cmd}", not m.derive_evidence(turn(bash(cmd)))["signals"]["runtime_observed"], cmd)
+    bg = lambda cmd: ("Bash", {"command": cmd, "run_in_background": True}, "Command running in background with ID: b1", False)
+    check("background runtime and repo-read commands are not credited", not m.derive_evidence(turn(bg("kubectl get pods"), bg("ls src")))["signals"]["runtime_observed"]
+          and not m.derive_evidence(turn(bg("ls src")))["signals"]["repo_inspected"])
+    check("`sed -n -i` edits in place: a change", label(m, read(), bash("pytest -q"), bash("sed -n -i s/a/b/ f.py")) == "LOW")
+    check("`sed -n --in-place=.bak` too", label(m, read(), bash("pytest -q"), bash("sed -n --in-place=.bak s/a/b/ f.py")) == "LOW")
+    check("`go test -n` runs nothing: it neither credits nor withdraws", sig(bash("go test ./...", text="ok  \tx\t0.01s"), bash("go test -n ./...", text="go test\n"))["tests_last_ok"] is True)
+
+    # --- smaller things
+    check("'Very high' and 'Verified HIGH' are read as HIGH", m.declared_label("Very high") == "HIGH" and m.declared_label("Verified HIGH") == "HIGH")
+    check("'Low, would be High with a live test' is LOW (the first label word)", m.declared_label("Low, would be High with a live test") == "LOW")
+    ref = json.dumps(m.derive_evidence(turn(("Read", {"file_path": "/repo/a\U000e0041؜­.py"}, "x", False)))["references"])
+    check("tag characters, the Arabic letter mark and soft hyphens are removed from references", not any(c in ref for c in ("\\udb40", "؜", "­")), ref)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        cfg = tmp / "claude"
+        proj = cfg / "projects" / "".join(c if c.isalnum() else "-" for c in os.path.realpath(tmp))
+        proj.mkdir(parents=True)
+        body = "\n".join(json.dumps(e) for e in turn(read("/real/session.py"))) + "\n"
+        (proj / "s.jsonl").write_text(body)
+        side = proj / "agent-abc.jsonl"
+        side.write_text("\n".join(json.dumps(e) for e in turn(read("/sidechain/file.py"))) + "\n")
+        os.utime(side, (time.time() + 100, time.time() + 100))
+        r = subprocess.run([sys.executable, str(MODULE)], capture_output=True, text=True, timeout=30, cwd=tmp, env={**os.environ, "CLAUDE_CONFIG_DIR": str(cfg)})
+        check("a newer sub-agent transcript (agent-*.jsonl) is not picked as the session's", "/real/session.py" in r.stdout and "/sidechain" not in r.stdout, r.stdout + r.stderr)
+        r2 = _cli(["--transcript", "~nosuchuser_zz/x.jsonl"])
+        check("an unexpandable ~user path is UNKNOWN, not a traceback", r2.returncode == 1 and "UNKNOWN" in r2.stdout and "Traceback" not in r2.stderr, r2.stdout + r2.stderr)
     finish()
 
 
@@ -659,7 +829,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()

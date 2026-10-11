@@ -164,8 +164,11 @@ def parse_agents(value: str):
 
 
 def is_human_prompt(e: dict) -> bool:
-    if e.get("type") != "user" or e.get("isSidechain"):
-        return False
+    if e.get("type") != "user" or e.get("isSidechain") or e.get("isMeta"):
+        return False  # hook feedback and other synthetic entries do not start a turn
+    origin = e.get("origin")
+    if isinstance(origin, dict) and origin.get("kind") != "human":
+        return False  # task notifications and sub-agent hand-backs do not start a turn either
     content = (e.get("message") or {}).get("content")
     return not (isinstance(content, list) and any(
         isinstance(b, dict) and b.get("type") == "tool_result" for b in content))

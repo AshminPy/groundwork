@@ -55,6 +55,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -73,7 +74,10 @@ COLLECT_PER_KIND = 500  # bound memory on a huge turn without letting reads crow
 READ_TOOLS = {"Read", "LS", "NotebookRead"}
 SEARCH_TOOLS = {"Grep", "Glob"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-READ_VERB = re.compile(r"(?:^|_)(?:get|list|read|search|query|describe|fetch|show|view)(?:_|$)")
+READ_VERB = re.compile(r"(?:^|[_-])(?:get|list|read|search|query|describe|fetch|show|view)(?:[_-]|$)")
+_BENIGN_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "TaskOutput", "AskUserQuestion", "ToolSearch",
+                 "EnterPlanMode", "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool", "BashOutput",
+                 "KillShell", "KillBash", "Monitor", "ScheduleWakeup", "ListAgents"}  # cannot change the working tree; any other unknown tool is treated as a change
 _MUTATING_WORDS = {
     "create", "update", "delete", "remove", "write", "send", "post", "put", "patch", "push", "merge", "execute",
     "run", "trigger", "upsert", "insert", "set", "add", "archive", "close", "reply", "forward", "share", "move",
@@ -91,9 +95,10 @@ _RUNTIME_CMD = re.compile(
     r"gcloud\s+(?!config\b|auth\b|info\b|components\b|help\b|version\b|init\b|topic\b)(?:\S+\s+)*?(?:describe|list)|"
     r"aws\s+(?!configure\b|help\b)\S+\s+(?:describe|list|get)\S*|"
     r"az\s+(?!account\b|configure\b|config\b|version\b|login\b|help\b)(?:\S+\s+)*?(?:show|list)|"
-    r"docker\s+(?:ps|logs|inspect|stats)|systemctl\s+status|journalctl|curl|wget|claude\s+(?:-p|--print)|"
+    r"docker\s+(?:ps|logs|inspect|stats)|systemctl\s+status|journalctl|curl|wget|"
     r"groundwork\s+doctor)\b")
 _PIPEFAIL = re.compile(r"set\s+-[a-z]*o\s+pipefail\b")
+_PIPEFAIL_OFF = re.compile(r"set\s+\+[a-z]*o\s+pipefail\b")
 _FILTERS = {"tail", "head", "tee", "cat", "wc"}  # pass-through filters commonly appended to a command
 _SILENT = {"cd", "pushd", "popd", "export", "unset", "set", "true", ":", "source", ".", "umask"}  # print nothing
 _BENIGN_WORDS = {
@@ -105,15 +110,18 @@ _BENIGN_GIT = {"log", "show", "diff", "status", "blame", "ls-files", "rev-parse"
 _FIND_WRITES = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fls", "-fprintf"}
 _NO_RUN = re.compile(
     r"(?:^|\s)(?:--collect-only|--co|--version|--help|--fixtures|--fixtures-per-test|--markers|--setup-plan|"
-    r"--setup-only|--no-run|--list|--list-sessions|--listenvs|--listenvs-all|-help|-list|-version|-h|-V|--client)"
+    r"--collectonly|--setup-only|--no-run|--list|--list-sessions|--listenvs|--listenvs-all|--notest|--listTests|-help|-list|-version|-h|-V|--client)"
     r"(?:\s|=|$)")
 _CURL_FAIL = re.compile(r"(?:^|\s)(?:--fail(?:-with-body)?|-[A-Za-z]*f[A-Za-z]*)(?:\s|$)")
-_CURL_ACTION = re.compile(r"(?:^|\s)(?:-X\s*(?:POST|PUT|DELETE|PATCH)|-d|--data\S*|-F|--form\S*|-T|--upload-file)(?:\s|=|$)", re.I)
+_CURL_ACTION = re.compile(r"(?:^|\s)(?:-X\s*(?!GET\b|HEAD\b)\w+|--request(?:=|\s+)(?!GET\b|HEAD\b)\w+|--method(?:=|\s+)(?!GET\b|HEAD\b)\w+|"
+                          r"-d|--data\S*|--json|--post-data|--post-file|--body-data|--body-file|-F|--form\S*|-T|--upload-file)(?:\s|=|$)", re.I)
+_RISKY_ENV = re.compile(r"(?:^|\s)(?:PATH|PYTHONPATH|PYTHONSTARTUP|PYTEST_\w+|LD_\w+|DYLD_\w+|NODE_OPTIONS|BASH_ENV|ENV|GIT_\w+)=")
+_WRITE_FLAG = re.compile(r"(?:^|\s)(?:-o|-O|--output|--output-document)(?:\s|=|$)")
 _PY_TEST_SCRIPT = re.compile(r"python3?\s+(?:-[A-Za-z]\S*\s+)*(?:\S*/)?(?:test_\S*|\S*_tests?|run_?tests?)\.py\b")
 _KEYWORDS = {
     "exit", "return", "trap", "eval", "exec", "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
     "case", "esac", "select", "function", "!", "{", "}", "coproc", "break", "continue", "wait", "alias", "unalias",
-    "builtin"}
+    "builtin", "command", "source", "."}
 _FAIL_COUNT = re.compile(r"\b[1-9]\d*\s+(?:failed|errors?)\b")
 _PASS_COUNT = re.compile(r"\b[1-9]\d*\s+passed\b")
 _NOTHING_RAN = re.compile(
@@ -126,7 +134,6 @@ PRIORITY = {"review": 0, "test": 1, "runtime": 2, "repo": 3, "url": 4, "mcp": 5,
 _RESULT_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?REVIEW RESULT(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
 _RESULT_FIELD = re.compile(r"^[ \t]*(?:[-*][ \t]*)?\**[ \t]*([A-Za-z][A-Za-z -]*?)[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*$")
 
-_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏  ‪-‮⁦-⁩﻿]")
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _SECRETS = [  # (pattern, replacement) applied in order to every printed reference
     (re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@"), r"\1[redacted]@"),
@@ -152,14 +159,23 @@ def _text(content) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
     return ""
+
+
+_DROP_CATEGORIES = {"Cc", "Cf", "Zl", "Zp", "Co", "Cn"}  # control, format (bidi, zero-width, tag), separators, private/unassigned
+
+
+def _drop_invisible(s: str) -> str:
+    """Characters that are not visible text become a space (control, format, line/paragraph separator, private use,
+    unassigned): ESC, bidi overrides, zero-width and tag characters included."""
+    return "".join(" " if unicodedata.category(c) in _DROP_CATEGORIES else c for c in s)
 
 
 def _clip(s, n: int = REF_CAP) -> str:
     """One printable line: control, escape and bidi characters become spaces, whitespace collapses, length is capped.
     Everything the receipt prints from untrusted text goes through here."""
-    s = " ".join(_CTRL.sub(" ", _ANSI.sub("", str(s))).split())
+    s = " ".join(_drop_invisible(_ANSI.sub("", str(s))).split())
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
@@ -171,7 +187,17 @@ def _redact(s: str) -> str:
 
 def _safe(s, n: int = REF_CAP) -> str:
     """Redact first, then clip: a secret cut in half by the cap would no longer match its pattern."""
-    return _clip(_redact(_clip(s, 800)), n)  # 800 bounds the regex work per reference; secrets later than that are cut anyway
+    return _clip(_redact(_clip(s, 4000)), n)  # 4000 bounds the regex work per reference (every pattern is bounded)
+
+
+def _command_word(seg: str) -> str:
+    """The word that names the command of a segment: environment assignments and leading redirections are skipped
+    and quotes/backslashes removed ('exit', "exit", \\exit and `>/dev/null exit` are all `exit`)."""
+    words = seg[_PREFIX.match(seg).end():].split()
+    i = 0
+    while i < len(words) and re.match(r"^(?:\d*[<>]|&>)", words[i]):
+        i += 1 if re.search(r"[<>&]\S", words[i]) else 2
+    return re.sub(r"[\\'\"]", "", words[i]) if i < len(words) else ""
 
 
 def _split(command: str):
@@ -184,8 +210,8 @@ def _split(command: str):
     changes control flow or the exit status (`exit`, `trap`, `if`, `for`, `!`, …). A wrong split could
     credit a test that never ran."""
     text = command.strip()
-    if not text or any(t in text for t in ("<<", "`", "$(", "<(", ">(", "${", "$'", '$"')):
-        return None
+    if not text or len(text) > 20_000 or any(t in text for t in ("<<", "`", "$(", "<(", ">(", "${", "$'", '$"', "\\\n")):
+        return None  # (a backslash-newline continues a line, which can turn a later # into a comment)
     pieces, cur, quote, i = [], [], None, 0
 
     def flush(conn):
@@ -252,8 +278,7 @@ def _split(command: str):
         return None
     segs = [p[0] for p in pieces]
     for seg in segs:
-        words = seg[_PREFIX.match(seg).end():].split()
-        if words and words[0] in _KEYWORDS:
+        if _command_word(seg) in _KEYWORDS:
             return None
     return segs, [p[1] for p in pieces[:-1]]
 
@@ -315,8 +340,9 @@ def _starts(pattern, segment: str) -> bool:
 
 
 def _writes_file(segment: str) -> bool:
-    """A redirection to a file other than /dev/null (fd duplications like 2>&1 are not writes)."""
-    rest = re.sub(r"\d*>&\d+|&>>?\s*/dev/null|\d*>>?\s*/dev/null", "", segment)
+    """A redirection to a file other than /dev/null (fd duplications like 2>&1 are not writes; quoted text is not a redirection)."""
+    rest = re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", "''", segment)
+    rest = re.sub(r"\d*>&\d+|&>>?\s*/dev/null|\d*>>?\s*/dev/null", "", rest)
     return ">" in rest
 
 
@@ -327,6 +353,9 @@ def _test_info(segment: str):
     m = TEST_CMD.match(segment, start)
     if m is None:
         return None
+    follower = segment[m.end():m.end() + 1]
+    if follower and not (follower.isspace() or follower == "="):
+        return None  # `make test-clean`, `npm run test:clean`: a different target, not the test runner
     rest = segment[start:]
     tokens = rest.split()
     if re.match(r"python3?\s", rest) and not _PY_TEST_SCRIPT.match(rest):
@@ -339,8 +368,37 @@ def _test_info(segment: str):
         runs = False
     if runner == "go test" and "-n" in tokens:
         runs = False
-    scope = tuple(sorted(t for t in tokens[len(runner.split()):] if not t.startswith("-")))
+    cosmetic = re.compile(r"-(?:q+|v+|s|x|l)$|--(?:quiet|verbose|tb|color|durations|no-header|disable-warnings)(?:=.*)?$")
+    scope = tuple(sorted(t for t in tokens[len(runner.split()):] if not cosmetic.match(t)))
     return runner, scope, runs
+
+
+_SUMMARY = (  # a positive "tests really ran and passed" line, per runner family
+    (re.compile(r"^(?:pytest|py\.test)\b"), _PASS_COUNT),
+    (re.compile(r"^(?:tox|nox)\b"), re.compile(r"(?i)\bpassed\b|congratulations|: OK\b|was successful")),
+    (re.compile(r"^unittest\b"), re.compile(r"(?m)^Ran [1-9]\d* tests?\b")),
+    (re.compile(r"^cargo test\b"), re.compile(r"test result: ok\. [1-9]\d* passed")),
+    (re.compile(r"^go test\b"), re.compile(r"(?m)^(?:ok|PASS)\b")),
+    (re.compile(r"^(?:npm|yarn)\b"), re.compile(r"(?i)\b[1-9]\d* (?:passed|passing)\b|Tests:\s+(?:\d+ \w+, )?[1-9]\d* passed|(?m:^\s*(?:PASS|ok)\b)")),
+)
+
+
+def _positive_summary(runner: str, text: str) -> bool:
+    """Does the output carry the runner's own positive summary? Runners without a known summary line are accepted
+    on exit status plus non-empty output."""
+    for family, pattern in _SUMMARY:
+        if family.match(runner):
+            return pattern.search(text) is not None
+    return True
+
+
+def _cwd_of(segs: list, j: int) -> str:
+    """The directory the j-th segment runs in, as far as the text of earlier `cd` segments says."""
+    for seg in reversed(segs[:j]):
+        words = seg.split()
+        if words and words[0] == "cd":
+            return words[1] if len(words) > 1 else "~"
+    return ""
 
 
 def _runtime_shape_ok(segment: str) -> bool:
@@ -365,7 +423,7 @@ def _is_repo_read(segment: str) -> bool:
     if words[0] == "find":
         return not any(w in _FIND_WRITES for w in words)
     if words[0] == "sed":
-        return not any(w.startswith("-i") or w == "--in-place" for w in words)
+        return not any(w.startswith("-i") or w.startswith("--in-place") for w in words)
     return True
 
 
@@ -376,7 +434,11 @@ def _benign(segment: str) -> bool:
     if not words:
         return True  # only a variable assignment
     w = words[0]
+    if w == "groundwork":
+        return words[1:2] in (["evidence"], ["version"], ["copilot"])  # the receipt command must not lower its own estimate
     if w == "git":
+        while len(words) > 2 and words[1] in ("-C", "-c"):
+            words = [words[0], *words[3:]]  # git -C <path> / -c k=v before the subcommand
         sub = words[1] if len(words) > 1 else ""
         if sub == "branch":
             return all(a in ("-a", "-r", "-v", "-vv", "--list", "--show-current", "--all") for a in words[2:])
@@ -390,7 +452,7 @@ def _benign(segment: str) -> bool:
     if w == "find":
         return not any(a in _FIND_WRITES for a in words)
     if w == "sed":
-        return "-n" in words[1:2] and not any(a.startswith("-i") or a == "--in-place" for a in words)
+        return "-n" in words[1:2] and not any(a.startswith("-i") or a.startswith("--in-place") for a in words)
     if w == "sort":
         return not any(a == "-o" or a.startswith("--output") for a in words)
     return w in _BENIGN_WORDS
@@ -408,9 +470,9 @@ def _tool_words(tool: str) -> set:
     return {w.lower() for w in re.split(r"[_\-\s]+|(?<=[a-z])(?=[A-Z])", tool) if w}
 
 
-def _blocked_by_policy(text: str) -> bool:
+def _blocked_by_policy(is_error: bool, text: str) -> bool:
     """A PreToolUse hook (e.g. a fact-forcing gate) refused the call: it never ran, so it is not evidence."""
-    return text.startswith("PreToolUse:") and "hook error" in text[:120]
+    return is_error and re.match(r"PreToolUse:\S+ hook error", text) is not None
 
 
 def _review_state(text: str):
@@ -421,18 +483,26 @@ def _review_state(text: str):
     headings = list(_RESULT_HEADING.finditer(text or ""))
     if not headings:
         return "unparsed", None, None
-    fields = {}
-    for line in text[headings[-1].end():].splitlines():
-        if not line.strip():
+    fields, consumed = {}, 0
+    for line in text[headings[-1].end():].splitlines(keepends=True):
+        stripped = line.strip()
+        if len(stripped) > 200:  # no field is this long; also bounds the regex work
+            break
+        if not stripped:
             if fields:
                 break
+            consumed += len(line)
             continue
-        f = _RESULT_FIELD.match(line)
+        f = _RESULT_FIELD.match(stripped)
         if not f:
             if fields:
                 break
+            consumed += len(line)
             continue
         fields[f.group(1).strip().lower()] = f.group(2).strip().strip("*").strip()
+        consumed += len(line)
+    if len(text[headings[-1].end() + consumed:].strip()) > 600:
+        return "unparsed", None, None  # a block quoted in the middle of a longer report is not the reviewer's final result
     verdict = fields.get("verdict", "").lower().replace("_", "-").replace(" ", "-")
     verdict = {"approve": "approve", "approved": "approve", "changes-required": "changes-required"}.get(verdict)
     raw = fields.get("must-fix", fields.get("must fix", ""))
@@ -510,7 +580,7 @@ def derive_evidence(entries: list) -> dict:
         if uid not in results:
             continue  # still running, or never answered: no outcome, no evidence
         is_error, text = results[uid]
-        if _blocked_by_policy(text):
+        if _blocked_by_policy(is_error, text):
             continue
         if is_error:
             sig["tool_errors"] += 1
@@ -550,8 +620,10 @@ def derive_evidence(entries: list) -> dict:
         elif name.startswith("mcp__"):
             parts = name.split("__")
             server, tool = parts[1] if len(parts) > 1 else "?", parts[-1]
-            if (not is_error and READ_VERB.search(tool) and not (_tool_words(tool) & _MUTATING_WORDS)
-                    and _substantive(text)):
+            is_read = bool(READ_VERB.search(tool)) and not (_tool_words(tool) & _MUTATING_WORDS)
+            if not is_read and server != "github":
+                mutate((idx, 0))  # a local MCP writer (filesystem, code editor) changes the tree; the GitHub server only the remote
+            if not is_error and is_read and _substantive(text):
                 if server == "github":
                     sig["repo_inspected"] = True
                     add("repo", _gh_ref(name, inp))
@@ -565,12 +637,17 @@ def derive_evidence(entries: list) -> dict:
                 mutate((idx, 0))  # could have changed anything; nothing is credited
                 continue
             segs, conns = parsed
-            pipefail = bool(_PIPEFAIL.match(segs[0]))
+            pipefail = (bool(_PIPEFAIL.match(segs[0])) and bool(conns) and conns[0] in (";", "&&", "\n")
+                        and not any(_PIPEFAIL_OFF.match(sg) for sg in segs))
             prev_recognised = False
             for j, segment in enumerate(segs):
                 pos = (idx, j)
                 follows_recognised = prev_recognised and j > 0 and conns[j - 1] == "|"
                 prev_recognised = False
+                if _RISKY_ENV.search(segment[:_PREFIX.match(segment).end()]):
+                    sig["other_changes"] += 1  # PATH=…, PYTEST_ADDOPTS=…: the command is not what it looks like
+                    mutate(pos)
+                    continue
                 tinfo = _test_info(segment)
                 if tinfo is not None:
                     prev_recognised = True
@@ -578,11 +655,15 @@ def derive_evidence(entries: list) -> dict:
                     if not runs or background:
                         continue  # lists/help/version/dry-run, or not finished: neither evidence nor a change
                     ok = _outcome(j, segs, conns, pipefail, is_error, text)
-                    if ok is True and (not text.strip() or _NOTHING_RAN.search(text) or _FAIL_COUNT.search(text)
+                    if ok is True and (not text.strip() or (_NOTHING_RAN.search(text) and not _positive_summary(runner, text)) or _FAIL_COUNT.search(text)
+                                       or not _positive_summary(runner, text)
                                        or (re.search(r"\bskipped\b", text) and not _PASS_COUNT.search(text))):
                         ok = None  # exit 0 but nothing demonstrably ran, or the output contradicts the exit status
+                    cwd = _cwd_of(segs, j)
                     if ok is None:
                         st["pass"] = None  # a test-shaped run whose result cannot be attributed withdraws an earlier pass
+                        if _FAIL_COUNT.search(text) or "FAILED" in text:
+                            st["failing"].setdefault(runner, set()).add((cwd, scope))  # ...and a visible failure still caps the label
                         continue
                     sig["tests_ran"] += 1
                     add("test", segment, ok, cap=100)
@@ -590,16 +671,21 @@ def derive_evidence(entries: list) -> dict:
                         st["pass"], st["pass_ever"] = pos, True
                         failing = st["failing"]
                         if scope == ():
-                            failing.pop(runner, None)
+                            if runner in failing:
+                                failing[runner] = {k for k in failing[runner] if k[0] != cwd}
                         elif runner in failing:
-                            failing[runner].discard(scope)
-                            if not failing[runner]:
-                                del failing[runner]
+                            failing[runner].discard((cwd, scope))
+                        if runner in failing and not failing[runner]:
+                            del failing[runner]
                     else:
-                        st["failing"].setdefault(runner, set()).add(scope)
+                        st["failing"].setdefault(runner, set()).add((cwd, scope))
                     continue
                 if _starts(_RUNTIME_CMD, segment):
                     prev_recognised = True
+                    if _writes_file(segment) or _WRITE_FLAG.search(segment):
+                        sig["other_changes"] += 1  # `curl … > src/a.py`, `wget -O f`, `kubectl get … > f`: it wrote a file
+                        mutate(pos)
+                        continue
                     if _runtime_shape_ok(segment) and not background \
                             and _outcome(j, segs, conns, pipefail, is_error, text) is True:
                         st["runtime"], st["runtime_ever"] = pos, True
@@ -621,6 +707,9 @@ def derive_evidence(entries: list) -> dict:
                     continue
                 sig["other_changes"] += 1  # not on the known read-only list: it may have changed the tree
                 mutate(pos)
+        else:
+            if name not in _BENIGN_TOOLS:
+                mutate((idx, 0))  # Skill, SlashCommand, PowerShell, a tool this version has never seen: it may have changed things
     sig["edits"] = len(edited)
 
     lm = st["mut"]
@@ -654,8 +743,12 @@ def derive_evidence(entries: list) -> dict:
 
 def _confidence(sig: dict):
     """(label, reasons) — the rule documented in the module docstring, in one place."""
+    changed = sig["edits"] + sig["other_changes"]
     if not sig.get("inspected_any"):
-        return "NONE", ["nothing was inspected or run this turn"]
+        if not changed:
+            return "NONE", ["nothing was inspected or run this turn"]
+        return "LOW", [f"{sig['edits']} file edit(s) and {sig['other_changes']} other command(s) may have changed things; "
+                       "nothing was inspected and nothing verified them"]
     verified = sig["tests_last_ok"] is True or sig["runtime_observed"]
     changes = sig["edits"] + sig["other_changes"]
     reasons, capped = [], False
@@ -690,6 +783,8 @@ def _confidence(sig: dict):
             reasons.append("no independent review with a parsed REVIEW RESULT of zero MUST FIX")
         if sig["stale_verification"]:
             reasons.append("an earlier passing check predates later changes and is not counted")
+        if not (sig["repo_inspected"] or sig["external_source"]):
+            reasons.append("no repository file or external source was inspected")
         return "MEDIUM", reasons
     return "LOW", ["only files or the repository were read; nothing verified, fetched or ran"]
 
@@ -709,8 +804,8 @@ def telemetry_summary(entries: list) -> dict:
 def declared_label(declared):
     """The confidence label a response states, tolerant of punctuation and styling ('High.', '**HIGH**',
     'HIGH (ish)', 'MEDIUM/HIGH' -> the higher), or None when it states none."""
-    t = _CTRL.sub(" ", _ANSI.sub("", str(declared or ""))).upper()
-    m = re.match(r"\W*(NONE|LOW|MEDIUM|HIGH)\b(?:\s*[/\-]\s*(NONE|LOW|MEDIUM|HIGH)\b)?", t)
+    t = _drop_invisible(_ANSI.sub("", str(declared or ""))).upper()[:60]
+    m = re.search(r"\b(NONE|LOW|MEDIUM|HIGH)\b(?:\s*[/\-]\s*(NONE|LOW|MEDIUM|HIGH)\b)?", t)
     if not m:
         return None
     return max((g for g in m.groups() if g), key=lambda g: RANK[g])
@@ -738,7 +833,7 @@ def _default_transcript() -> Path | None:
             candidates = list(base.glob("*.jsonl"))
         except OSError:
             continue
-        for p in candidates:
+        for p in (c for c in candidates if not c.name.startswith("agent-")):
             try:
                 mtime = p.stat().st_mtime
             except OSError:
@@ -773,9 +868,13 @@ def main(argv=None) -> int:
     ap.add_argument("--transcript", help="transcript .jsonl to read (default: the newest for this directory's project)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
-    path = Path(args.transcript).expanduser() if args.transcript else _default_transcript()
+    try:
+        path = Path(args.transcript).expanduser() if args.transcript else _default_transcript()
+    except (RuntimeError, OSError):
+        path = None
     if path is None or not path.is_file():
-        return _unknown(args, "no readable transcript found for this directory (run it from the project, or pass --transcript)")
+        return _unknown(args, "that transcript is not a readable file" if args.transcript else
+                        "no readable transcript found for this directory (run it from the project, or pass --transcript)")
     try:
         from groundwork_telemetry import current_turn, parse_metadata  # lazy: telemetry imports this module
         entries = current_turn(str(path))
