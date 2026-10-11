@@ -128,3 +128,7 @@ The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic
 #### Scenario: Many test segments over a large result
 - **WHEN** one Bash call chains 50 `pytest` segments and its result is 8 MB
 - **THEN** the turn is analysed within the work budget (or reported UNKNOWN), because each text-wide question about the result is answered by one pass
+
+#### Scenario: An interrupted call may have run
+- **WHEN** a Bash, Agent or MCP call returns an error whose entry carries `toolDenialKind: interrupted` or `cancelled` (an abort during execution)
+- **THEN** it is not treated as refused: an interrupted `sed -i` or `git checkout` is a possible change and lowers the label; only the denial kinds (`user-rejected`, `permission-rule`, `automode-*`) and the listed wordings (never from an MCP server) mark a call as never run

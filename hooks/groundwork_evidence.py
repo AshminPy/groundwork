@@ -69,10 +69,11 @@ Known gaps, stated rather than hidden (the label can be too high in these cases)
     runner clears earlier failures of that runner in the same directory even if flags or config selected fewer tests;
   * the working directory is tracked only through a `cd` inside the same command, not across commands;
   * only the last 32 MB of a transcript are read: in a turn longer than that, earlier failures and changes are not
-    seen (the label can be too high); a turn of 40 MB measured 1.0 s, a 104 MB transcript with a short turn 0.12 s;
+    seen (the label can be too high); a 51 MB single turn of 22,593 reads measured 0.5 s through the Stop hook, a 104 MB transcript with a short turn 0.12 s;
   * calls are ordered by when they were issued; parallel calls in one message have no defined effect order;
   * the work budget is checked between units of work, not inside one pass over a result (a 30 MB result under several
     distinct runners measured 4.7 s in the Stop hook);
+  * the Stop hook's own turn_facts counts refused calls as issued; a local slash command (`/model`) starts a tool-free turn;
   * a failing `&&` chain marks every segment before the last as failed (conservative); piped `go test | tail` and mocha
     failures are not seen; the receipt command spelled by path and `SendMessage` count as changes;
   * only the first 4,000 characters of a command or reference text are considered, so a secret that straddles that
@@ -280,9 +281,9 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*\S+(?:\s+\S+)?"), "authorization: [redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
     (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*(?:[^'\"\n]|(?<==)\"[^\"\n]*\")+"), "cookie: [redacted]"),  # up to the closing quote (a quoted value after "=" is inside it): browser-copied headers hold several cookies
-    (re.compile(r"(?i)(?:^|(?<=\s))(?:-[A-Za-z]*u(?:\s+|(?=[^\s=-]+:))|--user\s+|--proxy-user\s+)\S+"), "-u [redacted]"),  # also clustered (-fsSu) and glued (-uuser:pw)
-    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]*E(?:\s+(?=\S*:)|(?=\S*:))|--pass(?:\s+|=)|--proxy-pass(?:\s+|=)|--key-pass(?:\s+|=))\S+"), "-E [redacted]"),  # -E file:password, --pass
-    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]*b(?:\s+|=)|-[A-Za-z]*b(?=[^\s=]*=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
+    (re.compile(r"(?i)(?:^|(?<=\s))(?:-[A-Za-z]{0,8}u(?:\s+|(?=[^\s:]+:))|--user\s+|--proxy-user\s+)\S+"), "-u [redacted]"),  # also clustered (-fsSu) and glued (-uuser:pw)
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,8}E(?:\s+(?=\S*:)|(?=\S*:))|--pass(?:\s+|=)|--proxy-pass(?:\s+|=)|--key-pass(?:\s+|=))\S+"), "-E [redacted]"),  # -E file:password, --pass
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,8}b(?:\s+|=)|-[A-Za-z]{0,8}b(?=[^\s=]*=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
     (re.compile(r"(?:^|(?<=\s))(--cert[= ]\s*[^\s:]*:)\S+"), r"\1[redacted]"),  # --cert file:password
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
@@ -512,7 +513,15 @@ def _runtime_key(segment: str) -> tuple:
     `kubectl get pods` after a failed `curl -f URL` is another. Flags stay in the key (`--project=prod`, `-n prod`, `-nprod`, `KUBECONFIG=/k/prod
     kubectl …`): the same command aimed at another environment is another check, and a retry with other flags is too (the label stays LOW until the
     exact command succeeds)."""
-    return tuple(w for w in segment.split() if not re.match(r"\d*[<>]|&>", w))
+    key, skip = [], False
+    for w in segment.split():
+        if skip:
+            skip = False  # the target of a bare `>` / `2>` / `&>`
+        elif re.fullmatch(r"\d*>>?|&>>?", w):
+            skip = True
+        elif not re.match(r"\d*[<>]|&>", w):
+            key.append(w)
+    return tuple(key)
 
 
 def _starts(pattern, segment: str) -> bool:
@@ -674,11 +683,13 @@ def _tool_words(tool: str) -> set:
     return {w.lower() for w in re.split(r"[_\-\s]+|(?<=[a-z])(?=[A-Z])", tool) if w}
 
 
+_DENIAL_KINDS = {"user-rejected", "permission-rule", "automode-blocked", "automode-unavailable", "automode-parsing-error"}  # `interrupted` and `cancelled` are aborts: the call may have run
 _REFUSED = re.compile(
     r"PreToolUse:\S+ hook error|Permission (?:to use \S+ (?:with|has been denied)|for this (?:command|action) was denied)"
     r"|The user doesn't want to proceed with this tool use|The server-side auto mode classifier"
     r"|This (?:Bash )?command (?:requires approval|contains multiple operations)"
-    r"|(?:A variable in braces|Quoted text) in this command can't be checked before it runs|<tool_use_error>Blocked:")
+    r"|(?:A variable in (?:braces in )?this command|Quoted text in this command) can't be checked before it runs|Contains brace with quote character"
+    r"|sed in .{0,200} needs approval|<tool_use_error>Blocked:")
 
 
 def _blocked_by_policy(is_error: bool, text: str) -> bool:
@@ -799,7 +810,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                 order.append(b["id"])
             elif b.get("type") == "tool_result" and b.get("tool_use_id"):
                 results[b["tool_use_id"]] = (bool(b.get("is_error")), _text(b.get("content")))
-                if e.get("toolDenialKind"):
+                if e.get("toolDenialKind") in _DENIAL_KINDS:
                     refused.add(b["tool_use_id"])
 
     refs = {}
@@ -835,8 +846,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
         if uid not in results:
             continue  # still running, or never answered: no outcome, no evidence
         is_error, text = results[uid]
-        if uid in refused or _blocked_by_policy(is_error, text):
-            continue
+        if uid in refused or (not name.startswith("mcp__") and _blocked_by_policy(is_error, text)):
+            continue  # (an MCP server writes its own error text: a refusal wording there proves nothing)
         if is_error:
             sig["tool_errors"] += 1
         if name in EDIT_TOOLS:
@@ -1197,4 +1208,11 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:  # `groundwork evidence | head -3`: the reader left; say nothing
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except Exception:
+            pass
+        sys.exit(0)

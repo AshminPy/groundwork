@@ -79,7 +79,7 @@ def _meta_field(line: str):
 LABEL = re.compile(r"^[a-z][a-z0-9 _:-]{0,31}$")  # ":" allowed for agent ids like ecc:code-reviewer
 TOKEN_SHAPED = re.compile(r"[a-z0-9_-]*\d[a-z0-9_-]*")  # a "word" containing a digit; long ones look like keys
 PLAYBOOKS = {"RESEARCH", "EXPLAIN", "DESIGN", "PLAN", "IMPLEMENT", "TROUBLESHOOT", "VALIDATE", "AUDIT", "DEPLOY", "DOCUMENT"}
-TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step
+TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step up to TAIL_STEP_CAP
 TAIL_CAP = 32 * 1024 * 1024      # never read more than this from the end of the transcript
 TAIL_STEP_CAP = 2 * 1024 * 1024  # no chunk is larger than this, so the deadline is looked at often enough
 HOOK_START = time.monotonic()    # the Stop hook has a 10 s timeout (scripts/merge_settings.py)
@@ -92,7 +92,7 @@ HEADLINE = re.compile(r"^\s*Groundwork\s+\S+\s*[·\-–—|]\s*([A-Za-z]+)\s*$",
 # partial > complete; "not done"-style negations count as partial; nothing recognisable -> unknown.
 OVERALL = re.compile(r"Overall:\s{0,20}\**\s{0,20}(COMPLETE|PARTIAL|BLOCKED|PLANNED|FAILED)", re.IGNORECASE)  # runs of blanks are bounded: adjacent \s* were quadratic on a model answer that starts with 20,000 spaces
 STATUS_HEAD = re.compile(r"(?:^|\n)[ \t]{0,20}(?:#+[ \t]{0,20})?\**[ \t]{0,20}(?:Status|Result)[ \t]{0,20}\**[ \t]{0,20}:?[ \t]{0,20}\**[ \t]{0,20}(.*)", re.IGNORECASE)
-NOTHING_LEFT = re.compile(r"\b(?:next(?: action| step)?|your move|remaining|open items?)\s*\**\s*:\s*\**\s*(?:none|nothing)\b", re.IGNORECASE)
+NOTHING_LEFT = re.compile(r"\b(?:next(?: action| step)?|your move|remaining|open items?)\s{0,20}\**\s{0,20}:\s{0,20}\**\s{0,20}(?:none|nothing)\b", re.IGNORECASE)
 LEAD_HEAD = re.compile(r"(?:^|\n)[ \t]{0,20}(?:#+[ \t]{0,20})?\**[ \t]{0,20}(?:Answer|Recommendation|Deliverable|Plan|Goal)[ \t]{0,20}\**[ \t]{0,20}:?", re.IGNORECASE)
 BOLD_LEAD = re.compile(r"^\s*\*\*(?:(?:my )?(?:call|finding|verdict|answer|result|status)\s*:\s*)?(.+?)\*\*", re.IGNORECASE)
 # A plain opening line that starts with a state word is explicit status language too ("Complete. subtract() added…").
@@ -236,21 +236,31 @@ def is_compaction_request(entries: list, i: int) -> bool:
     return False
 
 
+class _Turn(list):
+    """The entries of one turn. `summariser` is True when this Stop belongs to a compaction's own summariser turn (the newest prompt is the
+    summariser request and no compaction boundary follows it yet): the real turn is not over, so no record is written."""
+
+    def __init__(self, items=(), summariser: bool = False):
+        super().__init__(items)
+        self.summariser = bool(summariser)
+
+
 def current_turn(transcript_path: str, deadline: float | None = None) -> list:
     """Entries after the last human prompt (a 'user' entry that carries no tool_result).
 
     Reads the transcript backwards in growing chunks (each chunk is parsed once, never again) and stops at the first
     human prompt it meets, so cost follows the size of the current turn, not of the whole session. At most TAIL_CAP
     bytes are read; a turn longer than that contributes only its tail (facts are then a lower bound, which is acceptable
-    for aggregate reporting). With a `deadline` (time.monotonic()), reading stops there and nothing is returned: the
-    record is then written without observed facts, exactly as for an unreadable transcript."""
+    for aggregate reporting). With a `deadline` (time.monotonic()), reading stops there and the entries read so far are
+    returned: a lower bound too, so a slow read costs counts, not the record."""
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as f:
             pos, step, carry, entries = size, TAIL_CHUNK, b"", []
+            summariser = None  # None until a compaction request is met; then True if no boundary follows it (this Stop ends the summariser's own turn)
             while True:
                 if deadline is not None and time.monotonic() > deadline:
-                    return []
+                    return _Turn(entries, bool(summariser))
                 take = min(step, pos, TAIL_CAP - (size - pos))  # never more than TAIL_CAP in total
                 pos -= take
                 f.seek(pos)
@@ -272,10 +282,15 @@ def current_turn(transcript_path: str, deadline: float | None = None) -> list:
                         parsed.append(e)
                 entries = parsed + entries
                 for i in range(len(parsed) - 1, -1, -1):
-                    if is_human_prompt(parsed[i]) and not is_compaction_request(entries, i):
-                        return entries[i:]
+                    if not is_human_prompt(parsed[i]):
+                        continue
+                    if is_compaction_request(entries, i):
+                        if summariser is None:
+                            summariser = not any(x.get("subtype") == "compact_boundary" or x.get("isCompactSummary") for x in entries[i + 1:])
+                        continue
+                    return _Turn(entries[i:], summariser)
                 if pos == 0 or size - pos >= TAIL_CAP:
-                    return entries
+                    return _Turn(entries, summariser)
                 step = min(step * 2, TAIL_STEP_CAP)
     except Exception:
         return []
@@ -410,6 +425,8 @@ def build_record(data: dict, text: str) -> dict:
     except that agent count / mode / roles are reconciled against observed Agent calls (authoritative)."""
     meta = parse_metadata(text)
     entries = current_turn(data.get("transcript_path", ""), deadline=HOOK_START + HOOK_BUDGET_S)
+    if getattr(entries, "summariser", False):
+        return {}  # the Stop of a compaction's own summariser turn: the real turn has not ended and writes its own record
     facts = turn_facts(entries)
     if not meta and not facts["tools"]:
         return {}  # conversational reply, no tool use: nothing to record

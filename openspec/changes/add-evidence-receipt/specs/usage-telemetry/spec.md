@@ -25,4 +25,8 @@ The per-turn record SHALL carry, under `observed`, the evidence-confidence estim
 
 #### Scenario: A long run of blanks in the model's answer
 - **WHEN** the model's final message starts with 20,000 spaces or tabs, or `Overall:` is followed by thousands of blank lines
-- **THEN** the Stop hook still finishes well inside its timeout and writes the record, because the status regexes bound their blank runs; and a transcript read that outlasts the hook deadline yields a record without observed facts rather than a lost one
+- **THEN** the Stop hook still finishes well inside its timeout and writes the record, because the status regexes (`OVERALL`, `STATUS_HEAD`, `LEAD_HEAD`, `NOTHING_LEFT`) bound their blank runs; and a transcript read that outlasts the hook deadline yields a record built from the entries read so far (a lower bound) rather than a lost one
+
+#### Scenario: The Stop of a compaction's summariser turn
+- **WHEN** the Stop hook fires at the end of the turn in which Claude Code summarises the context (the newest prompt is the summariser request and no compaction boundary follows it yet)
+- **THEN** no record is written, because the real turn has not ended; a Stop after the boundary (a turn that was compacted mid-way) records the whole turn

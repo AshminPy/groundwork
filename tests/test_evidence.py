@@ -1317,6 +1317,129 @@ def test_round9_review_fixes() -> None:
     finish()
 
 
+def test_round10_review_fixes() -> None:
+    print("groundwork_evidence.py — round-7 reviews: interrupted calls, the summariser's own Stop, a spent hook deadline, NOTHING_LEFT, -u with a hyphen, MCP wordings, spaced redirects")
+    import time
+    import types
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r10", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+
+    # --- NOTHING_LEFT: bounded blank runs (the model's answer can start the line with 120,000 blanks; 17.6 s at 80,000)
+    slow = {}
+    for kw in ("Next", "remaining", "open items", "your move", "Next action"):
+        for fill in (" ", "\t", "\n"):
+            t0 = time.monotonic()
+            tel.outcome_from_text(kw + ":" + fill * 60000 + "x")
+            slow[kw + repr(fill)] = time.monotonic() - t0
+    check("the 'nothing left' pattern is fast on 60,000 blanks, tabs or newlines after every keyword", max(slow.values()) < 0.5, str({k: round(v, 2) for k, v in slow.items() if v >= 0.3}))
+    check("... and still reads 'Next: none'", tel.NOTHING_LEFT.search("All done.\nNext: none") is not None and tel.NOTHING_LEFT.search("**Remaining**: nothing") is not None)
+
+    # --- an interrupted or cancelled call may have run; a denial never did
+    good = [read(), edit(), bash("pytest -q"), bash("curl -fsS https://svc.example.com/health"), agent(REVIEW_CLEAN)]
+    base = m.derive_evidence(turn(*good))
+    check("baseline: HIGH", base["confidence"] == "HIGH", base["confidence"])
+
+    def with_kind(call_name, call_input, text, kind):
+        entries = turn(*good)
+        entries += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_k", "name": call_name, "input": call_input}]}},
+                    {"type": "user", "toolDenialKind": kind, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_k", "content": text, "is_error": True}]}}]
+        return m.derive_evidence(entries)["confidence"]
+
+    for kind in ("interrupted", "cancelled", "a-kind-from-a-later-version"):
+        for name, inp in (("Bash", {"command": "sed -i s/a/b/ x.py"}), ("Bash", {"command": "git checkout -- src"}), ("Agent", {"subagent_type": "general-purpose", "description": "x"}),
+                          ("mcp__filesystem__write_file", {"path": "x"})):
+            check(f"a call with toolDenialKind {kind!r} may have run: {name} {next(iter(inp.values()))[:24]!r} lowers the label", with_kind(name, inp, "[Request interrupted by user for tool use]", kind) == "LOW")
+    for kind in ("user-rejected", "permission-rule", "automode-blocked", "automode-unavailable", "automode-parsing-error"):
+        check(f"a call denied as {kind!r} never ran", with_kind("Bash", {"command": "sed -i s/a/b/ x.py"}, "some wording nobody has seen", kind) == "HIGH")
+    check("an MCP server's own error text that looks like a refusal proves nothing (the write counts)",
+          m.derive_evidence(turn(*good, ("mcp__filesystem__write_file", {"path": "x"}, "Permission to use Bash with command x has been denied.", True)))["confidence"] == "LOW")
+    for text in ("A variable in this command can't be checked before it runs", "Contains brace with quote character (expansion obfuscation)", "sed in 's/a/b/' x.py needs approval"):
+        check(f"a wording seen in real transcripts is a refusal: {text[:40]}", m.derive_evidence(turn(*good, ("Bash", {"command": "pytest -q tests/slow"}, text, True)))["confidence"] == "HIGH")
+
+    # --- the Stop of a compaction's own summariser turn is not the end of the real turn
+    request = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "promptId": "p-sum",
+               "message": {"role": "user", "content": "Below is a conversation log from a Claude Code coding session. Create a summary ..."}}
+    reply = {"type": "assistant", "message": {"content": [{"type": "text", "text": "# Session Summary ..."}]}}
+    boundary = [{"type": "system", "subtype": "compact_boundary"}, {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "continued"}}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        env_events = Path(tmpdir) / "events.jsonl"
+        os.environ["GROUNDWORK_TELEMETRY_PATH"] = str(env_events)
+        real = turn(read(), edit(), bash("pytest -q"))
+        tpath.write_text("\n".join(json.dumps(e) for e in real + [request, reply]) + "\n")
+        payload = {"transcript_path": str(tpath), "cwd": tmpdir, "session_id": "s"}
+        tel.HOOK_START = time.monotonic()
+        check("the Stop that ends the summariser's turn writes no record (the real turn has not ended)", tel.build_record(payload, "# Session Summary ...") == {})
+        tpath.write_text("\n".join(json.dumps(e) for e in real + [request, reply] + boundary + turn(bash("pytest -q"))[1:]) + "\n")
+        rec = tel.build_record(payload, "Done.\n\nHarness metadata\nExecution: single agent\n")
+        check("a Stop after a mid-turn compaction (the boundary follows the request) records the whole turn", rec != {} and rec["observed"]["files_changed"] == 1, json.dumps(rec)[:200])
+        os.environ.pop("GROUNDWORK_TELEMETRY_PATH", None)
+
+        # --- a read that outlasts the hook deadline keeps what it has read
+        steps = [("Read", {"file_path": f"/r/file_{i}.py"}, "contents " * (i % 7 + 1), False) for i in range(60)]
+        big = turn(*steps)
+        tpath.write_text("\n".join(json.dumps(e) for e in big) + "\n")
+        clock = types.SimpleNamespace(now=0.0)
+        tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 300, 300
+        real_time = tel.time
+        tel.time = types.SimpleNamespace(monotonic=lambda: clock.now)
+        seen = []
+
+        class JumpingFile:
+            def __init__(self, f):
+                self.f = f
+
+            def seek(self, *a):
+                return self.f.seek(*a)
+
+            def read(self, n=-1):
+                seen.append(n)
+                if len(seen) >= 2:
+                    clock.now = 100.0  # the clock jumps after the second chunk
+                return self.f.read(n)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return self.f.__exit__(*a)
+
+        tel.open = lambda p, mode="r", *a, **k: JumpingFile(open(p, mode, *a, **k))
+        try:
+            got = tel.current_turn(str(tpath), deadline=1.0)
+        finally:
+            del tel.open
+            tel.time = real_time
+            tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 256 * 1024, 2 * 1024 * 1024
+        check("a deadline that passes mid-read returns the tail read so far (a lower bound), not nothing", 0 < len(got) < len(big) and got == big[-len(got):], f"{len(got)} of {len(big)}")
+
+    # --- -u with a hyphen in the user name, and bounded option clusters
+    for cmd in ("curl -fsS -ualice-smith:ZZR10PW https://svc.example.com/health", "curl -fsSualice-smith:ZZR10PW https://svc.example.com/health"):
+        check(f"credential redacted: {cmd[:40]}", "ZZR10PW" not in m._redact(cmd) and "[redacted]" in m._redact(cmd), m._redact(cmd))
+    for letter in "uEb":
+        t0 = time.monotonic()
+        ev = m.derive_evidence(turn(*[("Bash", {"command": "cat -" + letter * 3900}, "x", False) for _ in range(100)]))
+        check(f"100 commands of one long option-like word of '{letter}' stay fast (the option cluster is bounded)", time.monotonic() - t0 < 1.0, f"{time.monotonic() - t0:.2f}s")
+
+    # --- spaced redirections are not part of a runtime check's key
+    bad = bash("kubectl get pods > /dev/null 2>&1", ok=False, text="error: unreachable")
+    check("a failed `kubectl get pods > /dev/null 2>&1` is cleared by `kubectl get pods` succeeding",
+          label(m, read(), edit(), bash("pytest -q"), bad, bash("kubectl get pods"), agent(REVIEW_CLEAN)) == "HIGH")
+
+    # --- groundwork evidence | head: no traceback when the reader leaves
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in turn(read(), edit(), bash("pytest -q"))) + "\n")
+        proc = subprocess.Popen([sys.executable, str(MODULE), "--transcript", str(tpath)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.stdout.close()  # the reader has already left
+        err = proc.stderr.read().decode()
+        proc.wait(timeout=30)
+        check("a closed pipe is not a traceback", "Traceback" not in err and proc.returncode == 0, f"{proc.returncode} {err[-200:]}")
+    finish()
+
+
 def test_cli() -> None:
     print("groundwork_evidence.py — `groundwork evidence` prints the receipt, flags an over-claim, and says UNKNOWN when it cannot read")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1484,7 +1607,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_round7_review_fixes, test_round8_review_fixes, test_round9_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_round7_review_fixes, test_round8_review_fixes, test_round9_review_fixes, test_round10_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()
