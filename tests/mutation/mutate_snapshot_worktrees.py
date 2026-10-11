@@ -62,6 +62,8 @@ M = [
  ("ambiguous line not fitted to the budget", 'return _fit(["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"], budget)', 'return ["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"]'),
  ("fit drops the summary first", 'lines.pop()', 'lines.pop(0)'),
  ("fit trims nothing", 'lines.pop()', 'break'),
+ ("unpushed commits rank with clean no-upstream", 'else 1 if re.match(r"[1-9]\\d* ahead", upstream) else 2', 'else 2'),
+ ("unpushed commits rank below clean no-upstream", 'else 1 if re.match(r"[1-9]\\d* ahead", upstream) else 2', 'else 2 if re.match(r"[1-9]\\d* ahead", upstream) else 1'),
  ("rows in git listing order, not by risk", 'rows = [row for _, row in sorted(local_only, key=lambda ranked: ranked[0])]', 'rows = [row for _, row in local_only]'),
  ("overflow line reserved for the last row too", 'reserve = OVERFLOW_LINE_CHARS if len(rows) > k + 1 else 0', 'reserve = OVERFLOW_LINE_CHARS'),
  ("fit drops a section that exactly fits", 'while lines and len("\\n".join(lines)) > budget:', 'while lines and len("\\n".join(lines)) >= budget:'),

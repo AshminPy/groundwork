@@ -730,14 +730,17 @@ def test_snapshot_worktrees() -> None:
         # --- reading siblings must not rewrite their indexes (the mutant that drops GIT_OPTIONAL_LOCKS is only visible when the
         # caller's environment does not already carry it)
         saved_locks = os.environ.pop("GIT_OPTIONAL_LOCKS", None)
-        index = Path(git(dirty, "rev-parse", "--git-path", "index").strip())
-        index = index if index.is_absolute() else dirty / index
-        os.utime(dirty / "f.txt", (time.time() + 50, time.time() + 50))  # stale stat data: a plain `git status` would refresh the index
-        before = index.stat().st_mtime_ns
-        mod.worktree_facts(str(repo))
-        check("listing siblings leaves their index file untouched (GIT_OPTIONAL_LOCKS=0)", index.stat().st_mtime_ns == before)
-        if saved_locks is not None:
-            os.environ["GIT_OPTIONAL_LOCKS"] = saved_locks
+        try:
+            index = Path(git(dirty, "rev-parse", "--git-path", "index").strip())
+            index = index if index.is_absolute() else dirty / index
+            os.utime(dirty / "f.txt", (time.time() + 50, time.time() + 50))  # stale stat data: a plain `git status` would refresh the index
+            before = index.stat().st_mtime_ns
+            mod.worktree_facts(str(repo))
+            unchanged = index.stat().st_mtime_ns == before
+        finally:
+            if saved_locks is not None:
+                os.environ["GIT_OPTIONAL_LOCKS"] = saved_locks
+        check("listing siblings leaves their index file untouched (GIT_OPTIONAL_LOCKS=0)", unchanged)
 
         # --- bounds
         mod.MAX_WORKTREES_EXAMINED = 2
@@ -1020,6 +1023,23 @@ def test_snapshot_worktrees_edge_cases() -> None:
             mod.MAX_WORKTREES_LISTED = listed_before
         check("a worktree with uncommitted changes is listed before clean ones that merely have no upstream, even when git lists it last",
               len(ordered) == 5 and "z-dirty" in ordered[1] and "untracked" in ordered[1] and "1 more" in ordered[4], "\n".join(ordered))
+        # the middle rank: unpushed commits sort after uncommitted changes and before clean worktrees without an upstream
+        rk = mk(tmp / "rk")
+        rk_origin = tmp / "rk-origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "trunk", str(rk_origin)], check=True, env=GIT_ENV)
+        git(rk, "remote", "add", "origin", str(rk_origin))
+        git(rk, "push", "-q", "-u", "origin", "trunk")
+        for nm in ("a-noup", "b-noup", "z-ahead"):
+            git(rk, "worktree", "add", "-q", "-b", f"feat/{nm}", str(tmp / f"rk-{nm}"))
+        git(tmp / "rk-z-ahead", "push", "-q", "-u", "origin", "feat/z-ahead")
+        git(tmp / "rk-z-ahead", "commit", "-q", "--allow-empty", "-m", "unpushed")
+        listed_before, mod.MAX_WORKTREES_LISTED = mod.MAX_WORKTREES_LISTED, 3
+        try:
+            ranked = mod.worktree_facts(str(rk))
+        finally:
+            mod.MAX_WORKTREES_LISTED = listed_before
+        check("a worktree with unpushed commits is listed before clean ones that merely have no upstream (and after uncommitted changes)",
+              len(ranked) == 4 and "z-ahead" in ranked[1] and "1 ahead" in ranked[1] and "a-noup" in ranked[2] and "b-noup" in ranked[3], "\n".join(ranked))
         # the last row needs no '… N more' line, so it is shown whenever it fits on its own
         solo = mk(tmp / "solo")
         git(solo, "worktree", "add", "-q", "-b", "feat/only", str(tmp / "solo-wt"))
