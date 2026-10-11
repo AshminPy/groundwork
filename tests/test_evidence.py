@@ -1355,26 +1355,62 @@ def test_round10_review_fixes() -> None:
         check(f"a call denied as {kind!r} never ran", with_kind("Bash", {"command": "sed -i s/a/b/ x.py"}, "some wording nobody has seen", kind) == "HIGH")
     check("an MCP server's own error text that looks like a refusal proves nothing (the write counts)",
           m.derive_evidence(turn(*good, ("mcp__filesystem__write_file", {"path": "x"}, "Permission to use Bash with command x has been denied.", True)))["confidence"] == "LOW")
+    for odd in (["x"], {"a": 1}, 5):
+        check(f"an unhashable or odd toolDenialKind ({odd!r}) neither raises nor counts as a refusal", with_kind("Bash", {"command": "sed -i s/a/b/ x.py"}, "boom", odd) == "LOW")
     for text in ("A variable in this command can't be checked before it runs", "Contains brace with quote character (expansion obfuscation)", "sed in 's/a/b/' x.py needs approval"):
         check(f"a wording seen in real transcripts is a refusal: {text[:40]}", m.derive_evidence(turn(*good, ("Bash", {"command": "pytest -q tests/slow"}, text, True)))["confidence"] == "HIGH")
 
-    # --- the Stop of a compaction's own summariser turn is not the end of the real turn
-    request = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "promptId": "p-sum",
+    # --- the Stop of a compaction's own summariser turn is not the end of the real turn: decided per Stop, by the parentUuid chain
+    def link(entries, parent=None, prefix="m"):
+        """Give each entry a uuid and make it the child of the previous one (the main thread); returns (entries, last uuid)."""
+        out = []
+        for n, e in enumerate(entries):
+            e = dict(e, uuid=f"{prefix}{len(out)}", parentUuid=parent)
+            out.append(e)
+            parent = e["uuid"]
+        return out, parent
+
+    request = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "promptId": "p-sum", "uuid": "req",
                "message": {"role": "user", "content": "Below is a conversation log from a Claude Code coding session. Create a summary ..."}}
-    reply = {"type": "assistant", "message": {"content": [{"type": "text", "text": "# Session Summary ..."}]}}
-    boundary = [{"type": "system", "subtype": "compact_boundary"}, {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "continued"}}]
+    attach = {"type": "attachment", "uuid": "att", "parentUuid": "req"}
+    reply = {"type": "assistant", "uuid": "rep", "parentUuid": "att", "message": {"content": [{"type": "text", "text": "# Session Summary ..."}]}}
     with tempfile.TemporaryDirectory() as tmpdir:
         tpath = Path(tmpdir) / "t.jsonl"
-        env_events = Path(tmpdir) / "events.jsonl"
-        os.environ["GROUNDWORK_TELEMETRY_PATH"] = str(env_events)
-        real = turn(read(), edit(), bash("pytest -q"))
-        tpath.write_text("\n".join(json.dumps(e) for e in real + [request, reply]) + "\n")
+        os.environ["GROUNDWORK_TELEMETRY_PATH"] = str(Path(tmpdir) / "events.jsonl")
+        main, last = link(turn(read(), edit(), bash("pytest -q")))
+        fork = dict(request, parentUuid=last)
         payload = {"transcript_path": str(tpath), "cwd": tmpdir, "session_id": "s"}
         tel.HOOK_START = time.monotonic()
-        check("the Stop that ends the summariser's turn writes no record (the real turn has not ended)", tel.build_record(payload, "# Session Summary ...") == {})
-        tpath.write_text("\n".join(json.dumps(e) for e in real + [request, reply] + boundary + turn(bash("pytest -q"))[1:]) + "\n")
-        rec = tel.build_record(payload, "Done.\n\nHarness metadata\nExecution: single agent\n")
-        check("a Stop after a mid-turn compaction (the boundary follows the request) records the whole turn", rec != {} and rec["observed"]["files_changed"] == 1, json.dumps(rec)[:200])
+
+        def record_for(entries, text="Done.\n\nHarness metadata\nExecution: single agent\n"):
+            tpath.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+            tel.HOOK_START = time.monotonic()
+            return tel.build_record(payload, text)
+
+        check("the Stop that ends the summariser's turn (its reply descends from the request) writes no record",
+              record_for(main + [fork, attach, reply], "# Session Summary ...") == {})
+        cont, _ = link(turn(bash("git status"))[1:], parent=last, prefix="c")
+        rec = record_for(main + [fork, attach, reply] + cont)
+        check("work that goes on after an aborted compaction (no boundary ever written) is recorded at its own Stop: the 20 of 213 real Stops the first version lost",
+              rec != {} and rec["observed"]["files_changed"] == 1 and "Bash" in rec["observed"]["tools"], json.dumps(rec)[:200])
+        concurrent, _ = link(turn(bash("git status"))[1:], parent=last, prefix="k")
+        check("the real turn's Stop that fires before the summary reply lands is recorded", record_for(main + [fork] + concurrent) != {})
+        check("... and the summariser's Stop that follows it is not", record_for(main + [fork] + concurrent + [attach, reply], "# Session Summary ...") == {})
+        post, _ = link([{"type": "system", "subtype": "compact_boundary"}], parent=None, prefix="b")
+        summ = {"type": "user", "isCompactSummary": True, "uuid": "sum", "parentUuid": "b0", "message": {"role": "user", "content": "continued"}}
+        after, _ = link(turn(bash("pytest -q"))[1:], parent="sum", prefix="a")
+        check("a Stop after a mid-turn compaction (a new chain starts at the boundary) records the whole turn",
+              (record_for(main + [fork, attach, reply] + post + [summ] + after) or {}).get("observed", {}).get("files_changed") == 1)
+        sidechain = {"type": "assistant", "isSidechain": True, "uuid": "side", "parentUuid": None, "message": {"content": [{"type": "text", "text": "subagent"}]}}
+        check("a sub-agent's assistant entry after the summary reply does not hide the summariser's Stop",
+              record_for(main + [fork, attach, reply, sidechain], "# Session Summary ...") == {})
+        bare = [{k: v for k, v in e.items() if k not in ("uuid", "parentUuid")} for e in main + [fork, attach, reply]]
+        check("without uuids (an older Claude Code) the Stop writes its record as before", record_for(bare) != {})
+        cyc = [dict(e) for e in main + [fork, attach]]
+        cyc += [dict(reply, uuid="x1", parentUuid="x2"), {"type": "assistant", "uuid": "x2", "parentUuid": "x1", "message": {"content": [{"type": "text", "text": "loop"}]}}]
+        t0 = time.monotonic()
+        record_for(cyc)
+        check("a parentUuid cycle ends the chain walk (it cannot hang the Stop hook)", time.monotonic() - t0 < 5.0, f"{time.monotonic() - t0:.2f}s")
         os.environ.pop("GROUNDWORK_TELEMETRY_PATH", None)
 
         # --- a read that outlasts the hook deadline keeps what it has read
@@ -1416,7 +1452,9 @@ def test_round10_review_fixes() -> None:
         check("a deadline that passes mid-read returns the tail read so far (a lower bound), not nothing", 0 < len(got) < len(big) and got == big[-len(got):], f"{len(got)} of {len(big)}")
 
     # --- -u with a hyphen in the user name, and bounded option clusters
-    for cmd in ("curl -fsS -ualice-smith:ZZR10PW https://svc.example.com/health", "curl -fsSualice-smith:ZZR10PW https://svc.example.com/health"):
+    for cmd in ("curl -fsS -ualice-smith:ZZR10PW https://svc.example.com/health", "curl -fsSualice-smith:ZZR10PW https://svc.example.com/health",
+                "curl -sSLfkvgisnu alice:ZZR10PW https://svc.example.com/health", "curl -sSLfkvgisnE cert.pem:ZZR10PW https://svc.example.com/health",
+                "curl -sSLfkvgisnb sid=ZZR10PW https://svc.example.com/health"):
         check(f"credential redacted: {cmd[:40]}", "ZZR10PW" not in m._redact(cmd) and "[redacted]" in m._redact(cmd), m._redact(cmd))
     for letter in "uEb":
         t0 = time.monotonic()
@@ -1432,7 +1470,8 @@ def test_round10_review_fixes() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tpath = Path(tmpdir) / "t.jsonl"
         tpath.write_text("\n".join(json.dumps(e) for e in turn(read(), edit(), bash("pytest -q"))) + "\n")
-        proc = subprocess.Popen([sys.executable, str(MODULE), "--transcript", str(tpath)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}  # buffered stdout, whatever this sandbox sets
+        proc = subprocess.Popen([sys.executable, str(MODULE), "--transcript", str(tpath)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env)
         proc.stdout.close()  # the reader has already left
         err = proc.stderr.read().decode()
         proc.wait(timeout=30)

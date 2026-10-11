@@ -28,5 +28,5 @@ The per-turn record SHALL carry, under `observed`, the evidence-confidence estim
 - **THEN** the Stop hook still finishes well inside its timeout and writes the record, because the status regexes (`OVERALL`, `STATUS_HEAD`, `LEAD_HEAD`, `NOTHING_LEFT`) bound their blank runs; and a transcript read that outlasts the hook deadline yields a record built from the entries read so far (a lower bound) rather than a lost one
 
 #### Scenario: The Stop of a compaction's summariser turn
-- **WHEN** the Stop hook fires at the end of the turn in which Claude Code summarises the context (the newest prompt is the summariser request and no compaction boundary follows it yet)
-- **THEN** no record is written, because the real turn has not ended; a Stop after the boundary (a turn that was compacted mid-way) records the whole turn
+- **WHEN** the Stop hook fires at the end of the turn in which Claude Code summarises the context (the last main-thread assistant message descends, by `parentUuid`, from the summariser request)
+- **THEN** no record is written, because the real turn has not ended; a Stop whose last assistant message does not descend from the request records the whole turn: after a compaction boundary, after a compaction that was aborted and never wrote one, before the summary reply lands, and for a Claude Code that writes no uuids

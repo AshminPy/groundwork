@@ -281,9 +281,9 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*\S+(?:\s+\S+)?"), "authorization: [redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
     (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*(?:[^'\"\n]|(?<==)\"[^\"\n]*\")+"), "cookie: [redacted]"),  # up to the closing quote (a quoted value after "=" is inside it): browser-copied headers hold several cookies
-    (re.compile(r"(?i)(?:^|(?<=\s))(?:-[A-Za-z]{0,8}u(?:\s+|(?=[^\s:]+:))|--user\s+|--proxy-user\s+)\S+"), "-u [redacted]"),  # also clustered (-fsSu) and glued (-uuser:pw)
-    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,8}E(?:\s+(?=\S*:)|(?=\S*:))|--pass(?:\s+|=)|--proxy-pass(?:\s+|=)|--key-pass(?:\s+|=))\S+"), "-E [redacted]"),  # -E file:password, --pass
-    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,8}b(?:\s+|=)|-[A-Za-z]{0,8}b(?=[^\s=]*=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
+    (re.compile(r"(?i)(?:^|(?<=\s))(?:-[A-Za-z]{0,30}u(?:\s+|(?=[^\s:]{1,200}:))|--user\s+|--proxy-user\s+)\S+"), "-u [redacted]"),  # also clustered (-fsSu) and glued (-uuser:pw)
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,30}E(?:\s+(?=\S{0,200}:)|(?=\S{0,200}:))|--pass(?:\s+|=)|--proxy-pass(?:\s+|=)|--key-pass(?:\s+|=))\S+"), "-E [redacted]"),  # -E file:password, --pass
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]{0,30}b(?:\s+|=)|-[A-Za-z]{0,30}b(?=[^\s=]{0,200}=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
     (re.compile(r"(?:^|(?<=\s))(--cert[= ]\s*[^\s:]*:)\S+"), r"\1[redacted]"),  # --cert file:password
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
@@ -810,7 +810,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                 order.append(b["id"])
             elif b.get("type") == "tool_result" and b.get("tool_use_id"):
                 results[b["tool_use_id"]] = (bool(b.get("is_error")), _text(b.get("content")))
-                if e.get("toolDenialKind") in _DENIAL_KINDS:
+                kind = e.get("toolDenialKind")
+                if isinstance(kind, str) and kind in _DENIAL_KINDS:
                     refused.add(b["tool_use_id"])
 
     refs = {}
@@ -1209,10 +1210,12 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        rc = main()
+        sys.stdout.flush()  # inside the try: with buffered stdout the broken pipe is raised by this flush, not by a print
     except BrokenPipeError:  # `groundwork evidence | head -3`: the reader left; say nothing
         try:
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         except Exception:
             pass
         sys.exit(0)
+    sys.exit(rc)

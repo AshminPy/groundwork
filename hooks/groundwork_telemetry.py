@@ -237,12 +237,29 @@ def is_compaction_request(entries: list, i: int) -> bool:
 
 
 class _Turn(list):
-    """The entries of one turn. `summariser` is True when this Stop belongs to a compaction's own summariser turn (the newest prompt is the
-    summariser request and no compaction boundary follows it yet): the real turn is not over, so no record is written."""
+    """The entries of one turn. `summariser` is True when this Stop belongs to a compaction's own summariser turn (the last assistant message
+    descends, by `parentUuid`, from the summariser request): the real turn is not over, so no record is written."""
 
     def __init__(self, items=(), summariser: bool = False):
         super().__init__(items)
         self.summariser = bool(summariser)
+
+
+def descends_from(entries: list, start: int, root_uuid) -> bool:
+    """Does the last (main-thread) assistant entry descend from the entry with `root_uuid` (found at entries[start]), by the parentUuid chain?
+    A compaction's summary reply does, through attachment entries only (7 of 7 real chains); the real work after an aborted compaction, which
+    Claude Code writes on the main thread, does not. Without uuids (an older Claude Code) the answer is False: the Stop then writes its record."""
+    if not isinstance(root_uuid, str):
+        return False
+    by_uuid = {e["uuid"]: e for e in entries[start:] if isinstance(e.get("uuid"), str)}
+    cur = next((e for e in reversed(entries) if e.get("type") == "assistant" and not e.get("isSidechain")), None)
+    for _ in range(10_000):
+        if cur is None:
+            return False
+        if cur.get("uuid") == root_uuid:
+            return True
+        cur = by_uuid.get(cur.get("parentUuid"))
+    return False
 
 
 def current_turn(transcript_path: str, deadline: float | None = None) -> list:
@@ -257,7 +274,7 @@ def current_turn(transcript_path: str, deadline: float | None = None) -> list:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as f:
             pos, step, carry, entries = size, TAIL_CHUNK, b"", []
-            summariser = None  # None until a compaction request is met; then True if no boundary follows it (this Stop ends the summariser's own turn)
+            summariser = None  # None until a compaction request is met; then True if the last assistant message descends from it (this Stop ends the summariser's own turn)
             while True:
                 if deadline is not None and time.monotonic() > deadline:
                     return _Turn(entries, bool(summariser))
@@ -286,7 +303,7 @@ def current_turn(transcript_path: str, deadline: float | None = None) -> list:
                         continue
                     if is_compaction_request(entries, i):
                         if summariser is None:
-                            summariser = not any(x.get("subtype") == "compact_boundary" or x.get("isCompactSummary") for x in entries[i + 1:])
+                            summariser = descends_from(entries, i, entries[i].get("uuid"))
                         continue
                     return _Turn(entries[i:], summariser)
                 if pos == 0 or size - pos >= TAIL_CAP:
