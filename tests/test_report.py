@@ -347,6 +347,7 @@ def test_report() -> None:
         # CLI end to end: tool_events.jsonl present alongside events.jsonl -> stdout + snapshot both reflect it
         r = run_cli(["generate", "--now", "2026-09-21", "--window", "30", "--snapshot"], env)
         check("CLI reports tool_calls summary line", r.returncode == 0 and "tool_calls=12 tool_lines=" in r.stdout and "tool_skipped=3" in r.stdout, r.stdout)
+        check("CLI's last stdout line stays the records= summary (setup.sh shows `generate | tail -1`)", r.stdout.strip().splitlines()[-1].startswith("records="), r.stdout)
         snap_md2 = md_path.read_text()
         check("CLI snapshot carries the tool reliability section", "## Tool call reliability (per call)" in snap_md2 and "mcp__github__search_repositories" in snap_md2, snap_md2[-1200:])
         check("tool-call data never leaks into dashboard.html (no new dashboard UI, per scope)", '"tool"' not in dash.read_text() and "mcp__github__search_repositories" not in dash.read_text())

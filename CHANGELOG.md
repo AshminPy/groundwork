@@ -14,8 +14,8 @@
   switch. It never reads `tool_input`, `tool_response` or `error` — command text, prompts,
   responses, secrets, file contents, URLs or credentials cannot reach it. This is a local-only
   addition to the existing JSONL telemetry mechanism — no HTTP endpoint, no network dependency,
-  no new server. Calls denied by permissions, rejected before execution or cancelled mid-run fire
-  neither hook (code.claude.com/docs/en/hooks) and leave no row, so the file counts calls that
+  no new server. Calls denied by permissions or rejected before execution fire neither hook, and a
+  cancelled running tool fires no failure event (code.claude.com/docs/en/hooks), so none leaves a row, so the file counts calls that
   finished or failed, not everything attempted (an earlier draft proposing an HTTP endpoint was considered and rejected; see
   `scripts/groundwork_report.py`'s own "no server, no LLM, no network" constraint, unchanged).
   `scripts/groundwork_report.py`'s dated Markdown snapshot (`--snapshot`) gained a small "Tool

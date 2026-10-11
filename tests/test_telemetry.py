@@ -385,6 +385,12 @@ def test_tool_call_telemetry() -> None:
         check("is_interrupt on a success event is ignored", rec["success"] is True and "interrupted" not in rec, json.dumps(rec))
         check("interrupted command text never stored", "sleep 4242" not in events.read_text())
 
+        # session_id is coerced to a string and capped, whatever the payload carries
+        run({"session_id": {"a": "x"}, "hook_event_name": "PostToolUse", "tool_name": "Bash"}, env)
+        check("non-string session_id is stored as a string", isinstance(last(events)["session_id"], str), json.dumps(last(events)))
+        run({"session_id": "s" * 5000, "hook_event_name": "PostToolUse", "tool_name": "Bash"}, env)
+        check("overlong session_id capped at 64", len(last(events)["session_id"]) == 64, len(last(events)["session_id"]))
+
         # no tool_name -> nothing recorded (still exit 0)
         n_before = len(events.read_text().splitlines())
         r = run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUse", "tool_input": {"command": "x"}}, env)

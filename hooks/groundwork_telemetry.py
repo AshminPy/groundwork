@@ -70,8 +70,8 @@ command text, file contents or prompt/response text) — only the event's own `t
     scripts/groundwork_report.py counts it separately and keeps it out of the success rate;
   - `ts`, `session_id`: same meaning as the per-turn record.
 Not recorded, by Claude Code's own design (code.claude.com/docs/en/hooks): a call that is denied
-by permissions, rejected before execution (unknown tool, invalid input) or cancelled while
-running fires neither event, so it leaves no row. Rows are therefore calls that actually
+by permissions or rejected before execution (unknown tool, invalid input) fires neither event,
+and cancelling a running tool fires no failure event, so such calls leave no failure row. Rows are therefore calls that actually
 finished or failed — never a count of everything Claude attempted.
 Known limitation (unchanged from the 2.2.0 investigation): a Bash-invoked CLI integration (gh,
 kubectl, terraform, …) is not attributable by name here either — doing so would mean parsing
