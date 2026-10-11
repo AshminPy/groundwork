@@ -191,7 +191,7 @@ def normalise_tool(raw: dict):
         return None
     category = _label(raw.get("category"))
     return {"day": day.isoformat(), "tool": tool, "category": category if category in ("builtin", "mcp") else "unknown",
-            "success": bool(raw.get("success"))}
+            "success": bool(raw.get("success")), "interrupted": raw.get("interrupted") is True}
 
 
 def load_tool_events(path: Path):
@@ -237,14 +237,19 @@ def aggregate_tool_calls(records: list, window_days, ref: dt.date, top_n: int = 
         sel = records
     by_tool = {}
     for r in sel:
-        b = by_tool.setdefault(r["tool"], {"category": r["category"], "n": 0, "ok": 0})
+        b = by_tool.setdefault(r["tool"], {"category": r["category"], "n": 0, "ok": 0, "intr": 0})
         b["n"] += 1
         b["ok"] += 1 if r["success"] else 0
+        b["intr"] += 1 if r.get("interrupted") else 0
     top = sorted(by_tool.items(), key=lambda kv: (-kv[1]["n"], kv[0]))[:top_n]
     total = len(sel)
     ok_total = sum(b["ok"] for b in by_tool.values())
-    return {"total": total, "success": _rate(ok_total, total),
-            "by_tool": [{"tool": t, "category": b["category"], "n": b["n"], "ok": b["ok"], "rate": _rate(b["ok"], b["n"])} for t, b in top]}
+    intr_total = sum(b["intr"] for b in by_tool.values())
+    # An interrupted call ended as an abort, not as an error the tool reported (Claude Code hooks
+    # docs): neither a success nor a tool failure, so it stays out of every success-rate denominator.
+    return {"total": total, "interrupted": intr_total, "success": _rate(ok_total, total - intr_total),
+            "by_tool": [{"tool": t, "category": b["category"], "n": b["n"], "ok": b["ok"], "interrupted": b["intr"],
+                          "rate": _rate(b["ok"], b["n"] - b["intr"])} for t, b in top]}
 
 
 # ---------------------------------------------------------------- aggregate
@@ -443,12 +448,14 @@ def render_markdown(m: dict, meta: dict, tool_metrics: dict = None) -> str:
     lines += ["", "## Tools (top)", ""] + [f"- {k}: {v}" for k, v in m["tools"].items()]
     if tool_metrics and tool_metrics["total"]:
         lines += ["", "## Tool call reliability (per call)", "",
-                   f"- Total tool calls in this period: {tool_metrics['total']}",
-                   f"- Overall success rate: {fmt(tool_metrics['success'])}", "",
-                   "| Tool | Category | Calls | Success rate |", "|---|---|---|---|"]
+                   f"- Executed tool calls observed in this period: {tool_metrics['total']}",
+                   f"- Overall success rate: {fmt(tool_metrics['success'])}"]
+        if tool_metrics.get("interrupted"):
+            lines.append(f"- Interrupted before finishing (not a tool failure, excluded from the success rate): {tool_metrics['interrupted']}")
+        lines += ["", "| Tool | Category | Calls | Success rate |", "|---|---|---|---|"]
         for row in tool_metrics["by_tool"]:
             lines.append(f"| {row['tool']} | {row['category']} | {row['n']} | {fmt(row['rate'])} |")
-        lines += ["", "_Per-call data (PostToolUse/PostToolUseFailure): which tools and MCP servers are actually used, and whether each call succeeded — tool name, category, success/failure and timestamp only, never command, prompt, response or tool-input/output content. Not broken down by profile/playbook/version/environment (a single tool call carries none of those) and not part of the filterable dashboard above._", ""]
+        lines += ["", "_Per-call data (PostToolUse/PostToolUseFailure): which tools and MCP servers are actually used, and whether each call succeeded — tool name, category, success/failure and timestamp only, never command, prompt, response or tool-input/output content. Only calls that finished or failed are counted: calls denied by permissions, rejected before execution or cancelled mid-run fire neither hook and never appear here. Not broken down by profile/playbook/version/environment (a single tool call carries none of those) and not part of the filterable dashboard above._", ""]
     lines += ["", "_Declared fields (outcome, validation, evidence, playbook) are what the model stated; observed fields (tools, files, tests, deploys, profile) were determined by the hook. No prompts, responses, code or secrets are stored._", ""]
     return "\n".join(lines)
 

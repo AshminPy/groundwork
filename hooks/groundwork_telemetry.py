@@ -54,9 +54,9 @@ the day-bucket/profile/playbook dimensions the per-turn schema aggregates by do 
 single tool call.
 
 What is recorded — deliberately exactly this and nothing more, per the approved scope: this hook
-never reads `tool_input` or `tool_response`/`tool_error` (the fields that could carry secrets,
+never reads `tool_input`, `tool_response` or `error` (the fields that could carry secrets,
 command text, file contents or prompt/response text) — only the event's own `tool_name`,
-`session_id`, and which event fired:
+`session_id`, which event fired, and the boolean `is_interrupt`:
   - `tool`: the tool name Claude Code reports (e.g. "Bash", "Edit", "mcp__github__list_prs"),
     capped to a short length as a defensive bound — the same strings the per-turn record already
     stores in `observed.tools`, so this adds no new exposure;
@@ -64,7 +64,15 @@ command text, file contents or prompt/response text) — only the event's own `t
     record already uses to build `observed.mcp_servers`; `mcp_server` carries that server slug
     when `category` is "mcp" (never the full qualified tool name beyond what `tool` already has);
   - `success`: True for PostToolUse, False for PostToolUseFailure;
+  - `interrupted`: present, as True, only when a PostToolUseFailure carries `is_interrupt: true`
+    (Claude Code's documented flag for a call that ended as an abort rather than as an error the
+    tool reported). Such a row still has `success: False`, but it is not a tool failure:
+    scripts/groundwork_report.py counts it separately and keeps it out of the success rate;
   - `ts`, `session_id`: same meaning as the per-turn record.
+Not recorded, by Claude Code's own design (code.claude.com/docs/en/hooks): a call that is denied
+by permissions, rejected before execution (unknown tool, invalid input) or cancelled while
+running fires neither event, so it leaves no row. Rows are therefore calls that actually
+finished or failed — never a count of everything Claude attempted.
 Known limitation (unchanged from the 2.2.0 investigation): a Bash-invoked CLI integration (gh,
 kubectl, terraform, …) is not attributable by name here either — doing so would mean parsing
 `tool_input.command`, which this hook must never read. Only MCP-mechanism and built-in-tool usage
@@ -402,9 +410,9 @@ def classify_tool(tool_name: str):
 
 
 def build_tool_record(data: dict, event: str) -> dict:
-    """One record per PostToolUse/PostToolUseFailure call. Reads only tool_name, session_id and
-    the event name — never tool_input or tool_response/tool_error (where secrets, command text or
-    file contents would live). {} when there is nothing usable to record (no tool_name)."""
+    """One record per PostToolUse/PostToolUseFailure call. Reads only tool_name, session_id, the
+    event name and the boolean is_interrupt — never tool_input or tool_response/error (where
+    secrets, command text or file contents would live). {} when there is nothing usable to record (no tool_name)."""
     tool_name = str(data.get("tool_name") or "").strip()
     if not tool_name:
         return {}
@@ -419,6 +427,8 @@ def build_tool_record(data: dict, event: str) -> dict:
     }
     if server:
         record["mcp_server"] = server
+    if event == "PostToolUseFailure" and data.get("is_interrupt") is True:
+        record["interrupted"] = True   # an abort, not an error the tool reported (hooks docs)
     return record
 
 

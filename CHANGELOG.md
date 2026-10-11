@@ -7,16 +7,19 @@
   code.claude.com/docs/en/hooks-guide, 2026-10-01), closing the gap recorded in CHANGELOG 2.2.0
   ("no `PostToolUse` hook exists anywhere in Groundwork, so success/failure is never captured").
   It appends one minimal record per tool call — timestamp, session id, tool name, category
-  (`builtin`/`mcp`, with the MCP server slug), success/failure — to a new sibling file,
+  (`builtin`/`mcp`, with the MCP server slug), success/failure (plus `interrupted` for a call that ended as
+  an abort, which the report keeps out of the failure rate) — to a new sibling file,
   `~/.claude/groundwork/telemetry/tool_events.jsonl`, with the existing per-turn record's exact
   permission model (0600 file / 0700 dir), fail-open behaviour and `GROUNDWORK_TELEMETRY=off`
-  switch. It never reads `tool_input`, `tool_response` or `tool_error` — command text, prompts,
+  switch. It never reads `tool_input`, `tool_response` or `error` — command text, prompts,
   responses, secrets, file contents, URLs or credentials cannot reach it. This is a local-only
   addition to the existing JSONL telemetry mechanism — no HTTP endpoint, no network dependency,
-  no new server (an earlier draft proposing an HTTP endpoint was considered and rejected; see
+  no new server. Calls denied by permissions, rejected before execution or cancelled mid-run fire
+  neither hook (code.claude.com/docs/en/hooks) and leave no row, so the file counts calls that
+  finished or failed, not everything attempted (an earlier draft proposing an HTTP endpoint was considered and rejected; see
   `scripts/groundwork_report.py`'s own "no server, no LLM, no network" constraint, unchanged).
   `scripts/groundwork_report.py`'s dated Markdown snapshot (`--snapshot`) gained a small "Tool
-  call reliability (per call)" section (total calls, overall success rate, per-tool table);
+  call reliability (per call)" section (executed calls observed, overall success rate, per-tool table);
   deliberately not wired into the interactive `dashboard.html`/its JS-filterable charts, since a
   single tool call has no profile/playbook/version/environment dimension to filter by — adding
   one would be a new UI for data that does not fit that shape, which was out of scope for this
@@ -30,7 +33,7 @@
   record. Tests: `tests/test_telemetry.py` (new: `classify_tool()` cases, a full per-tool-call
   hook test covering record shape, builtin vs. MCP categorization, success and failure records,
   permissions, the shared off-switch, path override, and that no secret/command/response text
-  from `tool_input`/`tool_response`/`tool_error` ever reaches the file — verified directly against
+  from `tool_input`/`tool_response`/`error` ever reaches the file — verified directly against
   a real run of the hook script with realistic JSON on stdin), `tests/test_report.py` (new:
   `normalise_tool()`/`load_tool_events()`/`aggregate_tool_calls()`, the Markdown section's
   presence/absence, CLI wiring via `--tool-events`), `tests/test_hooks.py`/`tests/test_setup.py`

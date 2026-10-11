@@ -277,10 +277,13 @@ def test_report() -> None:
         # -- per-tool-call telemetry (tool_events.jsonl): load, aggregate, render, privacy, CLI wiring
         tool_events = cfg / "groundwork" / "telemetry" / "tool_events.jsonl"
 
-        def trec(day, tool, success=True, category="builtin"):
-            return {"schema": 1, "ts": f"{day}T09:00:00Z", "session_id": "s", "tool": tool, "category": category, "success": success}
+        def trec(day, tool, success=True, category="builtin", interrupted=False):
+            rec = {"schema": 1, "ts": f"{day}T09:00:00Z", "session_id": "s", "tool": tool, "category": category, "success": success}
+            if interrupted:
+                rec["interrupted"] = True
+            return rec
 
-        check("normalise_tool: schema-1 builtin record parsed", m.normalise_tool(trec(ref.isoformat(), "Bash")) == {"day": ref.isoformat(), "tool": "Bash", "category": "builtin", "success": True})
+        check("normalise_tool: schema-1 builtin record parsed", m.normalise_tool(trec(ref.isoformat(), "Bash")) == {"day": ref.isoformat(), "tool": "Bash", "category": "builtin", "success": True, "interrupted": False})
         check("normalise_tool: mcp category kept", m.normalise_tool(trec(ref.isoformat(), "mcp__github__x", category="mcp"))["category"] == "mcp")
         check("normalise_tool: wrong schema rejected", m.normalise_tool({"schema": 2, "ts": f"{ref.isoformat()}T09:00:00Z", "tool": "Bash"}) is None)
         check("normalise_tool: missing tool rejected", m.normalise_tool({"schema": 1, "ts": f"{ref.isoformat()}T09:00:00Z"}) is None)
@@ -309,6 +312,19 @@ def test_report() -> None:
         check("aggregate_tool_calls: overall success rate", tm30["success"]["num"] == 10 and tm30["success"]["den"] == 12, json.dumps(tm30["success"]))
         tm_all = m.aggregate_tool_calls(trecs, None, ref)
         check("aggregate_tool_calls: no window -> includes the day(40) record too", tm_all["total"] == 13, json.dumps(tm_all))
+        # interrupted calls (aborts) are counted as calls but are neither successes nor failures: out of the rate
+        intr_rows = [m.normalise_tool(x) for x in (
+            [trec(ref.isoformat(), "Bash", success=True)] * 3
+            + [trec(ref.isoformat(), "Bash", success=False)]
+            + [trec(ref.isoformat(), "Bash", success=False, interrupted=True)] * 2)]
+        check("normalise_tool: interrupted flag preserved, strict boolean", [r["interrupted"] for r in intr_rows] == [False] * 4 + [True] * 2
+              and m.normalise_tool({**trec(ref.isoformat(), "Bash"), "interrupted": "true"})["interrupted"] is False)
+        tm_intr = m.aggregate_tool_calls(intr_rows, None, ref)
+        check("aggregate_tool_calls: interrupted counted as calls, excluded from the success rate",
+              tm_intr["total"] == 6 and tm_intr["interrupted"] == 2 and tm_intr["success"]["num"] == 3 and tm_intr["success"]["den"] == 4
+              and tm_intr["by_tool"][0]["interrupted"] == 2 and tm_intr["by_tool"][0]["rate"]["den"] == 4, json.dumps(tm_intr))
+        tm_only_intr = m.aggregate_tool_calls([m.normalise_tool(trec(ref.isoformat(), "Bash", success=False, interrupted=True))], None, ref)
+        check("aggregate_tool_calls: only interrupted calls -> no rate (not 0%), no crash", tm_only_intr["total"] == 1 and tm_only_intr["success"] is None and tm_only_intr["by_tool"][0]["rate"] is None, json.dumps(tm_only_intr))
         tm_empty = m.aggregate_tool_calls([], 30, ref)
         check("aggregate_tool_calls: empty input -> total 0, no crash", tm_empty["total"] == 0 and tm_empty["by_tool"] == [])
 
@@ -320,7 +336,9 @@ def test_report() -> None:
         # render_markdown: section appears only when tool_metrics has data; absent when empty/None
         meta_for_md = {"generated": "2026-09-21 00:00", "ref": ref.isoformat(), "window_days": 30, "events": str(events), "stats": {"lines": 0, "malformed": 0}}
         md_with = m.render_markdown(c, meta_for_md, tm30)
-        check("render_markdown: tool reliability section present with real numbers", "## Tool call reliability (per call)" in md_with and "| Bash | builtin | 7 |" in md_with and "Total tool calls in this period: 12" in md_with, md_with)
+        check("render_markdown: tool reliability section present with real numbers", "## Tool call reliability (per call)" in md_with and "| Bash | builtin | 7 |" in md_with and "Executed tool calls observed in this period: 12" in md_with and "fire neither hook" in md_with and "Interrupted before finishing" not in md_with, md_with)
+        md_intr = m.render_markdown(c, meta_for_md, tm_intr)
+        check("render_markdown: interrupted line shown only when there are interrupted calls", "Interrupted before finishing (not a tool failure, excluded from the success rate): 2" in md_intr, md_intr[-900:])
         md_without_data = m.render_markdown(c, meta_for_md, tm_empty)
         check("render_markdown: section omitted when there are no tool-call records", "## Tool call reliability" not in md_without_data)
         md_no_arg = m.render_markdown(c, meta_for_md)

@@ -68,8 +68,9 @@ line per tool call to `~/.claude/groundwork/telemetry/tool_events.jsonl` (its ow
 sibling file — not merged into `events.jsonl`, which has no per-call dimensions) containing only:
 timestamp, session id, the tool name, a category (`builtin` or `mcp`, by the same `mcp__<server>`
 prefix test the per-turn record already uses, with the server slug when `mcp`), and success/failure
-(PostToolUse vs. PostToolUseFailure). It SHALL NOT read or store `tool_input`, `tool_response` or
-`tool_error` — only the event's own `tool_name` and `session_id`. It SHALL share the per-turn
+(PostToolUse vs. PostToolUseFailure), plus `interrupted: true` when a PostToolUseFailure carries
+`is_interrupt: true`. It SHALL NOT read or store `tool_input`, `tool_response` or `error` — only the
+event's own `tool_name`, `session_id` and the boolean `is_interrupt`. It SHALL share the per-turn
 record's permission model (0600 file, 0700 directory), fail-open behaviour, and `GROUNDWORK_TELEMETRY=off`
 switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`.
 
@@ -84,6 +85,14 @@ switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`.
 #### Scenario: No tool name
 - **WHEN** the event carries no `tool_name`
 - **THEN** no record is appended
+
+#### Scenario: A tool call is aborted
+- **WHEN** a `PostToolUseFailure` event fires with `is_interrupt: true`
+- **THEN** a record is appended with `success: false` and `interrupted: true`, and the report counts it separately and excludes it from the success-rate denominator instead of treating it as a tool failure
+
+#### Scenario: A call never executes
+- **WHEN** a tool call is denied by permissions, rejected before execution, or cancelled mid-run
+- **THEN** Claude Code fires neither hook event, no record exists, and no report presents the row count as the number of calls attempted
 
 ### Requirement: Agent facts reconciled with observed calls
 `declared.agent_count`, `declared.execution_mode` and `declared.agent_roles` SHALL be reconciled against the Agent calls observed in the current turn: when calls were observed, the count is the observed number, the mode is at least `subagents`, and declared roles are kept only when their number matches; when no calls were observed and the block declares a single agent, the count is 0 with no roles; when nothing could be observed (unreadable transcript) the declared values are kept as stated.

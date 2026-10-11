@@ -343,13 +343,13 @@ def test_tool_call_telemetry() -> None:
         rec = last(events)
         check("mcp success record carries category + mcp_server", rec["category"] == "mcp" and rec["mcp_server"] == "github" and rec["success"] is True and rec["tool"] == "mcp__github__search_repositories", json.dumps(rec))
 
-        # the same MCP tool failing -> PostToolUseFailure, success False, tool_error never stored
+        # the same MCP tool failing -> PostToolUseFailure, success False, error never stored
         run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "mcp__github__search_repositories",
-             "tool_input": {"query": "topic:security"}, "tool_error": "401 Unauthorized: token ghp_SUPERSECRETVALUE123 rejected"}, env)
+             "tool_input": {"query": "topic:security"}, "error": "401 Unauthorized: token ghp_SUPERSECRETVALUE123 rejected"}, env)
         rec = last(events)
         check("failure record: success False", rec["success"] is False and rec["category"] == "mcp" and rec["mcp_server"] == "github", json.dumps(rec))
 
-        # privacy: tool_input / tool_response / tool_error contents never appear anywhere in the file,
+        # privacy: tool_input / tool_response / error contents never appear anywhere in the file,
         # across every record written so far (command text, query text, response text, a token, a secret)
         raw = events.read_text()
         check("no tool_input/tool_output contents, commands, secrets or paths stored",
@@ -358,12 +358,32 @@ def test_tool_call_telemetry() -> None:
         # a failing Bash command: the command text and any secret in it must never be stored either
         run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
              "tool_input": {"command": "curl -H 'Authorization: Bearer sk-live-ABCDEF123456' https://api.example.com"},
-             "tool_error": "curl: (22) The requested URL returned error: 403"}, env)
+             "error": "curl: (22) The requested URL returned error: 403"}, env)
         rec = last(events)
         raw = events.read_text()
         check("failing Bash record: success False, builtin, no command/secret leaked",
               rec["success"] is False and rec["category"] == "builtin" and rec["tool"] == "Bash"
               and all(x not in raw for x in ("sk-live-ABCDEF123456", "Authorization", "api.example.com", "curl")), raw)
+
+        # an aborted call: Claude Code's documented is_interrupt flag -> recorded as interrupted, so the
+        # report can keep it out of the failure rate (real aborts cannot be produced headlessly; this
+        # asserts the documented payload shape)
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+             "tool_input": {"command": "sleep 4242"}, "error": "aborted", "is_interrupt": True}, env)
+        rec = last(events)
+        check("interrupted failure: success False + interrupted True, exact shape",
+              rec["success"] is False and rec.get("interrupted") is True
+              and set(rec) == {"schema", "ts", "session_id", "tool", "category", "success", "interrupted"}, json.dumps(rec))
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+             "error": "Exit code 1", "is_interrupt": False}, env)
+        check("is_interrupt false -> no interrupted key (ordinary failure)", "interrupted" not in last(events))
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+             "error": "Exit code 1", "is_interrupt": "true"}, env)
+        check("is_interrupt must be the boolean true (a string does not count)", "interrupted" not in last(events))
+        run({"session_id": "sess-tool-1", "hook_event_name": "PostToolUse", "tool_name": "Bash", "is_interrupt": True}, env)
+        rec = last(events)
+        check("is_interrupt on a success event is ignored", rec["success"] is True and "interrupted" not in rec, json.dumps(rec))
+        check("interrupted command text never stored", "sleep 4242" not in events.read_text())
 
         # no tool_name -> nothing recorded (still exit 0)
         n_before = len(events.read_text().splitlines())
