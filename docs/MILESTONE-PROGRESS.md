@@ -4,7 +4,7 @@ Purpose: let a fresh session resume the post-2.3.0 milestone programme without r
 completed investigations. Current state only, not a log. Every row says how it was established.
 Anything in this file is a hint to re-check against the repository (evidence-policy.md §8).
 
-Last updated: 2026-10-11 (Phase 0 complete).
+Last updated: 2026-10-11 (Phases 0-2 delivered, Phase 3 in independent review).
 
 ## Operating constraints (from the owner, unchanged)
 
@@ -15,7 +15,7 @@ Last updated: 2026-10-11 (Phase 0 complete).
 - No new paid APIs or external services, no security-sensitive permission changes, no community
   code installed into a company environment without owner approval.
 - Independent reviews must be dispatched from the main session (worktree-isolated subagents do not
-  have the Agent tool).
+  have the Agent tool). After a MUST FIX, only a fresh review reporting zero counts.
 
 ## Baseline (Phase 0) — VERIFIED unless marked
 
@@ -23,85 +23,69 @@ Last updated: 2026-10-11 (Phase 0 complete).
 |---|---|---|
 | main | `24080a6` (merge of #40) | `git log`, `git fetch origin main` |
 | Latest release | v2.3.0, published 2026-10-01T19:07:50Z, not draft, not prerelease | GitHub releases API |
-| Tests on main | 110 passed, 0 failed (78 s) | `python3 -m pytest tests -q` |
-| OpenSpec strict | 12 of 14 pass; `spec/onboarding` and `spec/health-dashboard` fail on a placeholder `## Purpose` warning | `openspec validate --all --strict`; both specs also exist at the v2.3.0 tag, so this is pre-existing, not caused by any open PR |
+| Tests on main | 110 passed | `python3 -m pytest tests -q` |
+| OpenSpec strict | 12 of 14 pass; `spec/onboarding` and `spec/health-dashboard` fail on a placeholder `## Purpose` warning (exists at the v2.3.0 tag, not caused by any PR) | `openspec validate --all --strict` |
 | CI | none: no `.github/` directory | `ls .github` |
-| Claude Code in this container | 2.1.296 | `claude --version` |
-| Container limits | Linux x86_64; no `acli`, `jira`, Hammerspoon, `osascript` or Chromium; `gh` present | `command -v` |
+| Claude Code in the build container | 2.1.296 | `claude --version` |
+| Container limits | Linux x86_64; no `acli`, Hammerspoon, `osascript`, browser; Atlassian hosts blocked by the proxy (CONNECT 403) | `command -v`, `curl` |
 
-Hooks Groundwork registers (4): `block_protected_push.py` (PreToolUse), `require_material_review.py`
-and `groundwork_telemetry.py` (Stop), `groundwork_session_snapshot.py` (SessionStart) — from
-`scripts/merge_settings.py`. Deny rules include `sudo`, `rm -rf /*`, `rm -rf ~*`, `chmod 777`,
-`git push --force*`, `dd`, `mkfs*`, `diskutil erase*`. Integration catalog: GitHub, Spacelift, Jira,
-Confluence, AWS, GCP, Kubernetes, Terraform, Grafana, Datadog (`scripts/groundwork_integrations.py`).
-
-## Native Claude Code facts checked this session
+## Native Claude Code facts (official docs read 2026-10-11)
 
 | Fact | Status | Source |
 |---|---|---|
-| 33 hook events exist, including `PostToolUse` and `PostToolUseFailure` | VERIFIED | https://code.claude.com/docs/en/hooks |
-| `PostToolUse` fires only after a tool completes successfully; input has `tool_name`, `tool_input`, `tool_response`, `tool_use_id`, optional `duration_ms` | VERIFIED | same page |
-| `PostToolUseFailure` fires when a started tool throws or an MCP tool returns an error; input has `tool_name`, `tool_input`, `tool_use_id`, `error`, optional `is_interrupt`, optional `duration_ms`; no `tool_response` | VERIFIED | same page |
-| A call rejected before execution (unknown tool, failed validation, permission denial) fires neither event; cancelling a running tool does not fire `PostToolUseFailure` | VERIFIED | same page |
-| `claude --permission-prompts host\|none` exists (with `--print`); `--permission-mode` choices are `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` | VERIFIED | `claude --help` on 2.1.296 |
-| Background sessions exist: `claude --bg`, `claude agents`, `claude attach`, `claude logs` | VERIFIED (help text only, not exercised) | `claude --help` on 2.1.296 |
-| `/goal` slash command | UNVERIFIED | not visible in `--help`; check live docs before documenting |
+| `PostToolUse` fires only on success; `PostToolUseFailure` on failure (fields incl. `error`, `is_interrupt`); calls denied by permissions or rejected before execution fire neither; cancelling a running tool fires no failure event | VERIFIED | https://code.claude.com/docs/en/hooks |
+| `claude --permission-prompts host\|none`; `--permission-mode` choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`; background sessions `claude --bg`, `agents`, `attach`, `logs` | VERIFIED (help text; background sessions not exercised) | `claude --help` 2.1.296 |
+| Mods (JS/TS plugins) run before non-managed `PreToolUse` hooks and can approve calls such a hook blocked; `permissions.deny` rules hold over a mod only where the built-in guard loads; `allowManagedModsOnly` is read from managed settings only | VERIFIED | https://code.claude.com/docs/en/plugins/mods/{overview,events,admin} |
+| `/goal` exists as a Claude Code feature (named on the mods admin page); its behaviour was not read | UNVERIFIED beyond existence | admin page |
 
-## Open pull requests (all draft, all based on main `24080a6`, none merged by this programme)
+## Pull requests (all draft; none merged by this programme)
 
 | PR | Branch | Head | State |
 |---|---|---|---|
-| #43 | `feat/per-tool-call-telemetry` | `2754abb` | Phase 1a |
-| #41 | `feat/jira-acli-connected-probe` | `dba92d8` | Phase 1b — see Jira conflict below |
-| #42 | `feat/statusline-symbol-presets` | `2a07a3c` | Phase 1c |
-| #31 | `docs/post-release-future-candidates` | `5c2dda1` | stale base `66a382f`; docs only; its diff against main looks large only because the base is old |
+| #43 telemetry | `feat/per-tool-call-telemetry` | `ce54557` | Milestone 1a COMPLETE |
+| #41 Jira acli | `feat/jira-acli-connected-probe` | `2533ea2` | Milestone 1b COMPLETE (reduced to availability-only) |
+| #42 symbol presets | `feat/statusline-symbol-presets` | `1445a63` | Milestone 1c COMPLETE |
+| #45 mods evaluation | `docs/claude-mods-evaluation` | `c821f46` | Milestone 2 PARTIAL |
+| #44 this record | `docs/milestone-progress` | see PR | living record |
+| #31 future candidates (docs) | `docs/post-release-future-candidates` | `5c2dda1` | stale base `66a382f`; holds FUTURE-SCOPE §14 (evidence references, evidence confidence, Hands-Free) that Phase 3 implements; not merged |
+| (Phase 3) | `feat/evidence-receipt` | local `92e2e72`, not pushed | in independent review |
 
-#41 and #43 both edit `CHANGELOG.md` under `## Unreleased` and conflict there only
-(`git merge-tree`); #42 conflicts with neither. Resolve mechanically in whichever merges second.
+#41 and #43 both edit `CHANGELOG.md` under `## Unreleased` and conflict there only; the others do
+not conflict (`git merge-tree`). Resolve mechanically in whichever merges second.
 
 Experimental branch `experimental/terminal-copilot-mvp` (`1231ce3`) holds the Terminal Copilot MVP:
 code complete, statically reviewed, **never run on macOS**; no PR by design.
 
-## Known tension: Jira (#41)
-
-The owner earlier stated Jira is reached through Claude driving an already-authenticated browser
-session, not through `acli`. The Phase 1 directive asks to verify "Jira authenticated CLI behavior
-using actual observed output". `acli` is not installed here, so no output can be observed.
-Rule applied: `cli_success_marker` stays unset and the Jira probe can never report CONNECTED from an
-inferred marker. Owner decision needed on whether #41 should be closed.
-
 ## Milestones
 
-| # | Milestone | Branch / PR | Status |
+| # | Milestone | Status | Evidence and what is NOT done |
 |---|---|---|---|
-| 0 | Baseline audit and this record | `docs/milestone-progress` | COMPLETE when this PR is open |
-| 1a | #43 telemetry | existing PR | not started |
-| 1b | #41 Jira acli | existing PR | not started |
-| 1c | #42 symbol presets | existing PR | not started |
-| 2 | Claude mods research | TBD | not started |
-| 3 | Evidence references and confidence labels | TBD | not started |
-| 4 | Groundwork Copilot | TBD | not started |
-| 5 | Hands-Free SRE proof of concept | TBD | not started |
-| 6 | Autoship | TBD | not started |
-| 7 | SmartMemory | TBD | not started |
-| 8 | Final security and release audit | TBD | not started |
+| 0 | Baseline audit and this record | COMPLETE | PR #44 |
+| 1a | #43 telemetry | COMPLETE | Reproduced and fixed: aborted calls counted as failures; "total calls" overclaim. Review 1: 1 MUST FIX (stale spec/rollback text), fixed; confirmation review: approve, 0. 112 tests. NOT done: a real abort event (RUNTIME VALIDATION REQUIRED); file rotation; `setup.sh --verify` does not count the two new hook events |
+| 1b | #41 Jira acli | COMPLETE | Reproduced false CONNECTED from exit code 0; catalog now fails closed and does not run an unverified command. Review 1: 1 MUST FIX, fixed; confirmation: approve, 0. 115 tests. NOT done: observing real `acli` output (impossible here). **Owner decision:** Jira is reached by browser in the owner's setup, so keep or close |
+| 1c | #42 symbol presets | COMPLETE | Default output byte-identical to main (588 cases). Review 1: 2 test-only MUST FIX, fixed and mutation-verified; confirmation: approve, 0. 115 tests. NOT done: real terminal rendering of the emoji preset |
+| 2 | Claude mods | PARTIAL | Static review of five mods at pinned SHAs; Flightdeck and redgreen ADOPT-AFTER-TEST, mdview and ClaudePanel DEFER, Skins REJECT. Review found 1 MUST FIX (false overlap claim), corrected and verified directly without a second review round. NOT done: any runtime trial (needs the owner's disposable machine), so the acceptance is not demonstrated |
+| 3 | Evidence references and confidence | IN REVIEW | `feat/evidence-receipt` local commit `92e2e72`; 120 tests; two independent reviews running |
+| 4 | Groundwork Copilot | not started | Reconcile with `experimental/terminal-copilot-mvp` first |
+| 5 | Hands-Free SRE proof of concept | not started | Needs a microphone and macOS; likely BLOCKED here |
+| 6 | Autoship | not started | |
+| 7 | SmartMemory | not started | Needs a reproducible continuity gap first, else NOT NEEDED |
+| 8 | Final security and release audit | not started | |
 
-## Acceptance criteria — Phase 1 (to be confirmed against the PR code in each milestone)
+## Findings carried forward to the final audit (Phase 8)
 
-- #43: one count per executed call, keyed by `tool_use_id`; success from `PostToolUse`, failure from
-  `PostToolUseFailure`; denied, rejected and cancelled calls are documented as not observable, not
-  silently counted; interrupts kept separate from errors; data stays in a local file with owner-only
-  permissions; no `tool_input` or `tool_response` content persisted.
-- #41: the Jira probe never reports CONNECTED from a guessed output; any marker must come from real
-  `acli` output or stay unset.
-- #42: default rendering byte-identical to today; unknown `symbol_set` or `separator` falls back to
-  the default; existing config files without the new keys behave unchanged; `ascii` output contains
-  no non-ASCII characters.
-- All three: full suite green, `openspec validate --all --strict` no worse than baseline, one fresh
-  independent review reporting zero MUST FIX.
+- Groundwork's settings-file hooks (push guard, review gate, telemetry) are not enforced against an
+  installed Claude Code mod (docs/CLAUDE-MODS.md); `permissions.deny` holds only where the guard loads.
+- `scripts/groundwork_routines.py` treats `gh auth status` exit code 0 alone as connected, the signal
+  the catalog rejects (pre-existing).
+- The statusline config keys are not documented in any README or docs page (pre-existing).
+- OpenSpec strict baseline failures (`onboarding`, `health-dashboard`) are a one-line `## Purpose` fix each.
+- Background-agent reviews arrive as later messages, not tool results, so they are not credited by the
+  evidence receipt.
 
 ## Resume instructions
 
 1. `git fetch`; compare `main` and the PR heads above with this table.
 2. Re-run `python3 -m pytest tests -q`; expect 110 passed on main.
-3. Continue at the first milestone not marked COMPLETE.
+3. Continue at the first milestone not marked COMPLETE; open owner decisions are the Jira PR (#41),
+   whether to run the mods trial, and judging the evidence labels against sessions the owner knows.
