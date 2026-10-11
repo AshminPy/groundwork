@@ -60,6 +60,9 @@ INSTALLED_ROUTINES_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_routines
 # never forwarded: groundwork_statusline.py's zero-argv path is reserved for Claude Code's own
 # statusLine invocation (JSON on stdin) and would otherwise hang waiting for stdin here.
 INSTALLED_STATUSLINE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_statusline.py"
+# `copilot` is the same kind of pass-through: every arg after "copilot" is forwarded verbatim to the installed
+# groundwork_copilot.py, which owns terminal resolution, redaction and the (tool-less) model call.
+INSTALLED_COPILOT_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_copilot.py"
 
 
 def _read_version() -> str | None:
@@ -142,6 +145,16 @@ def cmd_statusline(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_copilot(extra_argv: list[str]) -> int:
+    if not INSTALLED_COPILOT_PY.exists():
+        print(f"copilot: {INSTALLED_COPILOT_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_copilot.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_COPILOT_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -182,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     )
     sub.add_parser(
+        "copilot",
+        help="read-only help with what happened in this terminal: explain (see 'groundwork copilot --help')",
+        add_help=False,
+    )
+    sub.add_parser(
         "statusline",
         help="statusline display settings: config list/get/set/unset (see 'groundwork statusline config --help')",
         add_help=False,
@@ -205,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_routines(argv[1:])
     if argv and argv[0] == "statusline":
         return cmd_statusline(argv[1:])
+    if argv and argv[0] == "copilot":
+        return cmd_copilot(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

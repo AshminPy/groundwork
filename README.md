@@ -160,6 +160,10 @@ groundwork routines run pr_followup  # run one routine now (same fail-closed pat
 groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
+
+groundwork copilot explain           # read-only: what went wrong in THIS terminal (tmux), and what to check next
+groundwork copilot explain --dry-run # show exactly what would be sent; send nothing
+some_cmd 2>&1 | groundwork copilot explain --stdin   # any terminal: explain the output you pipe in
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
@@ -170,6 +174,26 @@ model. `groundwork update`/`rollback` never reimplement the installer — see
 [docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
 forwards to the existing Routines execution/scheduling engine unchanged — see
 [docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
+`groundwork copilot explain` is **read-only help with a failure in the terminal you typed it in**. In a tmux
+pane it reads a bounded slice (default 120 lines, at most 400 lines / 16,000 characters) of that pane's recent
+output, proven to be yours by `$TMUX_PANE`, your process's own controlling tty, and the pane's process being an
+ancestor of yours (there is no option to read another pane; a spoofed pane id is refused). It removes control,
+bidi and zero-width characters, redacts secret-shaped text (in the output **and** in the git facts it adds,
+before cutting to the window), and makes one `claude -p --safe-mode --tools ""` call with the prompt on stdin
+and an empty scratch working directory. Verified on Claude Code 2.1.296: `--tools ""` alone leaves plugin MCP
+tools in the model's tool list and lets a project's hooks and MCP servers run; `--safe-mode` removes them, so
+the model is offered no tools and no project hook or server runs (admin-managed policy settings still apply;
+an older `claude` without `--safe-mode` falls back to `--strict-mcp-config --setting-sources user`, where your
+own user-level settings still apply). The terminal output and git facts are fenced as untrusted data and the
+answer must quote its evidence, but a hostile output can still make the text of an answer wrong or suggest a
+harmful command, so every answer ends by saying nothing was run and that a suggestion comes from untrusted
+output. Use `--dry-run` to see exactly what would be sent. Limits: retroactive reading works only in tmux
+(other terminals pipe the output with `--stdin`; iTerm2 and Terminal.app readers are not built and not
+validated); run it as its own command (`cmd; groundwork copilot explain` on one line cuts cmd's output);
+it cannot open your files (the model has no tools, and every `@` that could be read as a Claude Code file mention is replaced by a look-alike before the prompt is sent, because Claude Code otherwise attaches a file named as `@path` in the prompt text), so it often ends with "UNKNOWN — show me X"; redaction is best effort
+(an unrecognised secret shape survives, and some benign error text mentioning "token" is left alone on
+purpose); it never executes a suggestion — authorized execution is deliberately not built.
+See [openspec/changes/add-groundwork-copilot/](openspec/changes/add-groundwork-copilot/).
 
 Per project, once, if you want spec-driven work there:
 ```bash
@@ -286,6 +310,7 @@ groundwork/
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
 │   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
 │   ├── groundwork_integrations.py     Integration Catalog: capability ids, approved mechanisms, truthful available/configured/connected/used observations; `refresh` persists a cache for the statusLine
+│   ├── groundwork_copilot.py          `groundwork copilot explain`: read-only, session-bound help with the output of the terminal it is typed in (no tools offered to the model, nothing executed by the tool)
 │   ├── groundwork_statusline.py       Claude Code statusLine: LIVE/LAST-COMPLETED-TURN/CACHED/UNAVAILABLE data-source contract, session-isolated, never probes integrations itself
 │   ├── merge_settings.py              additive settings.json merge (hooks, deny rules, env, --profile, --agent-teams, statusLine)
 │   ├── unmerge_settings.py            settings.json cleanup (used by uninstall.sh)

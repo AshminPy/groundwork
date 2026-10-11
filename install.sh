@@ -179,6 +179,11 @@ python3 "$CLAUDE_DIR/groundwork/bin/groundwork_integrations.py" refresh >/dev/nu
 cp "$HERE/scripts/groundwork_statusline.py" "$CLAUDE_DIR/groundwork/bin/"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_statusline.py"
 
+# Groundwork Copilot (`groundwork copilot explain`): read-only help with what happened in the terminal
+# it is typed in. Dispatched to by the groundwork CLI; runs nothing, stores nothing, starts no daemon.
+cp "$HERE/scripts/groundwork_copilot.py" "$CLAUDE_DIR/groundwork/bin/"
+chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_copilot.py"
+
 # Installed version (top CHANGELOG entry) — shown in the session snapshot and stamped on telemetry.
 grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$HERE/CHANGELOG.md" | sed 's/^## //' > "$CLAUDE_DIR/groundwork/VERSION"
 

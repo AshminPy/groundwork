@@ -1,0 +1,42 @@
+## Context
+
+Owner requirements for this milestone: identify the active project and authorized terminal context; observe selected terminal output; explain failures and suggest the next action; reuse evidence already collected; support simultaneous sessions without mixing context; avoid copying full histories into model context; preserve permissions; never execute in a different session; begin read-only; no new agent runtime.
+
+Facts established on this host (VERIFIED, Claude Code 2.1.296, tmux 3.4):
+- `claude --tools ""` removes the BUILT-IN tools only (`claude --help`: "from the built-in set"). VERIFIED by running the real claude in a project containing a `.claude/settings.json` hook and a `.mcp.json` server: with only `--tools ""` the model was offered 30 plugin MCP tools and 2 MCP servers, and both the SessionStart/UserPromptSubmit hooks and the project MCP server ran; with `--safe-mode` the tool and MCP lists were empty and nothing ran, at a fraction of the cost (a reviewer measured 1.7 to 7 times cheaper per call depending on cache state; my first single measurement of one thirteenth was not reproduced); with `--strict-mcp-config --setting-sources user` the lists were empty and nothing project-level ran, but user-level settings still apply.
+- Inside a tmux pane `$TMUX_PANE` names the pane, `tty` is the pane's tty, `tmux capture-pane -p -J -t %N` returns its scrollback retroactively, and `tmux display-message -p -t %N '#{pane_tty}'` maps pane to tty.
+- A process started in a pane has that pane's tty as its controlling terminal (`ps -o tty= -p $$`).
+
+## Architecture-quality §2 answers
+
+- **What is likely to change?** Which terminals can be read (tmux now; iTerm2 / Terminal.app / others later) and the redaction patterns. Terminal readers sit behind one function, `resolve_terminal()`, plus one capture function; a new reader is a new branch there, not a new layer. **Configuration rather than code?** Nothing is configurable beyond flags (`--lines`, `--question`): a setting that widened what is read or re-enabled tools would be a security downgrade. **Stable interface?** The command line.
+- **Another provider / environment / tenant?** A macOS reader is the foreseeable one; deliberately not built because it cannot be validated here (RUNTIME VALIDATION REQUIRED). Phase 5 (voice) reuses the command by calling it with `--question`.
+- **Manual steps automated?** Copy-paste of output, of project facts, and of redaction.
+- **Dependency unavailable?** No tmux → a readable refusal pointing at `--stdin`; no `claude`, a non-zero exit, or a 120 s timeout → a readable error and exit 1; `ps`/`git` failures degrade to fewer facts or a refusal, never a traceback.
+- **Observability?** `--dry-run` prints the exact prompt; every answer ends with the source, line count, character count and number of redactions, and "No command was run".
+- **Test / deploy / rollback?** Unit tests; a real two-pane tmux test with spoofed, unknown and wrapped-line cases; 115 mutants of the safety clauses, all caught by the tests (`tests/mutation/mutate_copilot.py` mutates a copy of the tree); one further mutant, removing `core.fsmonitor=false`, is classed equivalent because the tool no longer runs `git status`, the only one of its git calls that reads the index, so the flag is defence in depth and the fsmonitor canary test passes without it; an opt-in live test against the real claude (`GROUNDWORK_LIVE_TESTS=1`); one real model call on a genuine traceback. Deploy = the existing script copy in `install.sh`; rollback = the existing `groundwork rollback` / uninstall (the file lives in `~/.claude/groundwork/bin/`).
+- **Security boundary?** Per-process binding to one pane (no flag reads another); no tools in the model call; terminal text fenced as untrusted data; secret-shaped text redacted before it leaves the machine; egress only through the user's own `claude`. See the DECISION below for what was rejected.
+- **Scaling / cost?** One call per invocation, capped by `--max-budget-usd 0.25`, input capped at 400 lines / 16,000 characters.
+
+## Decisions
+
+DECISION            Read-only: one `claude -p --safe-mode --tools ""` call (prompt on stdin, empty scratch cwd) over a bounded, cleaned and redacted slice of the invoking pane's output plus git facts; the tool executes nothing.
+EVIDENCE            `claude --help` (`--tools`, `--safe-mode`, `--strict-mcp-config`, `--setting-sources`, `--no-session-persistence`, `--max-budget-usd`); the containment experiment in Context (real claude, canary hook and MCP server); tmux behaviour observed on this host; real run: a KeyError traceback in a pane was explained from the pane alone and the cause the output could not show was reported UNKNOWN. An independent security review of the first version reproduced the hook/MCP execution and a cubic-time regex, which is why this DECISION changed.
+WHY                 Alternatives that lost: (a) a read-only tool set (Read/Grep) — better answers (it could have opened the data file) but terminal text is untrusted, so an injected instruction could steer file reads whose contents then leave the machine inside the next request (the same effect existed without any tool through `@path` mentions, which Claude Code expands in prompt text; found by the third review round and removed by neutralising them); a path-scoped tool permission model would need its own validation first. (b) a shell wrapper that records every command's output — copies full histories, which the owner excluded, and needs per-shell setup. (c) AppleScript readers for macOS terminals — unvalidated here.
+TRADEOFFS           The model cannot open files, so it often ends at "UNKNOWN, show me X" (observed). It works retroactively only in tmux; elsewhere the user pipes the output. The user must act on any suggestion themselves. `--safe-mode` also disables the user's own CLAUDE.md and skills for this call (cheaper, less context). An older claude without `--safe-mode` gets the fallback, which still honours user-level hooks.
+VALIDATION METHOD   Tests and mutation checks above; two independent reviews (security, correctness) and a confirmation review; the live containment test; owner trial on macOS terminals (RUNTIME VALIDATION REQUIRED).
+UNCERTAINTY         Redaction is best effort (a secret with no recognisable shape can survive; `--dry-run` shows what would be sent); the containment flags are verified on Claude Code 2.1.296 only (other versions RUNTIME VALIDATION REQUIRED); admin-managed settings may add behaviour we cannot see; behaviour in iTerm2 / Terminal.app / tmux control mode / `screen` is untested; answer quality depends on the model.
+
+DECISION            Authorized command execution is NOT built here.
+EVIDENCE            Owner's instruction: add it "only when the mechanism and safety boundaries have been validated".
+WHY                 Execution needs a per-command approval flow, deny-list integration and a way to prove the target session, none of which is validated.
+TRADEOFFS           The assistant can suggest but not do.
+VALIDATION METHOD   Not applicable until proposed.
+UNCERTAINTY         Whether the owner wants it at all.
+
+## Risks
+
+- Prompt injection through terminal output or git facts: the model is offered no tools and no MCP/hook/project config (verified), so the residual risk is a wrong or misleading answer or a harmful suggested command, which the prompt counters by requiring a quoted line and an explicit UNKNOWN and every answer counters by saying a suggestion comes from untrusted output.
+- File mentions: Claude Code attaches a file named as `@path` in the prompt text, after redaction and not shown by `--dry-run` (reproduced on 2.1.296, also with `--disallowedTools Read` and `--permission-mode dontAsk`). The prompt therefore has every `@` that is not between two word characters replaced by the full-width at sign, tested in unit tests and by an opt-in live canary test with a positive control. Residual risk: another Claude Code version may expand other syntaxes (RUNTIME VALIDATION REQUIRED); the live test is the detector.
+- A stale or inherited `TMUX_PANE` (for example through `ssh` env forwarding): refused because the pane's tty must equal the process's own controlling tty and the pane's process must be an ancestor of this process (a separate devpts namespace sharing a tmux socket can reuse tty names).
+- A relative `PATH` entry would resolve `git`/`claude` from the project directory: refused.
