@@ -15,7 +15,7 @@
 
 ## 4. Verification
 - [x] 4.1 Unit tests on synthetic transcripts (label rule, attribution, ambiguity, pipes, references, privacy, CLI, Stop-hook integration incl. fail-open)
-- [x] 4.2 Mutation checks: 55 mutants of the safety clauses (`python3 tests/mutation/mutate_evidence.py`, which mutates a copy of the tree). The previous run caught 53 of 56; the three survivors (`${…}` expansion, a risky environment prefix, a `pipefail` position rule) have since been pinned by tests or, for the last, the redundant clause was removed. A complete re-run of the final set is in progress runner `tests/mutation/mutate_evidence.py` (mutates a copy); differential test against a real bash (5,292 compositions)
+- [x] 4.2 Mutation checks: 55 mutants of the safety clauses (`python3 tests/mutation/mutate_evidence.py`, which mutates a copy of the tree). An earlier run caught 53 of 56; the three survivors (`${…}` expansion, a risky environment prefix, a `pipefail` position rule) were then pinned by tests or, for the last, the redundant clause was removed. The final set was re-run in full: 55 of 55 caught, no survivors (runner `tests/mutation/mutate_evidence.py`, mutates a copy); differential test against a real bash (5,292 compositions)
 - [x] 4.3 Real run on a live transcript (104 MB, 0.12 s; synthetic 40 MB single turn 1.0 s)
 - [x] 4.4 CLI dispatch + uninstall test
 - [x] 4.5 Full suite, `openspec validate --all --strict` against the main baseline
