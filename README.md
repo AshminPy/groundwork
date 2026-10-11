@@ -181,7 +181,8 @@ validation state and references are three separate things. The estimate is best 
 guarantee: a passing check counts only if nothing that could change the tree came after it, and a
 command it cannot read with certainty earns nothing, but it can still be too high where it cannot
 see (environment tricks, wrapper commands, remote effects — the module's docstring lists the known
-gaps). A `Confidence:` label stated in the response is compared with the estimate, and a label above it is shown. References are printed on demand and never
+gaps). Nothing that grants permission or blocks work depends on it: it exists to catch an honest or
+accidental over-claim, not deliberate forgery. A `Confidence:` label stated in the response is compared with the estimate, and a label above it is shown. References are printed on demand and never
 stored; the Stop-hook record keeps only the label and counts. Limits: a test run piped through
 anything but `tail`/`head`/`tee`/`cat`/`wc` is not credited, and a review delivered as a background
 agent's later message (not a tool result) is not credited. See

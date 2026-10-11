@@ -79,7 +79,6 @@ MUTANTS = [
     ("edit-only turn is NONE", TARGET, "        if not changed:\n            return \"NONE\"", "        if True:\n            return \"NONE\""),
     ("review blocks joined with a space", TARGET, 'return "\\n".join(str(b.get("text", ""))', 'return " ".join(str(b.get("text", ""))'),
     ("risky env prefix trusted", TARGET, "if _RISKY_ENV.search(segment[:_PREFIX.match(segment).end()]):", "if False:"),
-    ("pipefail from any position", TARGET, ' and bool(conns) and conns[0] in (";", "&&", "\\n")', ""),
     ("long commands parsed", TARGET, "len(text) > 20_000 or ", ""),
     ("curl --request POST credited", TARGET, r"--request(?:=|\s+)(?!GET\b|HEAD\b)\w+|", ""),
     ("sub-agent transcript picked", TARGET, 'if not c.name.startswith("agent-")', "if True"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic checks for hooks/groundwork_evidence.py — the evidence receipt and confidence ceiling.
+"""Deterministic checks for hooks/groundwork_evidence.py — the evidence receipt and confidence estimate.
 
 Synthetic transcripts only; no Claude Code needed.
 Run: python3 tests/test_evidence.py   (or: python3 -m pytest tests -q)
@@ -84,7 +84,7 @@ def label(mod, *steps):
 
 
 def test_label_rule() -> None:
-    print("groundwork_evidence.py — the confidence ceiling follows the documented rule, and unknown things never raise it")
+    print("groundwork_evidence.py — the confidence estimate follows the documented rule, and unknown things never raise it")
     m = load()
     check("nothing inspected -> NONE", m.derive_evidence([])["confidence"] == "NONE")
     check("a failed read alone -> NONE (nothing was actually inspected)", label(m, ("Read", {"file_path": "/x"}, "no such file", True)) == "NONE")
@@ -243,13 +243,13 @@ def test_reference_noise_and_ranking() -> None:
 
 
 def test_declared_vs_observed() -> None:
-    print("groundwork_evidence.py — the model's stated label is compared with the ceiling, never trusted over it")
+    print("groundwork_evidence.py — the model's stated label is compared with the estimate, never trusted over it")
     m = load()
-    check("HIGH stated over a LOW ceiling exceeds", m.declared_exceeds("HIGH", "LOW") is True)
+    check("HIGH stated over a LOW estimate exceeds", m.declared_exceeds("HIGH", "LOW") is True)
     check("equal does not exceed", m.declared_exceeds("medium", "MEDIUM") is False)
-    check("lower than the ceiling does not exceed", m.declared_exceeds("LOW", "HIGH") is False)
+    check("lower than the estimate does not exceed", m.declared_exceeds("LOW", "HIGH") is False)
     check("an unrecognised stated label compares as None, not as a pass", m.declared_exceeds("very sure", "LOW") is None and m.declared_exceeds("", "LOW") is None)
-    check("UNKNOWN is never a ceiling that can be exceeded or met", m.declared_exceeds("HIGH", "UNKNOWN") is None)
+    check("UNKNOWN is never an estimate that can be exceeded or met", m.declared_exceeds("HIGH", "UNKNOWN") is None)
     finish()
 
 
@@ -500,7 +500,7 @@ def test_declared_label_parsing() -> None:
     for stated, want in (("High.", "HIGH"), ("HIGH,", "HIGH"), ("**HIGH**", "HIGH"), ("HIGH (ish)", "HIGH"), ("MEDIUM/HIGH", "HIGH"),
                          ("\x1b[1mHIGH\x1b[0m", "HIGH"), ("low", "LOW"), ("very sure", None), ("", None), (None, None)):
         check(f"declared_label({stated!r}) -> {want}", m.declared_label(stated) == want, str(m.declared_label(stated)))
-    check("'MEDIUM/HIGH' over a LOW ceiling exceeds", m.declared_exceeds("MEDIUM/HIGH", "LOW") is True)
+    check("'MEDIUM/HIGH' over a LOW estimate exceeds", m.declared_exceeds("MEDIUM/HIGH", "LOW") is True)
     finish()
 
 
@@ -673,6 +673,12 @@ def test_mutation_survivors() -> None:
     real = ("Bash", {"command": "sed -i s/a/b/ src/a.py"}, "PreToolUse:Bash hook error: [gate] refused", True)
     check("a real policy block (is_error) never ran, so the earlier pass stands -> MEDIUM",
           label(m, read(), bash("pytest -q"), real) == "MEDIUM")
+    # text inside ${…} is never executed as a command list, whatever it contains
+    check("${X:-a; pytest -q } is not a test run -> LOW", label(m, read(), bash("echo ${X:-a; pytest -q }")) == "LOW")
+    # an environment assignment can change what the runner is or runs
+    for cmd in ("PATH=/tmp/fake:$PATH pytest -q", "PYTHONPATH=/x pytest -q", "LD_PRELOAD=/x.so pytest -q"):
+        check(f"a risky environment prefix withdraws credit and counts as a change: {cmd}", label(m, read(), bash(cmd)) == "LOW", cmd)
+    check("a harmless environment prefix does not", label(m, read(), bash("FOO=bar pytest -q")) == "MEDIUM")
     # listing tests is not running them, and must not withdraw an earlier pass
     for flag in ("--collectonly", "--collect-only"):
         check(f"pytest {flag} after a pass changes nothing -> MEDIUM",
@@ -695,9 +701,9 @@ def test_cli() -> None:
         tpath = tmp / "t.jsonl"
         tpath.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
         r = _cli(["--transcript", str(tpath)])
-        check("exit 0 and names the ceiling", r.returncode == 0 and "Evidence confidence (ceiling estimate): MEDIUM" in r.stdout, r.stdout + r.stderr)
+        check("exit 0 and names the estimate", r.returncode == 0 and "Evidence confidence (estimate): MEDIUM" in r.stdout, r.stdout + r.stderr)
         check("lists the references with outcomes", "file     /repo/a.py" in r.stdout and "pytest -q [ok]" in r.stdout, r.stdout)
-        check("flags a stated HIGH over a MEDIUM ceiling", "Declared in the last response: HIGH — EXCEEDS what was observed" in r.stdout, r.stdout)
+        check("flags a stated HIGH over a MEDIUM estimate", "Declared in the last response: HIGH — EXCEEDS what was observed" in r.stdout, r.stdout)
         check("says validation state is separate", "Validation state is separate" in r.stdout)
         rj = _cli(["--transcript", str(tpath), "--json"])
         data = json.loads(rj.stdout)
@@ -794,13 +800,13 @@ def test_stop_hook_unreadable_transcript_and_label_parsing() -> None:
         t.write_text("\n".join(json.dumps(e) for e in turn(read("/repo/a.py"))) + "\n")
         for stated in ("High.", "**HIGH**", "HIGH,", "MEDIUM/HIGH"):
             rec = stop(t, stated)
-            check(f"decorated stated label {stated!r} over a LOW ceiling is flagged",
+            check(f"decorated stated label {stated!r} over a LOW estimate is flagged",
                   rec["observed"]["declared_confidence_exceeds_observed"] is True, json.dumps(rec["observed"]))
     finish()
 
 
 def test_stop_hook_integration() -> None:
-    print("groundwork_telemetry.py — the Stop record carries the observed ceiling, the stated label and their comparison, and no references")
+    print("groundwork_telemetry.py — the Stop record carries the observed estimate, the stated label and their comparison, and no references")
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         cfg = tmp / "claude"
@@ -820,7 +826,7 @@ def test_stop_hook_integration() -> None:
         check("hook exits 0 silently", r.returncode == 0 and r.stdout == "" and r.stderr == "", r.stdout + r.stderr)
         rec = json.loads(events.read_text().splitlines()[-1])
         ob, de = rec["observed"], rec["declared"]
-        check("observed ceiling recorded (MEDIUM: tests passed, no runtime/review)", ob["evidence_confidence"] == "MEDIUM", json.dumps(ob))
+        check("observed estimate recorded (MEDIUM: tests passed, no runtime/review)", ob["evidence_confidence"] == "MEDIUM", json.dumps(ob))
         check("observed signals are counts/booleans", ob["evidence_signals"]["tests_ran"] == 1 and ob["evidence_signals"]["tests_last_ok"] is True
               and ob["evidence_signals"]["repo_inspected"] is True and ob["evidence_signals"]["review"] == "none", json.dumps(ob))
         check("declared label recorded separately", de["evidence_confidence"] == "high", json.dumps(de))

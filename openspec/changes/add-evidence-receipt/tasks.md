@@ -15,9 +15,10 @@
 
 ## 4. Verification
 - [x] 4.1 Unit tests on synthetic transcripts (label rule, attribution, ambiguity, pipes, references, privacy, CLI, Stop-hook integration incl. fail-open)
-- [x] 4.2 Mutation checks of the safety clauses (28 of 29 mutants fail the tests; the survivor, subshell-paren rejection, is redundant with the keyword rule); differential test against a real bash (~1,000 compositions)
-- [x] 4.3 Real run on a live transcript (83 MB, 0.15 s)
+- [x] 4.2 Mutation checks: 55 mutants of the safety clauses (`python3 tests/mutation/mutate_evidence.py`, which mutates a copy of the tree). The previous run caught 53 of 56; the three survivors (`${…}` expansion, a risky environment prefix, a `pipefail` position rule) have since been pinned by tests or, for the last, the redundant clause was removed. A complete re-run of the final set is in progress runner `tests/mutation/mutate_evidence.py` (mutates a copy); differential test against a real bash (5,292 compositions)
+- [x] 4.3 Real run on a live transcript (104 MB, 0.12 s; synthetic 40 MB single turn 1.0 s)
 - [x] 4.4 CLI dispatch + uninstall test
 - [x] 4.5 Full suite, `openspec validate --all --strict` against the main baseline
-- [ ] 4.6 Independent fresh-context review; fix MUST FIX; confirmation review
+- [x] 4.6 Independent reviews: round 1 (16 must-fix) and round 2 (15 must-fix) fixed
+- [ ] 4.6b Fresh confirmation review of the latest fixes
 - [ ] 4.7 Owner check of labels on sessions they know (RUNTIME VALIDATION REQUIRED)

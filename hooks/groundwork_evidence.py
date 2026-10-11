@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Evidence receipt — what a turn actually inspected or ran, and the evidence-confidence ceiling that
-supports, estimated deterministically from the session transcript, never from the model's tone.
+"""Evidence receipt — what a turn actually inspected or ran, and the evidence-confidence estimate that
+it supports, derived deterministically from the session transcript, never from the model's tone.
 
 Used two ways:
   * imported by groundwork_telemetry.py (Stop hook), which records only the confidence label and
@@ -36,6 +36,11 @@ signals, and two design rules keep it cautious:
           since the last change reported zero MUST FIX AND the repo or an external source was inspected
   UNKNOWN the transcript could not be read (never upgraded to a label)
 
+Threat model: the label is shown to the user and recorded in telemetry; no permission, hook decision or gate
+depends on it. It exists to catch an honest or accidental over-claim. It does not defend against a model that
+deliberately builds transcript content to look like evidence (a command crafted to look like a test run, a forged
+REVIEW RESULT block); that residual is the same one the review gate documents.
+
 Known gaps, stated rather than hidden (the label can be too high in these cases):
   * a Bash command is judged from its text: environment effects (PATH, aliases, functions or files
     defined by an earlier `source`/`export`), arguments that expand from variables, and tools that
@@ -48,7 +53,19 @@ Known gaps, stated rather than hidden (the label can be too high in these cases)
     report arrives as a later message and is not credited); a forged block inside a subagent's text
     would be credited, the same residual the review gate documents;
   * `pytest | tail`-style runs are judged by the runner's own `N passed` / `N failed` summary, and a
-    piped read-only command by a short list of error phrases — both heuristics.
+    piped read-only command by a short list of error phrases — both heuristics; a pass-through `tee` is trusted
+    to only copy (`pytest | tee src/a.py` would overwrite a file and is not seen as a change);
+  * downloads and redirections are recognised only in the spellings listed in this module (`-o`, `-O`, `--output`,
+    `>`); other ways a recognised command can write a file are not modelled;
+  * which tests ran is judged from the command words, not from the runner's configuration: an unscoped pass of a
+    runner clears earlier failures of that runner in the same directory even if flags or config selected fewer tests;
+  * the working directory is tracked only through a `cd` inside the same command, not across commands;
+  * only the last 32 MB of a transcript are read: in a turn longer than that, earlier failures and changes are not
+    seen (the label can be too high); a turn of 40 MB measured 1.0 s, a 104 MB transcript with a short turn 0.12 s;
+  * calls are ordered by when they were issued; parallel calls in one message have no defined effect order;
+  * only the first 4,000 characters of a command or reference text are considered, so a secret that straddles that
+    cut can leave a short prefix visible in a printed reference;
+  * the transcript is taken from the current directory's project, or the nearest enclosing directory that has one.
 """
 import argparse
 import json
@@ -635,8 +652,7 @@ def derive_evidence(entries: list) -> dict:
                 mutate((idx, 0))  # could have changed anything; nothing is credited
                 continue
             segs, conns = parsed
-            pipefail = (bool(_PIPEFAIL.match(segs[0])) and bool(conns) and conns[0] in (";", "&&", "\n")
-                        and not any(_PIPEFAIL_OFF.match(sg) for sg in segs))
+            pipefail = bool(_PIPEFAIL.match(segs[0])) and not any(_PIPEFAIL_OFF.match(sg) for sg in segs)
             prev_recognised = False
             for j, segment in enumerate(segs):
                 pos = (idx, j)
@@ -809,7 +825,7 @@ def declared_label(declared):
 
 
 def declared_exceeds(declared: str, observed: str):
-    """True/False when both are known labels, else None — the model's stated label vs the ceiling."""
+    """True/False when both are known labels, else None — the model's stated label vs the estimate."""
     d, o = declared_label(declared), (observed or "").strip().upper()
     if d in RANK and o in RANK:
         return RANK[d] > RANK[o]
@@ -861,7 +877,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="groundwork evidence",
         description="Print the evidence receipt for the last turn of a session: what was actually "
-                    "inspected or run, and the evidence-confidence ceiling that supports. Read-only.")
+                    "inspected or run, and the evidence-confidence estimate that supports. Read-only.")
     ap.add_argument("--transcript", help="transcript .jsonl to read (default: the newest for this directory's project)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -894,11 +910,11 @@ def main(argv=None) -> int:
     if args.json:
         print(json.dumps(ev, indent=2))
         return 0
-    print(f"Evidence confidence (ceiling estimate): {ev['confidence']}")
+    print(f"Evidence confidence (estimate): {ev['confidence']}")
     for r in ev["reasons"]:
         print(f"  - {r}")
     if declared_clean:
-        verdict = "EXCEEDS what was observed" if over else "within the observed ceiling" if over is False else "not a recognised label"
+        verdict = "EXCEEDS what was observed" if over else "within the estimate" if over is False else "not a recognised label"
         print(f"Declared in the last response: {declared_clean} — {verdict}")
     s = ev["signals"]
     print(f"Signals: repo_inspected={s['repo_inspected']} external_source={s['external_source']} tests_ran={s['tests_ran']} "
