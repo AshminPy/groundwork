@@ -596,6 +596,96 @@ def test_session_snapshot() -> None:
     finish()
 
 
+def test_snapshot_worktrees() -> None:
+    print("groundwork_session_snapshot.py — sibling worktrees (work a fresh session cannot see)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        origin = tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, env=GIT_ENV)
+        repo = tmp / "main-checkout"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        git(repo, "remote", "add", "origin", str(origin))
+        git(repo, "push", "-q", "-u", "origin", "main")
+
+        def snap(cwd: Path) -> str:
+            return snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(cwd)}))
+
+        # a repository with a single worktree adds no line at all
+        check("single worktree -> no worktree section", "other worktrees" not in snap(repo), snap(repo))
+
+        pushed = tmp / "wt-pushed"
+        git(repo, "worktree", "add", "-q", "-b", "feat/pushed", str(pushed))
+        git(pushed, "push", "-q", "-u", "origin", "feat/pushed")
+        only_pushed = snap(repo)
+        check("only clean + pushed siblings -> nothing to report, nothing printed",
+              "other worktrees" not in only_pushed and "wt-pushed" not in only_pushed, only_pushed)
+
+        dirty = tmp / "wt-dirty"
+        git(repo, "worktree", "add", "-q", "-b", "feat/dirty", str(dirty))
+        git(dirty, "push", "-q", "-u", "origin", "feat/dirty")
+        (dirty / "scratch.txt").write_text("x")
+        (dirty / "new.txt").write_text("y")
+        unpushed = tmp / "wt-unpushed"
+        git(repo, "worktree", "add", "-q", "-b", "feat/unpushed", str(unpushed))
+        git(unpushed, "push", "-q", "-u", "origin", "feat/unpushed")
+        git(unpushed, "commit", "-q", "--allow-empty", "-m", "unpushed work")
+        noup = tmp / "wt-no-upstream"
+        git(repo, "worktree", "add", "-q", "-b", "feat/" + "n" * 100, str(noup))
+        detached = tmp / "wt-detached"
+        git(repo, "worktree", "add", "-q", "--detach", str(detached))
+        gone = tmp / "wt-gone"
+        git(repo, "worktree", "add", "-q", "-b", "feat/gone", str(gone))
+        shutil.rmtree(gone)
+
+        text = snap(repo)
+        check("summary counts each kind",
+              "other worktrees of this repository: 4 with work only on this machine, 1 clean and pushed, "
+              "1 with a missing directory (git worktree prune)" in text, text)
+        check("dirty sibling: branch, short HEAD, uncommitted counts, upstream state",
+              re.search(r"wt-dirty: feat/dirty @ [0-9a-f]{7}; 1 modified, 1 untracked; 0 ahead / 0 behind upstream", text) is None
+              and re.search(r"wt-dirty: feat/dirty @ [0-9a-f]{7}; 0 modified, 2 untracked; 0 ahead / 0 behind upstream", text) is not None, text)
+        check("unpushed commit is reported as ahead",
+              re.search(r"wt-unpushed: feat/unpushed @ [0-9a-f]{7}; clean; 1 ahead / 0 behind upstream", text) is not None, text)
+        check("no-upstream branch is reported and its long name clipped to 60",
+              "no upstream tracking branch" in text and ("feat/" + "n" * 54 + "…") in text and "n" * 100 not in text, text)
+        check("detached HEAD is labelled", re.search(r"wt-detached: detached HEAD @ [0-9a-f]{7}; clean; no upstream", text) is not None, text)
+        check("pushed and missing worktrees are not listed as lines", "wt-pushed" not in text and "wt-gone" not in text, text)
+        check("the current checkout is never listed as 'other'", "main-checkout:" not in text, text)
+        check("worktree section sits inside the data block", text.index("other worktrees") < text.index("▲ end repository facts"), text)
+
+        # the same facts from inside a sibling: the main checkout (clean, pushed) is counted, this one is not listed
+        from_sibling = snap(unpushed)
+        check("viewed from a sibling, 'other' excludes itself and includes the main checkout",
+              "wt-unpushed:" not in from_sibling.split("other worktrees")[1].split("project signals")[0]
+              and "other worktrees of this repository:" in from_sibling, from_sibling)
+
+        # listing is capped; the rest are counted
+        for i in range(5):
+            extra = tmp / f"wt-extra-{i}"
+            git(repo, "worktree", "add", "-q", "-b", f"feat/extra-{i}", str(extra))
+        capped = snap(repo)
+        listed = [l for l in capped.splitlines() if l.startswith("  ") and " @ " in l and "wt-" in l]
+        check("listed worktrees capped at 4 with an overflow marker", len(listed) == 4 and "… 5 more (run: git worktree list)" in capped, capped)
+
+        # examination is bounded: a tiny wall-clock budget examines nothing yet still reports the count
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("snap_wt", SNAPSHOT_HOOK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.WORKTREE_BUDGET_SECONDS = -1.0
+        lines = mod.worktree_facts(str(repo))
+        check("exhausted budget -> counted as not examined, nothing listed",
+              len(lines) == 1 and "not examined" in lines[0] and "0 with work only on this machine" in lines[0], str(lines))
+
+        # not a git repository / git failure -> nothing, no crash
+        plain = tmp / "plain"
+        plain.mkdir()
+        check("non-git dir -> no worktree facts", mod.worktree_facts(str(plain)) == [], str(mod.worktree_facts(str(plain))))
+    finish()
+
+
 # ------------------------------------- investigation continuity (2.0, Decision D2, Option B)
 
 def test_investigation_continuity() -> None:
@@ -960,7 +1050,7 @@ if __name__ == "__main__":
     if shutil.which("git") is None:
         print("git not found on PATH — cannot run these tests")
         sys.exit(1)
-    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_investigation_continuity, test_settings_merge, test_legacy_migration):
+    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_snapshot_worktrees, test_investigation_continuity, test_settings_merge, test_legacy_migration):
         try:
             test()
         except AssertionError:

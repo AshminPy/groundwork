@@ -7,7 +7,9 @@ Groundwork extension. It does not replace ECC's SessionStart bootstrap (which
 injects the matching saved session summary and instincts) or OpenSpec — it adds
 the facts those cannot know or may have stale: current branch/HEAD, ahead/behind,
 dirty and untracked counts, recent commits, every active OpenSpec change with its
-task progress (and whether the review gate applies), the project's signal files,
+task progress (and whether the review gate applies), other worktrees of the same
+repository (branch, HEAD, uncommitted and unpushed state — work a fresh session
+cannot see from this checkout), the project's signal files,
 and the verification commands the repository itself declares (Makefile targets,
 package scripts, pytest/tox/nox config, Go/Rust/Terraform presence, CI workflows).
 It never invents a command: it reports what is present and tells Claude to confirm
@@ -38,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,6 +55,9 @@ MAX_CHARS = 2500
 GIT_TIMEOUT = 3
 MAX_RECENT_COMMITS = 5
 MAX_CHANGES = 8
+MAX_WORKTREES_LISTED = 4  # worktrees with local-only work shown; the rest are counted
+MAX_WORKTREES_EXAMINED = 12  # worktrees whose state is read at all (each costs a few git calls)
+WORKTREE_BUDGET_SECONDS = 4.0  # wall-clock for the whole worktree section (each git call also has GIT_TIMEOUT)
 MAX_WALK_DIRS = 400  # bound on directories visited per IaC root when discovering Terraform
 MAX_INVESTIGATION_CHARS = 800  # keeps one oversized investigation file from crowding out git/OpenSpec facts
 
@@ -112,11 +118,10 @@ def git(cwd: str, *args: str):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def git_facts(cwd: str) -> list[str]:
-    if git(cwd, "rev-parse", "--is-inside-work-tree") != "true":
-        return []
-    branch = clip(git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?", 80)
-    head = clip(git(cwd, "log", "-1", "--format=%h %s (%cr)") or "no commits yet", 140)
+def branch_state(cwd: str) -> tuple[int, int, str, bool]:
+    """(modified, untracked, upstream description, work_not_on_upstream) for the checkout at cwd.
+    The last item is True when the checkout has uncommitted changes, commits its upstream does
+    not have, or no upstream at all — i.e. work that exists only on this machine."""
     status = git(cwd, "status", "--porcelain", "--untracked-files=all") or ""
     rows = [line for line in status.splitlines() if line.strip()]
     untracked = sum(1 for line in rows if line.startswith("??"))
@@ -125,12 +130,77 @@ def git_facts(cwd: str) -> list[str]:
     if counts and len(counts.split()) == 2:
         behind, ahead = counts.split()
         upstream = f"{ahead} ahead / {behind} behind upstream"
+        unshared = ahead != "0"
     else:
         upstream = "no upstream tracking branch"
+        unshared = True
+    return modified, untracked, upstream, bool(rows) or unshared
+
+
+def git_facts(cwd: str) -> list[str]:
+    if git(cwd, "rev-parse", "--is-inside-work-tree") != "true":
+        return []
+    branch = clip(git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?", 80)
+    head = clip(git(cwd, "log", "-1", "--format=%h %s (%cr)") or "no commits yet", 140)
+    modified, untracked, upstream, _ = branch_state(cwd)
     lines = [f"git: branch {branch}; HEAD {head}; {modified} modified, {untracked} untracked; {upstream}"]
     recent = git(cwd, "log", f"-{MAX_RECENT_COMMITS}", "--format=%h %s")
     if recent:
         lines.append("recent commits:\n" + "\n".join("  " + clip(row, 120) for row in recent.splitlines()))
+    return lines
+
+
+def worktree_facts(cwd: str) -> list[str]:
+    """Other worktrees of this repository that hold work existing only on this machine
+    (uncommitted changes, commits no upstream has, or no upstream at all). Such work is invisible
+    to `git status`/`git log` in this checkout, so without this line a fresh session cannot know
+    it exists. Facts only: `git worktree list --porcelain` plus the same per-checkout state as
+    the git line; clean, fully-pushed worktrees are counted, not listed. Bounded in worktrees
+    examined, lines shown and wall-clock time; any failure -> nothing."""
+    listing = git(cwd, "worktree", "list", "--porcelain")
+    if not listing:
+        return []
+    here = os.path.realpath(git(cwd, "rev-parse", "--show-toplevel") or cwd)
+    entries, current = [], {}
+    for line in listing.splitlines() + [""]:
+        if not line.strip():
+            if current.get("worktree"):
+                entries.append(current)
+            current = {}
+            continue
+        key, _, value = line.partition(" ")
+        current[key] = value
+    others = [e for e in entries if "bare" not in e and os.path.realpath(e["worktree"]) != here]
+    deadline = time.monotonic() + WORKTREE_BUDGET_SECONDS
+    local_only, pushed, missing, unexamined = [], 0, 0, 0
+    for entry in others:
+        path = entry["worktree"]
+        if not os.path.isdir(path):
+            missing += 1
+            continue
+        if len(local_only) + pushed >= MAX_WORKTREES_EXAMINED or time.monotonic() > deadline:
+            unexamined += 1
+            continue
+        modified, untracked, upstream, unshared = branch_state(path)
+        if not unshared:
+            pushed += 1
+            continue
+        branch = entry.get("branch", "").removeprefix("refs/heads/") or "detached HEAD"
+        state = f"{modified} modified, {untracked} untracked" if modified or untracked else "clean"
+        local_only.append(
+            f"  {clip(path, 100)}: {clip(branch, 60)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {state}; {upstream}"
+        )
+    if not local_only and not missing and not unexamined:
+        return []
+    summary = [f"{len(local_only)} with work only on this machine", f"{pushed} clean and pushed"]
+    if missing:
+        summary.append(f"{missing} with a missing directory (git worktree prune)")
+    if unexamined:
+        summary.append(f"{unexamined} not examined")
+    lines = [f"other worktrees of this repository: {', '.join(summary)} (all: git worktree list)"]
+    lines += local_only[:MAX_WORKTREES_LISTED]
+    if len(local_only) > MAX_WORKTREES_LISTED:
+        lines.append(f"  … {len(local_only) - MAX_WORKTREES_LISTED} more (run: git worktree list)")
     return lines
 
 
@@ -369,6 +439,7 @@ def build_snapshot(cwd: str) -> str:
     lines += investigation_facts(cwd)
     lines += git_lines or ["git: not a git repository"]
     lines += spec_lines
+    lines += worktree_facts(cwd) if git_lines else []
     lines += signal_facts(cwd)
     lines += command_facts(cwd)
     lines.append(DATA_END)

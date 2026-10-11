@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Session snapshot lists unpushed work in other worktrees**: a new session started in one checkout now sees other worktrees of the same repository that hold work existing only on this machine (uncommitted changes, commits no upstream has, or no upstream), with branch, short HEAD and state. Reproduced gap: eight worktrees existed, two held local-only work, and the snapshot mentioned none. Clean, fully pushed worktrees are only counted; nothing is printed when there is nothing to report. Bounded (12 examined, 4 listed, 4-second budget), fail-open, no new files or state. See `openspec/changes/add-snapshot-worktrees/`.
+
 ## 2.3.0 — 2026-09-30
 
 Next Release Program — a single, discoverable `groundwork` command that reaches Groundwork's
