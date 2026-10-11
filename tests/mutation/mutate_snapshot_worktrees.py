@@ -57,6 +57,11 @@ M = [
  ("empty .git directory trusted", 'if os.path.exists(dot_git) and not (os.path.isfile(dot_git) or os.path.isfile(os.path.join(dot_git, "HEAD"))):', 'if False:'),
  ("ambiguous listing guessed", 'if key in current:\n            raise ValueError("ambiguous listing")', 'if False:\n            raise ValueError("ambiguous listing")'),
  ("budget default bound at definition", 'budget = MAX_WORKTREE_CHARS if budget is None else budget', 'budget = 700 if budget is None else budget'),
+ ("section lines not fitted to the budget", 'return _fit(lines, budget)', 'return lines'),
+ ("ambiguous line not fitted to the budget", 'return _fit(["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"], budget)', 'return ["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"]'),
+ ("fit drops the summary first", 'lines.pop()', 'lines.pop(0)'),
+ ("fit trims nothing", 'lines.pop()', 'break'),
+ ("fit drops a section that exactly fits", 'while lines and len("\\n".join(lines)) > budget:', 'while lines and len("\\n".join(lines)) >= budget:'),
 ]
 
 surv = []

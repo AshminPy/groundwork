@@ -992,6 +992,34 @@ def test_snapshot_worktrees_edge_cases() -> None:
         check("the budget covers the whole section: when a row would leave no room for the '… N more' line, the row is not shown",
               "snapshot truncated" not in tight and len(tight) <= tight_cap and 'On "continue this project"' in tight, f"{len(tight)} > {tight_cap}? tail: {tight[-200:]!r}")
 
+        # --- every line of the section goes through the budget, not only the rows: the summary, the '… N more' line and
+        # the 'ambiguous' line were once added unchecked, so a baseline within ~177 characters of the cap lost its closing
+        # instruction to the prefix cut (found by independent review, round 3)
+        full = real_wf(str(crowd), budget=5000)
+        cum = [len("\n".join(full[: i + 1])) for i in range(len(full))]
+        bad = []
+        for b in sorted({0, 1, 40} | {c + d for c in cum for d in (-1, 0)}):
+            sec = real_wf(str(crowd), budget=b)
+            if len("\n".join(sec)) > b or (b >= cum[0]) != bool(sec) or (sec and sec[0] != full[0]):
+                bad.append((b, len("\n".join(sec)), len(sec)))
+        check("worktree_facts: whatever the budget, the section fits it, whole lines only, and the summary is shown wherever it fits",
+              not bad, str(bad))
+        edge = real_wf(str(crowd), budget=cum[1])  # room for the summary and ONE row, not for that row plus a '… N more' line
+        check("when one row would fit but not that row plus the '… N more' line, the count of the unlisted wins (the spec promises it)",
+              len(edge) == 2 and "3 more" in edge[1], "\n".join(edge))
+        mod.MAX_CHARS = len(without)
+        try:
+            e2e_bad = []
+            for k in (0, 30, cum[0] - 1, cum[0], cum[0] + 20, cum[0] + 60, cum[-1] + 1):
+                mod.MAX_CHARS = len(without) + k
+                snap = mod.build_snapshot(str(crowd))
+                if "snapshot truncated" in snap or len(snap) > mod.MAX_CHARS or 'On "continue this project"' not in snap:
+                    e2e_bad.append((k, len(snap), snap[-120:]))
+        finally:
+            mod.MAX_CHARS = saved_cap
+        check("when the other facts leave less room than the summary, the section is left out and the snapshot is uncut",
+              not e2e_bad, str(e2e_bad))
+
         # --- an empty .git directory is not a checkout: git would walk up and answer for the repository around it (also under a ':' path)
         colon = mk(tmp / "c:olon" / "r")
         cnest = colon / ".wt-nested"
@@ -1016,10 +1044,14 @@ def test_snapshot_worktrees_edge_cases() -> None:
         os.environ["PATH"] = f"{nz}:{saved_path2}"
         try:
             lines = mod.worktree_facts(str(nzbase))
+            too_small = mod.worktree_facts(str(nzbase), budget=len(lines[0]) - 1) if lines else None
+            just_fits = mod.worktree_facts(str(nzbase), budget=len(lines[0])) if lines else None
         finally:
             os.environ["PATH"] = saved_path2
         check("no -z and a forged-looking path: reported as ambiguous, nothing forged is shown",
               len(lines) == 1 and "ambiguous" in lines[0] and "FORGED" not in lines[0], "\n".join(lines))
+        check("the 'ambiguous' line obeys the budget too: nothing when it does not fit, the line when it does",
+              too_small == [] and just_fits == lines, f"{too_small!r} {just_fits!r}")
 
         # --- the section can never cost the rest of the snapshot
         def boom(cwd):

@@ -180,6 +180,15 @@ def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
     return entries
 
 
+def _fit(lines: list[str], budget: int) -> list[str]:
+    """The section as whole lines that together fit `budget` characters: drop lines from the end until they do, and
+    show nothing when not even the first (the summary) fits. Every line of the section goes through here, so the
+    section can never take more than the room the other facts left under MAX_CHARS."""
+    while lines and len("\n".join(lines)) > budget:
+        lines.pop()
+    return lines
+
+
 def _sibling_state(path: str, run) -> tuple | None | object:
     """(modified, untracked, upstream description, work_not_on_a_remote) from ONE `git status -b` call, or None
     when git could not read the checkout, or _NO_TIME when the deadline passed first."""
@@ -235,7 +244,7 @@ def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
     try:
         entries = [e for e in _parse_worktrees(listing, nul) if "bare" not in e]
     except ValueError:
-        return ["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"]
+        return _fit(["other worktrees of this repository: the listing is ambiguous (a path contains a newline), so none was examined (git worktree list)"], budget)
     if len(entries) < 2:
         return []  # a single checkout: nothing else to report
     top = run(cwd, "rev-parse", "--show-toplevel")
@@ -318,7 +327,7 @@ def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
         shown += 1
     if len(local_only) > shown:
         lines.append(f"  … {len(local_only) - shown} more (run: git worktree list)")
-    return lines
+    return _fit(lines, budget)
 
 
 def openspec_facts(cwd: str) -> list[str]:
