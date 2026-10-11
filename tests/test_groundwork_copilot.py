@@ -894,6 +894,18 @@ def test_round4_review_fixes() -> None:
     for pw_url in ("postgres://u:p@ssw0rdTail@db/app", "postgres://u:p@ssw0rd.tail@db/app", "postgres://u:p@ss-w0rd@db.example.com:5432/app"):
         red = m.redact(pw_url)[0]
         check(f"a password that itself contains '@' is redacted to the last '@': {pw_url}", red == pw_url.split(":")[0] + "://u:[redacted]@" + pw_url.rsplit("@", 1)[1], red)
+    cookies = ["curl -sS -b 'sid=abc; theme=dark; connect.sid=ZZTOPSECRET1' https://x", "curl -sS --cookie 'a=1; b=ZZTOPSECRET2' https://x",
+               'curl -sS -b "a=1; b=ZZTOPSECRET3" https://x', "headers = {'Cookie': 'laravel_session=ZZTOPSECRET4; x=1'}",
+               '{"set-cookie": ["sid=ZZTOPSECRET5; Path=/"]}', "Cookie: a=1; b=ZZTOPSECRET6", "curl -b jar=ZZTOPSECRET7 https://x"]
+    still_c = [s for s in cookies if "ZZTOP" in m.redact(s)[0]]
+    check("a quoted multi-cookie jar and a quoted-key cookie header are redacted to the end", not still_c, str(still_c))
+    check("tokenizer_secret and tokenizer_api_key are redacted; tokenizer names and counts are left readable",
+          "ZZTOPSECRET8" not in m.redact("tokenizer_secret=ZZTOPSECRET8")[0] and "ZZTOPSECRET9" not in m.redact("tokenizer_api_key: ZZTOPSECRET9")[0]
+          and m.redact("tokenizer: gpt2") == ("tokenizer: gpt2", 0) and m.redact("tokenizer_name: gpt2") == ("tokenizer_name: gpt2", 0), str(m.redact("tokenizer_secret=ZZTOPSECRET8")))
+    q = "x " * 242 + "xx " + "ghp_" + "A" * 30  # the token starts at column 487: cut at 500 first, only 9 of its characters would be left, too few to be recognised
+    assert q.index("ghp_") == 487
+    code, out, _ = run_cli(m, ["--stdin", "--dry-run", "--json", "--question", q], "boom\n")
+    check("a token straddling the 500-character cut of the question is redacted before the cut", code == 0 and "ghp_AAAA" not in json.loads(out)["prompt"], json.loads(out)["prompt"][:300])
     benign = ["https://registry.npmjs.org/@babel/core", "https://host:8080/path@x", "bob@example.com", "git@github.com:org/repo.git", "https://example.com/a@b"]
     check("URLs without credentials are left alone", all(m.redact(s) == (s, 0) for s in benign), str([m.redact(s) for s in benign]))
 
