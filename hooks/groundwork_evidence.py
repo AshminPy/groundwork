@@ -61,7 +61,10 @@ Known gaps, stated rather than hidden (the label can be too high in these cases)
     piped read-only command by a short list of error phrases — both heuristics; a pass-through `tee` is trusted
     to only copy (`pytest | tee src/a.py` would overwrite a file and is not seen as a change);
   * downloads and redirections are recognised only in the spellings listed in this module (`-o`, `-O`, `--output`,
-    `>`); other ways a recognised command can write a file are not modelled;
+    `>`); other ways a recognised command can write a file are not modelled (curl `--trace`, `--stderr`,
+    `--etag-save`, `--libcurl`, `--hsts`, `--alt-svc`; wget `-a`, `--output-file`, `--save-cookies`; `uniq in out`,
+    `sed 'w f'`, `git diff --output=f`, a redirect after a test command, `aws s3api get-object … out`), and wget
+    is read with curl's short-option table;
   * which tests ran is judged from the command words, not from the runner's configuration: an unscoped pass of a
     runner clears earlier failures of that runner in the same directory even if flags or config selected fewer tests;
   * the working directory is tracked only through a `cd` inside the same command, not across commands;
@@ -116,15 +119,15 @@ _REVIEW_KIND = re.compile(r"(?<![a-z])review")  # "preview-writer" is not a revi
 _PREFIX = re.compile(r"(?:\w+=\S*\s+)*(?:python3?\s+-m\s+|uv\s+run\s+|poetry\s+run\s+|npx\s+)?")
 _REPO_CMD = re.compile(
     r"(?:cat|head|tail|less|sed\s+-n|grep|rg|ag|find|ls|tree|wc|"
-    r"git\s+(?:log|show|diff|status|blame|ls-files|rev-parse))\b")
+    r"git\s+(?:log|show|diff|status|blame|ls-files|rev-parse))(?=\s|$)")
 # A deliberately conservative list: a command not matched here is simply not counted as runtime.
 _RUNTIME_CMD = re.compile(
     r"(?:kubectl\s+(?:get|describe|logs|top|rollout\s+status)|helm\s+(?:status|list|get)|"
-    r"gcloud\s+(?!config\b|auth\b|info\b|components\b|help\b|version\b|init\b|topic\b)(?:\S+\s+)*?(?:describe|list)(?=\s|$)|"
+    r"gcloud\s+(?!config\b|auth\b|info\b|components\b|help\b|version\b|init\b|topic\b)(?:\S+\s+)*?(?:describe|list)|"
     r"aws\s+(?!configure\b|help\b)\S+\s+(?:describe|list|get)\S*|"
-    r"az\s+(?!account\b|configure\b|config\b|version\b|login\b|help\b)(?:\S+\s+)*?(?:show|list)(?=\s|$)|"
+    r"az\s+(?!account\b|configure\b|config\b|version\b|login\b|help\b)(?:\S+\s+)*?(?:show|list)|"
     r"docker\s+(?:ps|logs|inspect|stats)|systemctl\s+status|journalctl|curl|wget|"
-    r"groundwork\s+doctor)\b")
+    r"groundwork\s+doctor)(?=\s|$)")
 _PIPEFAIL = re.compile(r"set\s+-[a-z]*o\s+pipefail\b")
 _PIPEFAIL_OFF = re.compile(r"set\s+\+[a-z]*o\s+pipefail\b")
 _FILTERS = {"tail", "head", "tee", "cat", "wc"}  # pass-through filters commonly appended to a command
@@ -274,6 +277,7 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
     (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*[^'\"\n]+"), "cookie: [redacted]"),  # up to the closing quote: browser-copied headers hold several cookies
     (re.compile(r"(?i)(?:^|(?<=\s))(?:-u|--user|--proxy-user)\s+\S+"), "-u [redacted]"),
+    (re.compile(r"(?:^|(?<=\s))(?:-b|--cookie)(?:\s+|=)(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),
     (re.compile(r"(?:^|(?<=\s))-u[^\s:=]+:\S+"), "-u [redacted]"),  # -uuser:pw, glued
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
@@ -504,7 +508,17 @@ def _test_info(segment: str):
     if runner == "go test" and "-n" in tokens:
         runs = False
     cosmetic = re.compile(r"-(?:q+|v+|s|x|l)$|--(?:quiet|verbose|tb|color|durations|no-header|disable-warnings)(?:=.*)?$")
-    scope = tuple(sorted(t for t in tokens[len(runner.split()):] if not cosmetic.match(t)))
+    scope, skip = [], False
+    for t in tokens[len(runner.split()):]:
+        if skip:  # the target of a bare `>` / `>>` / `2>`
+            skip = False
+        elif re.fullmatch(r"\d*>>?|&>>?", t):
+            skip = True
+        elif re.match(r"\d*>|&>|\d*<", t) or cosmetic.match(t):
+            continue  # `2>&1`, `>/dev/null`: where output goes is not what is tested
+        else:
+            scope.append(t)
+    scope = tuple(sorted(scope))
     return runner, scope, runs
 
 
@@ -518,7 +532,7 @@ _SUMMARY = (  # a positive "tests really ran and passed" line, per runner family
 )
 
 
-_NOTHING_RAN = re.compile(r"(?i)\bnothing to be done\b|\bno tests? (?:ran|found|were run)\b|\bcollected 0 items\b")
+_NOTHING_RAN = re.compile(r"(?i)\bnothing to be done\b|(?m:^make\S*: [^\n]* is up to date)|\bno tests? (?:ran|found|were run)\b|\bcollected 0 items\b")
 _NO_OUTPUT = re.compile(r"(?is)\(\s*(?:bash\s+)?(?:completed\s+)?with\s+no\s+output\s*\)")
 
 
@@ -633,6 +647,17 @@ def _unparsed_or_findings(tail: str, verdict=None, must_fix=None):
     return "unparsed", verdict, must_fix
 
 
+def _lines_from(text: str, pos: int, limit: int) -> list:
+    """At most `limit` lines of text from pos on, without copying the rest (a 30 MB result of blank lines must not become 10 million strings)."""
+    out, n = [], len(text)
+    while pos < n and len(out) < limit:
+        j = text.find("\n", pos)
+        end = n if j < 0 else j + 1
+        out.append(text[pos:end])
+        pos = end
+    return out
+
+
 def _review_state(text: str):
     """(state, verdict, must_fix) from the LAST `REVIEW RESULT` heading block in a reviewer's result.
     state: 'clean' (Verdict approve and Must-fix exactly a bare 0), 'findings' (a parsed block that is not
@@ -642,7 +667,7 @@ def _review_state(text: str):
     if not headings:
         return "unparsed", None, None
     fields, consumed = {}, 0
-    for line in text[headings[-1].end():].splitlines(keepends=True):
+    for line in _lines_from(text, headings[-1].end(), 120):
         stripped = line.strip()
         if len(stripped) > 200:  # no field is this long: a block that starts after (or is interrupted by) such a line is not a result block
             break
@@ -660,13 +685,13 @@ def _review_state(text: str):
         fields[f[0].strip().lower()] = f[1].strip().strip("*").strip()
         consumed += len(line)
     if len(text[headings[-1].end() + consumed:].strip()) > 600:
-        return _unparsed_or_findings(text[headings[-1].end():])  # a block quoted in the middle of a longer report is not the reviewer's final result
+        return _unparsed_or_findings(text[headings[-1].end():headings[-1].end() + 2000])  # a block quoted in the middle of a longer report is not the reviewer's final result
     verdict = fields.get("verdict", "").lower().replace("_", "-").replace(" ", "-")
     verdict = {"approve": "approve", "approved": "approve", "changes-required": "changes-required"}.get(verdict)
     raw = fields.get("must-fix", fields.get("must fix", ""))
     must_fix = int(raw) if re.fullmatch(r"\d{1,6}", raw) else None
     if verdict is None or must_fix is None:
-        return _unparsed_or_findings(text[headings[-1].end():], verdict, must_fix)
+        return _unparsed_or_findings(text[headings[-1].end():headings[-1].end() + 2000], verdict, must_fix)
     return ("clean" if verdict == "approve" and must_fix == 0 else "findings"), verdict, must_fix
 
 
@@ -689,7 +714,7 @@ def _url_ref(url: str) -> str:
         return "[unparseable url]"
     if p.netloc:
         return f"{p.scheme}://{p.netloc.rsplit('@', 1)[-1]}{p.path}"
-    return _clip(url, 60)
+    return _clip(re.split(r"[?#]", str(url))[0], 60)
 
 
 class EvidenceBudgetExceeded(Exception):
@@ -725,7 +750,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
            "other_changes": 0, "stale_verification": False}
     edited = set()
     st = {"mut": (-1, -1), "pass": None, "runtime": None, "failing": {}, "reviews": [], "inspected_review": False,
-          "runtime_ever": False, "pass_ever": False}
+          "runtime_ever": False, "pass_ever": False, "runtime_failing": False}
 
     def add(kind, ref, ok=None, cap=REF_CAP):
         bucket = refs.setdefault(kind, [])
@@ -783,6 +808,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                     st["reviews"].append(((idx, 0), state))
                     if state == "unparsed":
                         add("review", f"{label} → no parseable REVIEW RESULT block in its result", False)
+                    elif verdict is None or must_fix is None:
+                        add("review", f"{label} → no parseable REVIEW RESULT block, but it reports findings", False)  # lowers the label, earns no credit
                     else:
                         st["inspected_review"] = True
                         add("review", f"{label} → {verdict}, must-fix {must_fix}", state == "clean")
@@ -808,7 +835,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                 mutate((idx, 0))  # could have changed anything; nothing is credited
                 continue
             segs, conns = parsed
-            pipefail = bool(_PIPEFAIL.match(segs[0])) and not any(_PIPEFAIL_OFF.match(sg) for sg in segs)
+            pipefail = (bool(_PIPEFAIL.match(segs[0])) and (not conns or conns[0] != "|")
+                        and not any(_PIPEFAIL_OFF.match(sg) for sg in segs))
             prev_recognised = False
             for j, segment in enumerate(segs):
                 pos = (idx, j)
@@ -853,10 +881,15 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                     if _writes_file(segment) or _fetch_writes(segment):
                         mutate(pos)  # `curl … > src/a.py`, `wget -O f`, `kubectl get … > f`: it wrote a file
                         continue
-                    if _runtime_shape_ok(segment) and not background \
-                            and _outcome(j, segs, conns, pipefail, is_error, text) is True:
-                        st["runtime"], st["runtime_ever"] = pos, True
-                        add("runtime", segment, True, cap=100)
+                    if _runtime_shape_ok(segment) and not background:
+                        ok = _outcome(j, segs, conns, pipefail, is_error, text)
+                        if ok is True:
+                            st["runtime"], st["runtime_ever"] = pos, True
+                            st["runtime_failing"] = False  # the last runtime result wins
+                            add("runtime", segment, True, cap=100)
+                        elif ok is False:
+                            st["runtime_failing"] = True  # a failed health check caps the label until a later one succeeds
+                            add("runtime", segment, False, cap=100)
                     continue
                 if _is_repo_read(segment):
                     prev_recognised = True
@@ -883,6 +916,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
     runtime_valid = st["runtime"] is not None and st["runtime"] > lm
     sig["tests_last_ok"] = False if failing else (True if pass_valid else None)
     sig["runtime_observed"] = runtime_valid
+    sig["runtime_failed"] = st["runtime_failing"]
     sig["stale_verification"] = bool((st["pass_ever"] or st["runtime_ever"]) and not (pass_valid or runtime_valid))
     fresh = [s for p, s in st["reviews"] if p > lm]
     if fresh:
@@ -891,7 +925,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
         sig["review"] = "stale"
     sig["review_findings_unconfirmed"] = bool(sig["review"] == "stale" and any(s == "findings" for _, s in st["reviews"]))
     sig["inspected_any"] = bool(sig["repo_inspected"] or sig["external_source"] or sig["tests_ran"]
-                                or st["runtime_ever"] or st["inspected_review"])
+                                or st["runtime_ever"] or st["runtime_failing"] or st["inspected_review"])
     label, reasons = _confidence(sig)
 
     flat = [r for kind in refs for r in refs[kind]]
@@ -909,6 +943,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
 def _confidence(sig: dict):
     """(label, reasons) — the rule documented in the module docstring, in one place."""
     changed = sig["edits"] + sig["other_changes"]
+    if not sig.get("inspected_any") and (sig["tests_last_ok"] is False or sig.get("runtime_failed")):
+        return "LOW", ["a recognised test or runtime check failed and was not re-run to a pass"]
     if not sig.get("inspected_any"):
         if not changed:
             return "NONE", ["nothing was inspected or run this turn"]
@@ -920,6 +956,9 @@ def _confidence(sig: dict):
     if sig["tests_last_ok"] is False:
         capped = True
         reasons.append("a recognised test run failed and was not re-run to a pass")
+    if sig.get("runtime_failed"):
+        capped = True
+        reasons.append("a recognised runtime check failed and was not re-run to success")
     if sig["review"] == "findings":
         capped = True
         reasons.append("an independent review since the last change reported MUST FIX findings")
@@ -955,9 +994,9 @@ def _confidence(sig: dict):
 
 
 # ------------------------------------------------------------------ hook-facing summary
-def telemetry_summary(entries: list) -> dict:
+def telemetry_summary(entries: list, budget_s: float | None = None) -> dict:
     """What the Stop hook may persist: the label and counts/booleans. No path, URL or command."""
-    ev = derive_evidence(entries)
+    ev = derive_evidence(entries, budget_s=budget_s)
     s = ev["signals"]
     return {"confidence": ev["confidence"],
             "signals": {"repo_inspected": s["repo_inspected"], "external_source": s["external_source"],
@@ -1064,7 +1103,8 @@ def main(argv=None) -> int:
         return _unknown(args, f"the transcript could not be analysed ({type(exc).__name__})", str(path))
     declared = ""
     try:
-        declared = parse_metadata(_last_assistant_text(entries)).get("confidence", "")
+        meta = parse_metadata(_last_assistant_text(entries))
+        declared = meta.get("confidence") or meta.get("evidence confidence") or ""
     except Exception:
         pass
     declared_clean = _clip(declared, 40)

@@ -14,3 +14,7 @@ The per-turn record SHALL carry, under `observed`, the evidence-confidence estim
 #### Scenario: A broken evidence module does not break telemetry
 - **WHEN** the evidence module raises on import
 - **THEN** the hook still exits 0 silently and writes the record without the evidence fields
+
+#### Scenario: A context compaction falls inside a turn
+- **WHEN** a context-compaction summary entry (`isCompactSummary`) appears between a human prompt and the end of the turn
+- **THEN** the turn still starts at the human prompt, so edits and failures from before the compaction count toward the estimate and the `observed` counts

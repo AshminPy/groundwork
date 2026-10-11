@@ -99,7 +99,7 @@ The system SHALL keep each source's identity (file path, URL host and path, `own
 - **THEN** the output says the declared label exceeds what was observed
 
 ### Requirement: Bounded work and a readable failure
-The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic time): when the budget is spent `derive_evidence` raises `EvidenceBudgetExceeded`, the Stop hook records no observed evidence for the turn, and `groundwork evidence` prints `UNKNOWN` with the reason. A Bash command of more than 20,000 characters or more than 50 segments SHALL NOT be parsed and SHALL NOT be credited. Parsing of a review result SHALL be linear in its length. `groundwork evidence` SHALL NOT print a traceback for an unreadable, unsearchable or over-long transcript path, a lone surrogate in a printed reference, or an output encoding that cannot show the receipt's punctuation.
+The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic time): when the budget is spent `derive_evidence` raises `EvidenceBudgetExceeded`, the Stop hook records no observed evidence for the turn, and `groundwork evidence` prints `UNKNOWN` with the reason. A Bash command of more than 20,000 characters or more than 50 segments SHALL NOT be parsed and SHALL NOT be credited. Parsing of a review result SHALL be linear in its length. Inside the Stop hook the derivation SHALL get at most 3 seconds and no more than the time left of a 7-second hook budget; when none is left no observed evidence is recorded and the existing record is still written. `groundwork evidence` SHALL NOT print a traceback for an unreadable, unsearchable or over-long transcript path, a lone surrogate in a printed reference, or an output encoding that cannot show the receipt's punctuation.
 
 #### Scenario: Hostile output shapes
 - **WHEN** a result is 30,000 blank lines after `npm test`, or a REVIEW RESULT block is followed by thousands of space-padded lines, or forty 20,000-character commands of 2,850 segments each are run
@@ -108,3 +108,11 @@ The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic
 #### Scenario: A redirect notice
 - **WHEN** a WebFetch result is a `REDIRECT DETECTED` notice
 - **THEN** it is neither an external source nor a listed reference
+
+#### Scenario: A failed runtime check
+- **WHEN** a recognised runtime check (a `curl --fail` health check, `kubectl get`) fails after an earlier success, or is the only thing the turn did
+- **THEN** the confidence is `LOW`, never `HIGH` and never `NONE`, until a later check of that kind succeeds
+
+#### Scenario: A failure seen through a pipe is cleared by the same tests run plainly
+- **WHEN** `pytest tests/a 2>&1 | tail -3` fails and `pytest tests/a` then passes
+- **THEN** the failure is cleared, because where output goes is not part of what is tested; a pass of different tests does not clear it

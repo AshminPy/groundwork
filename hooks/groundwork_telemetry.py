@@ -50,9 +50,29 @@ try:
 except Exception:
     telemetry_summary = declared_exceeds = declared_label = None  # fail-open: the evidence fields are simply omitted
 
-META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
-# Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
-META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
+# [ \t]* and not \s*: with MULTILINE, \s* spans newlines and a model answer of tens of thousands of blank lines made the search quadratic
+META_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?Harness metadata(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
+MAX_FIELD_LINE = 300  # no metadata line is this long; longer lines are not run through the field patterns at all
+_META_KEY = re.compile(r"[A-Za-z][A-Za-z ]*")
+
+
+def _meta_field(line: str):
+    """(key, value) of a `Key: value` line, tolerating a bullet or bold markers, or None. A scan, not one regex: the regex form
+    was cubic on a letter followed by thousands of spaces."""
+    s = line.strip()
+    i, n = 0, len(s)
+    if i < n and s[i] in "-*":
+        i += 1
+    while i < n and s[i] in "* \t":
+        i += 1
+    j = s.find(":", i)
+    if j < 0:
+        return None
+    key = s[i:j].rstrip(" \t*")
+    if not _META_KEY.fullmatch(key):
+        return None
+    value = s[j + 1:].lstrip(" \t*").rstrip()
+    return (key, value) if value else None
 # Free text copied from the model's block is stored only if it looks like a short label:
 # letters/digits/space/_/- and at most 32 chars. Anything else (a path, an @, a token-shaped
 # string, a sentence) is dropped — identifiers and labels only, never raw content.
@@ -61,6 +81,9 @@ TOKEN_SHAPED = re.compile(r"[a-z0-9_-]*\d[a-z0-9_-]*")  # a "word" containing a 
 PLAYBOOKS = {"RESEARCH", "EXPLAIN", "DESIGN", "PLAN", "IMPLEMENT", "TROUBLESHOOT", "VALIDATE", "AUDIT", "DEPLOY", "DOCUMENT"}
 TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step
 TAIL_CAP = 32 * 1024 * 1024      # never read more than this from the end of the transcript
+HOOK_START = time.monotonic()    # the Stop hook has a 10 s timeout (scripts/merge_settings.py)
+HOOK_BUDGET_S = 7.0              # evidence is derived only with time left under this, so it can never cost the existing record
+EVIDENCE_BUDGET_S = 3.0          # the most derive_evidence may use
 HEADLINE = re.compile(r"^\s*Groundwork\s+\S+\s*[·\-–—|]\s*([A-Za-z]+)\s*$", re.IGNORECASE)  # "Groundwork 1.3.2 · IMPLEMENT"
 # Outcome — model-declared, read from the response's own status language (output-contract.md Layer 1
 # and the playbooks' Status / Result vocabularies). Precedence inside a sentence: failed > blocked >
@@ -112,16 +135,20 @@ def parse_metadata(text: str) -> dict:
             if fields:
                 break
             continue
+        if len(line) > MAX_FIELD_LINE:
+            if fields:
+                break
+            continue
         hl = HEADLINE.match(line)  # concise form: "Groundwork <version> · <PLAYBOOK>"
         if hl:
             fields["playbook"] = hl.group(1)
             continue
-        f = META_FIELD.match(line)
+        f = _meta_field(line)
         if not f:
             if fields:
                 break
             continue
-        fields[f.group(1).strip().lower()] = f.group(2).strip().strip("*")
+        fields[f[0].strip().lower()] = f[1].strip().strip("*")
     return fields
 
 
@@ -164,8 +191,8 @@ def parse_agents(value: str):
 
 
 def is_human_prompt(e: dict) -> bool:
-    if e.get("type") != "user" or e.get("isSidechain") or e.get("isMeta"):
-        return False  # hook feedback and other synthetic entries do not start a turn
+    if e.get("type") != "user" or e.get("isSidechain") or e.get("isMeta") or e.get("isCompactSummary"):
+        return False  # hook feedback, a context-compaction summary (it can fall mid-turn) and other synthetic entries do not start a turn
     origin = e.get("origin")
     if isinstance(origin, dict) and origin.get("kind") != "human":
         return False  # task notifications and sub-agent hand-backs do not start a turn either
@@ -186,7 +213,7 @@ def current_turn(transcript_path: str) -> list:
         with open(transcript_path, "rb") as f:
             pos, buf, step = size, b"", TAIL_CHUNK
             while True:
-                take = min(step, pos)
+                take = min(step, pos, TAIL_CAP - (size - pos))  # never more than TAIL_CAP in total
                 pos -= take
                 f.seek(pos)
                 buf = f.read(take) + buf
@@ -375,9 +402,10 @@ def build_record(data: dict, text: str) -> dict:
     # The model's own stated label is recorded separately under `declared`; the comparison is a derived fact, not
     # proof of an over-claim. Additive and fail-open.
     estimate, ev_obs = None, {}
-    if telemetry_summary is not None and entries:  # an unreadable transcript is UNKNOWN: record no observed fact at all
+    time_left = HOOK_BUDGET_S - (time.monotonic() - HOOK_START)
+    if telemetry_summary is not None and entries:  # an unreadable (or too slow to read) transcript is UNKNOWN: record no observed fact at all
         try:
-            ev = telemetry_summary(entries)
+            ev = telemetry_summary(entries, budget_s=min(EVIDENCE_BUDGET_S, time_left))
             estimate = ev["confidence"]
             ev_obs = {"evidence_confidence": estimate, "evidence_signals": ev["signals"]}
         except Exception:

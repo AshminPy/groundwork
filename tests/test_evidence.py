@@ -834,6 +834,165 @@ def test_round4_review_fixes() -> None:
     finish()
 
 
+def test_round5_review_fixes() -> None:
+    print("groundwork_evidence.py — round-4 security review: the hook's whole time, failed runtime checks, -b cookies, linear metadata parsing, command words")
+    import time
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r5", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        tpath = tmp / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in turn(read(), bash("pytest -q"))) + "\n")
+        payload = {"transcript_path": str(tpath), "cwd": str(tmp), "session_id": "s"}
+        text = "Done.\n\nHarness metadata\nExecution: single agent\nConfidence: HIGH\n"
+        rec = tel.build_record(payload, text)
+        check("baseline: with time left, the record carries the evidence estimate", "evidence_confidence" in rec["observed"], json.dumps(rec["observed"])[:200])
+        tel.HOOK_START = time.monotonic() - 100  # the hook has already used all of its time (a huge transcript was read)
+        rec = tel.build_record(payload, text)
+        check("with the hook's time spent reading the transcript, evidence is skipped and the existing record is still written",
+              "evidence_confidence" not in rec["observed"] and rec["declared"]["block_present"] is True and rec["observed"]["tools"], json.dumps(rec["observed"])[:200])
+        tel.HOOK_START = time.monotonic() - (tel.HOOK_BUDGET_S - 1.0)
+        seen = {}
+        real_summary = tel.telemetry_summary
+        tel.telemetry_summary = lambda entries, budget_s=None: seen.setdefault("budget", budget_s) and real_summary(entries, budget_s=budget_s)
+        tel.build_record(payload, text)
+        tel.telemetry_summary = real_summary
+        check("the derivation budget shrinks with the time the hook has already used (about 1 s left here, never the full 3 s)",
+              seen.get("budget") is not None and 0.5 <= seen["budget"] <= 1.1, str(seen))
+
+        # the tail read is capped at TAIL_CAP in total, not twice that
+        big = tmp / "big.jsonl"
+        pair = [json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "ls"}}]}})
+                + "\n" + json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": False}]}}) + "\n"
+                for i in range(1)]
+        with open(big, "w") as fh:
+            fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n")
+            for i in range(30000):
+                fh.write(pair[0])
+        tel2 = importlib.util.module_from_spec(tspec)
+        tspec.loader.exec_module(tel2)
+        tel2.TAIL_CAP, tel2.TAIL_CHUNK = 1_000_000, 64 * 1024
+        counted = [0]
+
+        class CountingFile:
+            def __init__(self, f):
+                self.f = f
+
+            def seek(self, *a):
+                return self.f.seek(*a)
+
+            def read(self, n=-1):
+                data = self.f.read(n)
+                counted[0] += len(data)
+                return data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return self.f.__exit__(*a)
+
+        tel2.open = lambda p, mode="r", *a, **k: CountingFile(open(p, mode, *a, **k))
+        tel2.current_turn(str(big))
+        check("current_turn reads at most TAIL_CAP bytes in total", 0 < counted[0] <= 1_000_000, str(counted[0]))
+
+    # --- a failed runtime check is a failing check: the last runtime result wins, like tests
+    ok_curl, bad_curl = bash("curl -fsS https://svc.example/health"), bash("curl -fsS https://svc.example/health", ok=False, text="curl: (22) The requested URL returned error: 503")
+    rev = agent(REVIEW_CLEAN)
+    check("a health check that failed after an earlier success caps the label (never HIGH)",
+          label(m, read(), edit(), bash("pytest -q"), ok_curl, bad_curl, rev) == "LOW", label(m, read(), edit(), bash("pytest -q"), ok_curl, bad_curl, rev))
+    check("... until a later check succeeds", label(m, read(), edit(), bash("pytest -q"), bad_curl, ok_curl, rev) == "HIGH", label(m, read(), edit(), bash("pytest -q"), bad_curl, ok_curl, rev))
+    check("a failed health check alone is LOW, not NONE", label(m, bad_curl) == "LOW", label(m, bad_curl))
+    ev = m.derive_evidence(turn(read(), bad_curl))
+    check("the failed check is listed as a failed runtime reference", {"kind": "runtime", "ref": "curl -fsS https://svc.example/health", "ok": False} in ev["references"], json.dumps(ev["references"]))
+
+    # --- -b / --cookie in printed commands
+    blob = lambda cmd: json.dumps(m.derive_evidence(turn(bash(cmd)))["references"])
+    for cmd in ("curl -fsS -b 'session=s3cr3t-cookie-value' https://app.example.com/health", "curl -fsS --cookie sid=abc123def https://app.example.com/health",
+                'curl -fsS -b "a=1; b=zzsecret" https://app.example.com/health', "curl -fsS --cookie='sid=zzsecret' https://app.example.com/health"):
+        check(f"cookie option redacted: {cmd[:50]}", not any(s in blob(cmd) for s in ("s3cr3t-cookie-value", "abc123def", "zzsecret")), blob(cmd))
+
+    # --- the Stop hook's own metadata parsing is linear
+    for name, hostile in (("40,000 newlines", "\n" * 40000 + "x"), ("heading then letter and 5,000 spaces", "Harness metadata\na" + " " * 5000),
+                          ("heading then 5,000 spaces and no colon", "Harness metadata\n" + "a " * 5000), ("heading then a 100,000-character line", "Harness metadata\n" + "x" * 100000)):
+        t0 = time.monotonic()
+        tel.parse_metadata(hostile)
+        check(f"parse_metadata on {name} is fast", time.monotonic() - t0 < 1.0, f"{time.monotonic() - t0:.1f}s")
+    check("parse_metadata still reads the usual block", tel.parse_metadata("Done.\n\nHarness metadata\nGroundwork 2.x · IMPLEMENT\nExecution:   single agent\nConfidence:  HIGH\n")
+          == {"playbook": "IMPLEMENT", "execution": "single agent", "confidence": "HIGH"})
+
+    # --- a command word is a whole word
+    for cmd in ("tree-sitter generate", "ls-lint --fix", "find-and-replace a b", "grep-edit -i x", "cat-gen build", "git-lfs pull", "head-banger --write"):
+        check(f"a longer name starting with a read-only word is a possible change: {cmd}",
+              label(m, read(), bash("pytest -q"), bash(cmd)) == "LOW", label(m, read(), bash("pytest -q"), bash(cmd)))
+    for cmd in ("tree -L 2", "ls -la", "git log --oneline", "grep -rn foo src", "wc -l a.py"):
+        check(f"a real read-only command still is one: {cmd}", label(m, read(), bash("pytest -q"), bash(cmd)) == "MEDIUM", label(m, read(), bash("pytest -q"), bash(cmd)))
+
+    # --- review parsing is bounded and an off-layout 'findings' block earns no inspection credit
+    t0 = time.monotonic()
+    m._review_state("REVIEW RESULT\n" + " \n" * 3_000_000)
+    check("a review result of three million padded lines is scanned in a bounded number of lines", time.monotonic() - t0 < 2.0, f"{time.monotonic() - t0:.1f}s")
+    check("_lines_from returns at most the limit, whatever the text holds", len(m._lines_from("x\n" * 100_000, 0, 120)) == 120
+          and m._lines_from("a\nb", 0, 120) == ["a\n", "b"] and m._lines_from("a\nb\nc", 2, 1) == ["b\n"])
+    off = agent("REVIEW RESULT\nMust-fix: 3 items need a look")
+    check("a block that is not parseable but plainly reports findings is not an inspection (a lone one is NONE)", label(m, off) == "NONE", label(m, off))
+    check("... but it still lowers the label of a verified turn", label(m, read(), edit(), bash("pytest -q"), bash("kubectl get pods"), off) == "LOW")
+
+    # --- references carry no query or fragment even without a host
+    check("a URL without a host loses its query and fragment", m._url_ref("example.com/p?session=abc123#frag") == "example.com/p" and "abc" not in m._url_ref("file:///x?y=abc123"))
+    finish()
+
+
+def test_round6_review_fixes() -> None:
+    print("groundwork_evidence.py — round-4 correctness review: compaction summaries, redirects in a test's scope, a lone failure, pipefail in a stage, `make` up to date")
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r6", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+
+    # --- a context-compaction summary falls inside a turn and does not start a new one
+    before = turn(edit(), bash("pytest tests/a", ok=False, text="1 failed"))
+    summary = [{"type": "system", "subtype": "compact_boundary"},
+               {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "This session is being continued from a previous conversation ..."}}]
+    after = turn(("WebFetch", {"url": "https://example.com/doc"}, "page text", False))[1:]  # the human prompt of this helper turn is dropped
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in before + summary + after) + "\n")
+        entries = tel.current_turn(str(tpath))
+        check("the turn is read from the human prompt, through the compaction summary", len(entries) == len(before + summary + after), str(len(entries)))
+        check("the failure and the edit before the compaction still count (LOW, not MEDIUM)", m.derive_evidence(entries)["confidence"] == "LOW", m.derive_evidence(entries)["confidence"])
+        tpath.write_text("\n".join(json.dumps(e) for e in before + summary + after + turn(read())) + "\n")
+        check("a later real prompt still starts a new turn", len(tel.current_turn(str(tpath))) == len(turn(read())), str(len(tel.current_turn(str(tpath)))))
+    check("is_human_prompt: a compaction summary is not a prompt, a plain user entry is",
+          not tel.is_human_prompt(summary[1]) and tel.is_human_prompt({"type": "user", "message": {"role": "user", "content": "go"}}))
+
+    # --- where output goes is not what a test run tests
+    fail = bash("pytest tests/a 2>&1 | tail -3", ok=False, text="1 failed")
+    check("a failure seen through `2>&1 | tail` is cleared by the same tests run plainly",
+          m.derive_evidence(turn(read(), fail, bash("pytest tests/a")))["signals"]["tests_last_ok"] is True)
+    check("... and by the same tests run with the output sent to /dev/null",
+          m.derive_evidence(turn(read(), fail, bash("pytest tests/a > /dev/null")))["signals"]["tests_last_ok"] is True)
+    check("a different scope still does not clear it", m.derive_evidence(turn(read(), fail, bash("pytest tests/b")))["signals"]["tests_last_ok"] is False)
+
+    # --- a failure is LOW even when nothing else was inspected
+    lone = bash("pytest -q | grep -E 'passed|failed'", text="1 failed, 2 passed")
+    check("a lone visible test failure is LOW, with the failure as the reason", label(m, lone) == "LOW" and "failed" in " ".join(m.derive_evidence(turn(lone))["reasons"]), label(m, lone))
+    check("a lone background test run is still NONE", label(m, ("Bash", {"command": "pytest -q", "run_in_background": True}, "started", False)) == "NONE")
+
+    # --- `set -o pipefail | cmd`: the set runs in a pipeline stage and applies to nothing
+    piped = ("Bash", {"command": "set -o pipefail | kubectl get pods | tail -2"}, "Error from server (Forbidden)", False)
+    check("pipefail set inside a pipeline earns no runtime credit for the pipeline", m.derive_evidence(turn(read(), piped))["signals"]["runtime_observed"] is False)
+    chained = ("Bash", {"command": "set -o pipefail; kubectl get pods | tail -2"}, "web-1 Running", False)
+    check("pipefail set before the pipeline still applies", m.derive_evidence(turn(read(), chained))["signals"]["runtime_observed"] is True)
+
+    # --- make: 'test' is up to date. ran nothing
+    check("`make test` that only says the target is up to date is not a passing test run",
+          m.derive_evidence(turn(read(), edit(), bash("make test", text="make: 'test' is up to date.")))["signals"]["tests_last_ok"] is not True)
+    finish()
+
+
 def test_cli() -> None:
     print("groundwork_evidence.py — `groundwork evidence` prints the receipt, flags an over-claim, and says UNKNOWN when it cannot read")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1001,7 +1160,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_round3_regressions, test_round4_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()
