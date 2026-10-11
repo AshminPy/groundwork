@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Autoship recipe (no new code)**: [docs/AUTOSHIP.md](docs/AUTOSHIP.md) documents a bounded autonomous engineering loop built only from `claude -p "/goal …"`, `--max-budget-usd`, `timeout`, an `--allowedTools` allow-list, OpenSpec acceptance scenarios and Groundwork's existing review gate and push guard, and says which bounds are hard and which are only model-judged. Observed on a disposable fixture (Claude Code 2.1.296): a run with a baseline failure, a failing first implementation, a review finding, a fix and a clean fresh review (USD 0.67); a run that stopped as BLOCKED when a test contradicted the spec, leaving the tests untouched (USD 0.31); and a run stopped by the budget cap (USD 0.109 against a 0.05 cap, so the cap can be overshot). `docs/examples/autoship/make_fixture.py` recreates the fixture. Not shown: larger tasks, other models, interactive `/goal`, or the review gate itself blocking inside a loop.
+
 ## 2.3.0 — 2026-09-30
 
 Next Release Program — a single, discoverable `groundwork` command that reaches Groundwork's
