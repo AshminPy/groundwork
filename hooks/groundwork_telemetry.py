@@ -51,7 +51,7 @@ except Exception:
     telemetry_summary = declared_exceeds = declared_label = None  # fail-open: the evidence fields are simply omitted
 
 # [ \t]* and not \s*: with MULTILINE, \s* spans newlines and a model answer of tens of thousands of blank lines made the search quadratic
-META_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?Harness metadata(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
+META_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?Harness metadata(?:\*\*)?[ \t\r]*$", re.MULTILINE | re.IGNORECASE)
 MAX_FIELD_LINE = 300  # no metadata line is this long; longer lines are not run through the field patterns at all
 _META_KEY = re.compile(r"[A-Za-z][A-Za-z ]*")
 
@@ -84,6 +84,7 @@ TAIL_CAP = 32 * 1024 * 1024      # never read more than this from the end of the
 HOOK_START = time.monotonic()    # the Stop hook has a 10 s timeout (scripts/merge_settings.py)
 HOOK_BUDGET_S = 7.0              # evidence is derived only with time left under this, so it can never cost the existing record
 EVIDENCE_BUDGET_S = 3.0          # the most derive_evidence may use
+MIN_EVIDENCE_S = 0.5             # with less than this left, evidence is not even started (its set-up pass over the turn is not free)
 HEADLINE = re.compile(r"^\s*Groundwork\s+\S+\s*[·\-–—|]\s*([A-Za-z]+)\s*$", re.IGNORECASE)  # "Groundwork 1.3.2 · IMPLEMENT"
 # Outcome — model-declared, read from the response's own status language (output-contract.md Layer 1
 # and the playbooks' Status / Result vocabularies). Precedence inside a sentence: failed > blocked >
@@ -201,6 +202,37 @@ def is_human_prompt(e: dict) -> bool:
         isinstance(b, dict) and b.get("type") == "tool_result" for b in content))
 
 
+# The summariser request that Claude Code sends as a user entry when it compacts the context (read from real transcripts of 2.1.285 to 2.1.296,
+# entrypoint remote_mobile; UNVERIFIED for other versions and entrypoints). It is not what the person typed and the turn goes on after the compaction.
+_COMPACTION_PROMPT = "Below is a conversation log from a Claude Code coding session"
+
+
+def _entry_text(e: dict) -> str:
+    content = (e.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(b.get("text", "")) for b in content[:3] if isinstance(b, dict))
+    return ""
+
+
+def is_compaction_request(entries: list, i: int) -> bool:
+    """Is entries[i] the summariser request of a context compaction? By its opening words, or because it is SDK-originated and a compaction
+    boundary follows within a few entries before the model uses any tool (an `sdk` entry alone is not enough: `claude -p` prompts are `sdk` too)."""
+    e = entries[i]
+    if _entry_text(e).lstrip().startswith(_COMPACTION_PROMPT):
+        return True
+    if e.get("turnOrigin") != "sdk":
+        return False
+    for later in entries[i + 1:i + 21]:
+        if later.get("subtype") == "compact_boundary" or later.get("isCompactSummary"):
+            return True
+        content = (later.get("message") or {}).get("content")
+        if later.get("type") == "assistant" and isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
+            return False
+    return False
+
+
 def current_turn(transcript_path: str) -> list:
     """Entries after the last human prompt (a 'user' entry that carries no tool_result).
 
@@ -234,7 +266,7 @@ def current_turn(transcript_path: str) -> list:
                         entries.append(e)
                 start = None
                 for i in range(len(entries) - 1, -1, -1):
-                    if is_human_prompt(entries[i]):
+                    if is_human_prompt(entries[i]) and not is_compaction_request(entries, i):
                         start = i
                         break
                 if start is not None:
@@ -403,7 +435,7 @@ def build_record(data: dict, text: str) -> dict:
     # proof of an over-claim. Additive and fail-open.
     estimate, ev_obs = None, {}
     time_left = HOOK_BUDGET_S - (time.monotonic() - HOOK_START)
-    if telemetry_summary is not None and entries:  # an unreadable (or too slow to read) transcript is UNKNOWN: record no observed fact at all
+    if telemetry_summary is not None and entries and time_left >= MIN_EVIDENCE_S:  # an unreadable (or too slow to read) transcript is UNKNOWN: record no observed fact at all
         try:
             ev = telemetry_summary(entries, budget_s=min(EVIDENCE_BUDGET_S, time_left))
             estimate = ev["confidence"]

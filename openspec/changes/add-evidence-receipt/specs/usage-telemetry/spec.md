@@ -18,3 +18,7 @@ The per-turn record SHALL carry, under `observed`, the evidence-confidence estim
 #### Scenario: A context compaction falls inside a turn
 - **WHEN** a context-compaction summary entry (`isCompactSummary`) appears between a human prompt and the end of the turn
 - **THEN** the turn still starts at the human prompt, so edits and failures from before the compaction count toward the estimate and the `observed` counts
+
+#### Scenario: The summariser request of a compaction
+- **WHEN** a compaction inserts its summariser request as a user entry (`sdk`-originated, opening "Below is a conversation log from a Claude Code coding session") before the boundary and the summary
+- **THEN** it does not start a turn, while a `claude -p` prompt (also `sdk`) and a typed prompt still do

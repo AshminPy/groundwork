@@ -111,8 +111,20 @@ The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic
 
 #### Scenario: A failed runtime check
 - **WHEN** a recognised runtime check (a `curl --fail` health check, `kubectl get`) fails after an earlier success, or is the only thing the turn did
-- **THEN** the confidence is `LOW`, never `HIGH` and never `NONE`, until a later check of that kind succeeds
+- **THEN** the confidence is `LOW`, never `HIGH` and never `NONE`, until that same check (same words and target) succeeds; a different successful check, such as `kubectl get pods` after a failed health `curl`, does not clear it
 
 #### Scenario: A failure seen through a pipe is cleared by the same tests run plainly
 - **WHEN** `pytest tests/a 2>&1 | tail -3` fails and `pytest tests/a` then passes
 - **THEN** the failure is cleared, because where output goes is not part of what is tested; a pass of different tests does not clear it
+
+#### Scenario: A refused call is not evidence
+- **WHEN** a Bash call returns an error that is a hook refusal, `Permission to use Bash with command … has been denied`, a denial by the built-in safety check or the auto-mode classifier, or the person's rejection
+- **THEN** the call is ignored: it is not a failed check, a failed test, a change or a tool error
+
+#### Scenario: Words in a runtime command's output
+- **WHEN** `kubectl logs deploy/api | tail -20` exits 0 and its output contains `health check FAILED` or `3 errors`
+- **THEN** it is not a failed runtime check, and a piped runtime command is credited only when its exit status speaks for it (`&&` chain, or `set -o pipefail`)
+
+#### Scenario: Many test segments over a large result
+- **WHEN** one Bash call chains 50 `pytest` segments and its result is 8 MB
+- **THEN** the turn is analysed within the work budget (or reported UNKNOWN), because each text-wide question about the result is answered by one pass

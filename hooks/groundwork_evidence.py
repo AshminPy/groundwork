@@ -71,6 +71,8 @@ Known gaps, stated rather than hidden (the label can be too high in these cases)
   * only the last 32 MB of a transcript are read: in a turn longer than that, earlier failures and changes are not
     seen (the label can be too high); a turn of 40 MB measured 1.0 s, a 104 MB transcript with a short turn 0.12 s;
   * calls are ordered by when they were issued; parallel calls in one message have no defined effect order;
+  * a failing `&&` chain marks every segment before the last as failed (conservative); piped `go test | tail` and mocha
+    failures are not seen; the receipt command spelled by path and `SendMessage` count as changes;
   * only the first 4,000 characters of a command or reference text are considered, so a secret that straddles that
     cut can leave a short prefix visible in a printed reference;
   * the transcript is taken from the current directory's project, or the nearest enclosing directory that has one.
@@ -107,7 +109,7 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 READ_VERB = re.compile(r"(?:^|[_-])(?:get|list|read|search|query|describe|fetch|show|view)(?:[_-]|$)")
 _BENIGN_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "TaskOutput", "AskUserQuestion", "ToolSearch",
                  "EnterPlanMode", "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool", "BashOutput",
-                 "KillShell", "KillBash", "Monitor", "ScheduleWakeup", "ListAgents"}  # cannot change the working tree; any other unknown tool is treated as a change
+                 "KillShell", "KillBash", "Monitor", "ScheduleWakeup", "ListAgents", "ReadNotifications"}  # cannot change the working tree; any other unknown tool is treated as a change
 _MUTATING_WORDS = {
     "create", "update", "delete", "remove", "write", "send", "post", "put", "patch", "push", "merge", "execute",
     "run", "trigger", "upsert", "insert", "set", "add", "archive", "close", "reply", "forward", "share", "move",
@@ -275,9 +277,10 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?<![\w.%+-])[\w.%+-]+:[^\s/@:]+@(?=[\w-]+\.)"), "[redacted]@"),
     (re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*\S+(?:\s+\S+)?"), "authorization: [redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
-    (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*[^'\"\n]+"), "cookie: [redacted]"),  # up to the closing quote: browser-copied headers hold several cookies
+    (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*(?:[^'\"\n]|(?<==)\"[^\"\n]*\")+"), "cookie: [redacted]"),  # up to the closing quote (a quoted value after "=" is inside it): browser-copied headers hold several cookies
     (re.compile(r"(?i)(?:^|(?<=\s))(?:-u|--user|--proxy-user)\s+\S+"), "-u [redacted]"),
-    (re.compile(r"(?:^|(?<=\s))(?:-b|--cookie)(?:\s+|=)(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]*b(?:\s+|=)|-[A-Za-z]*b(?=[^\s=]*=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
+    (re.compile(r"(?:^|(?<=\s))(--cert[= ]\s*[^\s:]*:)\S+"), r"\1[redacted]"),  # --cert file:password
     (re.compile(r"(?:^|(?<=\s))-u[^\s:=]+:\S+"), "-u [redacted]"),  # -uuser:pw, glued
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
@@ -422,12 +425,39 @@ def _split(command: str):
     return segs, [p[1] for p in pieces[:-1]]
 
 
-def _runner_verdict(text: str):
-    """True/False from a test runner's own summary line, else None. Used only when a recognised test
-    command's output went through a pass-through filter such as `| tail`, whose exit status says nothing."""
-    if _FAIL_COUNT.search(text) or "FAILED" in text:
-        return False
-    return True if _PASS_COUNT.search(text) else None
+class _Facts:
+    """Text-wide questions about one tool result, each answered by at most one pass over it. A 30 MB result under 50 test segments was
+    otherwise rescanned about 250 times (73 s against a 3 s budget)."""
+
+    def __init__(self, text: str):
+        self.text, self._c = text, {}
+
+    def _get(self, key, fn):
+        if key not in self._c:
+            self._c[key] = fn(self.text)
+        return self._c[key]
+
+    def fail_count(self) -> bool:
+        return self._get("fc", lambda t: _FAIL_COUNT.search(t) is not None)
+
+    def failed_word(self) -> bool:
+        return self._get("fw", lambda t: "FAILED" in t)
+
+    def pass_count(self) -> bool:
+        return self._get("pc", lambda t: _PASS_COUNT.search(t) is not None)
+
+    def skipped(self) -> bool:
+        return self._get("sk", lambda t: re.search(r"\bskipped\b", t) is not None)
+
+    def summary(self, runner: str) -> bool:
+        return self._get(("sum", runner), lambda t: _positive_summary(runner, t))
+
+    def verdict(self):
+        """True/False from a test runner's own summary line, else None. Used only when a recognised test
+        command's output went through a pass-through filter such as `| tail`, whose exit status says nothing."""
+        if self.fail_count() or self.failed_word():
+            return False
+        return True if self.pass_count() else None
 
 
 def _first_word(segment: str) -> str:
@@ -446,17 +476,18 @@ def _pure_filter(segment: str) -> bool:
     return all(w.startswith("-") or w.isdigit() for w in words[1:])
 
 
-def _outcome(i: int, segs: list, conns: list, pipefail: bool, is_error: bool, text: str):
-    """Did segment i succeed? True/False when the command's exit status (or the runner's own summary)
-    speaks for it, None when it cannot be attributed."""
+def _outcome(i: int, segs: list, conns: list, pipefail: bool, is_error: bool, facts: "_Facts", tests: bool = True):
+    """Did segment i succeed? True/False when the command's exit status (or, for a test run only, the runner's own summary)
+    speaks for it, None when it cannot be attributed. A runtime command's output is never read for test-runner words:
+    application logs say "FAILED" and "3 errors" while the command succeeded."""
     if "||" in conns:
         return None
     after = conns[i:]
     if all(c == "&&" or (pipefail and c == "|") for c in after):
         return not is_error
-    if (not is_error and all(c == "|" for c in after) and all(_pure_filter(segs[j]) for j in range(i + 1, len(segs)))
+    if (tests and not is_error and all(c == "|" for c in after) and all(_pure_filter(segs[j]) for j in range(i + 1, len(segs)))
             and all(_first_word(segs[j]) in _SILENT for j in range(i))):
-        return _runner_verdict(text)
+        return facts.verdict()
     return None
 
 
@@ -472,6 +503,13 @@ def _read_ok(i: int, segs: list, conns: list, pipefail: bool, is_error: bool, te
             and all(_first_word(segs[j]) in _SILENT for j in range(i))):
         return bool(text.strip()) and not _READ_ERROR.search(text)
     return False
+
+
+def _runtime_key(segment: str) -> tuple:
+    """Which check a runtime command is: its words without flags and without where output goes, so `curl -f URL 2>&1` and `curl -f URL` are one
+    check and `kubectl get pods` after a failed `curl -f URL` is another."""
+    words = segment[_PREFIX.match(segment).end():].split()
+    return tuple(w for w in words if not w.startswith("-") and not re.match(r"\d*[<>]|&>", w))
 
 
 def _starts(pattern, segment: str) -> bool:
@@ -592,6 +630,8 @@ def _benign(segment: str) -> bool:
     if not words:
         return True  # only a variable assignment
     w = words[0]
+    if len(words) == 1 and re.fullmatch(r"\w+=\S*", w):
+        return not _RISKY_ENV.search(w)  # `S=/tmp/x` on its own: a shell variable (PATH= and its kind are still a possible change)
     if w == "groundwork":
         return words[1:2] in (["evidence"], ["version"], ["copilot"])  # the receipt command must not lower its own estimate
     if w == "git":
@@ -631,9 +671,14 @@ def _tool_words(tool: str) -> set:
     return {w.lower() for w in re.split(r"[_\-\s]+|(?<=[a-z])(?=[A-Z])", tool) if w}
 
 
+_REFUSED = re.compile(r"PreToolUse:\S+ hook error|Permission (?:to use \S+ with|for this (?:command|action) was denied)|The user doesn't want to proceed with this tool use")
+
+
 def _blocked_by_policy(is_error: bool, text: str) -> bool:
-    """A PreToolUse hook (e.g. a fact-forcing gate) refused the call: it never ran, so it is not evidence."""
-    return is_error and re.match(r"PreToolUse:\S+ hook error", text) is not None
+    """A PreToolUse hook (e.g. a fact-forcing gate), the permission system or the person refused the call: it never ran, so it is not evidence.
+    The wordings are read from real transcripts (hook banner, "Permission to use Bash with command …", "Permission for this command was denied …",
+    the auto-mode classifier); the user-rejection sentence is from the documented tool-result text and not seen in the local transcripts (UNVERIFIED)."""
+    return is_error and _REFUSED.match(text) is not None
 
 
 _PLAIN_FINDINGS = re.compile(r"(?im)^\W*(?:must[- ]?fix\W{0,4}[1-9]\d{0,5}\b|verdict\W{0,4}changes[- _]required\b)")
@@ -730,7 +775,9 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
     uses = {}      # tool_use_id -> (name, input)
     order = []     # tool_use_ids in call order
     results = {}   # tool_use_id -> (is_error, text)
-    for e in entries:
+    for n, e in enumerate(entries):
+        if n % 2048 == 0 and time.monotonic() > deadline:
+            raise EvidenceBudgetExceeded(f"more than {budget_s:g} s of work")
         content = (e.get("message") or {}).get("content")
         if not isinstance(content, list):
             continue
@@ -750,7 +797,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
            "other_changes": 0, "stale_verification": False}
     edited = set()
     st = {"mut": (-1, -1), "pass": None, "runtime": None, "failing": {}, "reviews": [], "inspected_review": False,
-          "runtime_ever": False, "pass_ever": False, "runtime_failing": False}
+          "runtime_ever": False, "pass_ever": False, "runtime_failing": set()}
 
     def add(kind, ref, ok=None, cap=REF_CAP):
         bucket = refs.setdefault(kind, [])
@@ -838,7 +885,10 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
             pipefail = (bool(_PIPEFAIL.match(segs[0])) and (not conns or conns[0] != "|")
                         and not any(_PIPEFAIL_OFF.match(sg) for sg in segs))
             prev_recognised = False
+            facts = _Facts(text)
             for j, segment in enumerate(segs):
+                if time.monotonic() > deadline:
+                    raise EvidenceBudgetExceeded(f"more than {budget_s:g} s of work")
                 pos = (idx, j)
                 follows_recognised = prev_recognised and j > 0 and conns[j - 1] == "|"
                 prev_recognised = False
@@ -851,14 +901,14 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                     runner, scope, runs = tinfo
                     if not runs or background:
                         continue  # lists/help/version/dry-run, or not finished: neither evidence nor a change
-                    ok = _outcome(j, segs, conns, pipefail, is_error, text)
-                    if ok is True and (_FAIL_COUNT.search(text) or not _positive_summary(runner, text)
-                                       or (re.search(r"\bskipped\b", text) and not _PASS_COUNT.search(text))):
+                    ok = _outcome(j, segs, conns, pipefail, is_error, facts)
+                    if ok is True and (facts.fail_count() or not facts.summary(runner)
+                                       or (facts.skipped() and not facts.pass_count())):
                         ok = None  # exit 0 but nothing demonstrably ran, or the output contradicts the exit status
                     cwd = _cwd_of(segs, j)
                     if ok is None:
                         st["pass"] = None  # a test-shaped run whose result cannot be attributed withdraws an earlier pass
-                        if _FAIL_COUNT.search(text) or "FAILED" in text:
+                        if facts.fail_count() or facts.failed_word():
                             st["failing"].setdefault(runner, set()).add((cwd, scope))  # ...and a visible failure still caps the label
                         continue
                     sig["tests_ran"] += 1
@@ -882,13 +932,14 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                         mutate(pos)  # `curl … > src/a.py`, `wget -O f`, `kubectl get … > f`: it wrote a file
                         continue
                     if _runtime_shape_ok(segment) and not background:
-                        ok = _outcome(j, segs, conns, pipefail, is_error, text)
+                        ok = _outcome(j, segs, conns, pipefail, is_error, facts, tests=False)
+                        key = _runtime_key(segment)
                         if ok is True:
                             st["runtime"], st["runtime_ever"] = pos, True
-                            st["runtime_failing"] = False  # the last runtime result wins
+                            st["runtime_failing"].discard(key)  # only the same check, run again and succeeding, clears its failure
                             add("runtime", segment, True, cap=100)
                         elif ok is False:
-                            st["runtime_failing"] = True  # a failed health check caps the label until a later one succeeds
+                            st["runtime_failing"].add(key)  # a failed check caps the label until that check succeeds
                             add("runtime", segment, False, cap=100)
                     continue
                 if _is_repo_read(segment):
@@ -916,7 +967,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
     runtime_valid = st["runtime"] is not None and st["runtime"] > lm
     sig["tests_last_ok"] = False if failing else (True if pass_valid else None)
     sig["runtime_observed"] = runtime_valid
-    sig["runtime_failed"] = st["runtime_failing"]
+    sig["runtime_failed"] = bool(st["runtime_failing"])
     sig["stale_verification"] = bool((st["pass_ever"] or st["runtime_ever"]) and not (pass_valid or runtime_valid))
     fresh = [s for p, s in st["reviews"] if p > lm]
     if fresh:
@@ -925,7 +976,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
         sig["review"] = "stale"
     sig["review_findings_unconfirmed"] = bool(sig["review"] == "stale" and any(s == "findings" for _, s in st["reviews"]))
     sig["inspected_any"] = bool(sig["repo_inspected"] or sig["external_source"] or sig["tests_ran"]
-                                or st["runtime_ever"] or st["runtime_failing"] or st["inspected_review"])
+                                or st["runtime_ever"] or bool(st["runtime_failing"]) or st["inspected_review"])
     label, reasons = _confidence(sig)
 
     flat = [r for kind in refs for r in refs[kind]]
@@ -958,7 +1009,7 @@ def _confidence(sig: dict):
         reasons.append("a recognised test run failed and was not re-run to a pass")
     if sig.get("runtime_failed"):
         capped = True
-        reasons.append("a recognised runtime check failed and was not re-run to success")
+        reasons.append("a recognised runtime check failed and that same check was not re-run to success")
     if sig["review"] == "findings":
         capped = True
         reasons.append("an independent review since the last change reported MUST FIX findings")

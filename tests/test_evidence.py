@@ -993,6 +993,157 @@ def test_round6_review_fixes() -> None:
     finish()
 
 
+def test_round7_review_fixes() -> None:
+    print("groundwork_evidence.py — round-5 reviews: compaction requests, refused calls, runtime outcome from the exit status, keyed runtime failures, per-call work")
+    import time
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r7", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+
+    # --- the summariser request of a compaction is a user entry too, and the turn goes on after it (the real shape, Claude Code 2.1.285 to 2.1.296)
+    before = turn(edit(), bash("pytest tests/a", ok=False, text="1 failed"))
+    request = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk",
+               "message": {"role": "user", "content": "Below is a conversation log from a Claude Code coding session. Create a summary to help the next session ..."}}
+    reply = {"type": "assistant", "message": {"content": [{"type": "text", "text": "<summary>…</summary>"}]}}
+    boundary = [{"type": "system", "subtype": "stop_hook_summary"}, {"type": "system", "subtype": "compact_boundary"},
+                {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "This session is being continued ..."}}]
+    after = turn(("WebFetch", {"url": "https://example.com/doc"}, "page text", False))[1:]
+    whole = before + [request, reply] + boundary + after
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in whole) + "\n")
+        got = tel.current_turn(str(tpath))
+        check("the turn starts at what the person typed, through the summariser request and the compaction", len(got) == len(whole), f"{len(got)} of {len(whole)}")
+        check("... so the failing test and the edit before the compaction still count (LOW)", m.derive_evidence(got)["confidence"] == "LOW", m.derive_evidence(got)["confidence"])
+        # the request is recognised by a compaction boundary that follows it even when its words differ, and by its words when no boundary follows
+        odd = dict(request, message={"role": "user", "content": "Summarise this conversation for the next session."})
+        entries = before + [odd, reply] + boundary + after
+        check("an SDK-originated request followed by a compaction boundary before any tool use is not a turn start",
+              tel.is_compaction_request(entries, len(before)) is True and tel.is_compaction_request(whole, len(before)) is True)
+        check("... and one whose words are the summariser's is not, even when no compaction follows (an aborted compaction)",
+              tel.is_compaction_request(before + [request, reply] + after, len(before)) is True)
+        headless = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "message": {"role": "user", "content": "run the tests and report"}}
+        run = [headless] + turn(bash("pytest -q"))[1:]
+        check("a `claude -p` prompt is SDK-originated too and still starts a turn", tel.is_compaction_request(run, 0) is False)
+        tpath.write_text("\n".join(json.dumps(e) for e in run) + "\n")
+        check("... so current_turn begins at it", len(tel.current_turn(str(tpath))) == len(run))
+        check("... even when a compaction follows later in the run (a tool use ends the look-ahead)", tel.is_compaction_request(run + [request, reply] + boundary, 0) is False)
+        typed = {"type": "user", "message": {"role": "user", "content": "go"}}
+        check("a typed prompt followed at once by a compaction boundary is still a prompt (only SDK-originated entries are looked ahead from)",
+              tel.is_compaction_request([typed] + boundary, 0) is False)
+
+    # --- a call the permission system or the person refused never ran
+    good = [read(), edit(), bash("pytest -q"), bash("kubectl get pods -n web"), agent(REVIEW_CLEAN)]
+    base = m.derive_evidence(turn(*good))
+    denied = ("Bash", {"command": "kubectl get pods -n prod"}, "Permission to use Bash with command kubectl get pods -n prod has been denied.", True)
+    classifier = ("Bash", {"command": "pytest -q tests/slow"}, "Permission for this action was denied by the Claude Code auto mode classifier. Reason: x", True)
+    safety = ("Bash", {"command": "rm -rf build"}, "Permission for this command was denied by a built-in Claude Code safety check, not by the user.", True)
+    rejected = ("Bash", {"command": "kubectl get pods -n prod"}, "The user doesn't want to proceed with this tool use. The tool use was rejected.", True)
+    check("baseline: tests, a runtime check and a clean review give HIGH", base["confidence"] == "HIGH", base["confidence"])
+    for name, call in (("permission denied", denied), ("auto-mode classifier", classifier), ("built-in safety check", safety), ("user rejected", rejected)):
+        ev = m.derive_evidence(turn(*good, call))
+        check(f"a refused call changes nothing: {name}", ev["confidence"] == "HIGH" and ev["signals"]["tool_errors"] == base["signals"]["tool_errors"]
+              and not any(r.get("ok") is False for r in ev["references"]), f"{ev['confidence']} {ev['signals']['tool_errors']}")
+    genuine = ("Bash", {"command": "kubectl get pods -n prod"}, "Error from server (Forbidden): pods is forbidden", True)
+    check("a command that really ran and failed still counts", m.derive_evidence(turn(*good, genuine))["confidence"] == "LOW")
+
+    # --- a runtime command's own words are not test-runner words: its outcome is its exit status
+    logs = ("Bash", {"command": "kubectl logs deploy/api | tail -20"}, "health check FAILED, retrying\n3 errors in queue\nready", False)
+    ev = m.derive_evidence(turn(read(), edit(), bash("pytest -q"), logs, agent(REVIEW_CLEAN)))
+    check("application logs that say FAILED / 3 errors are not a failed runtime check", ev["signals"]["runtime_failed"] is False and ev["confidence"] != "LOW", ev["confidence"] + str(ev["reasons"]))
+    docs = ("Bash", {"command": "curl -fsSL https://docs.example/p | head -50"}, "see 3 errors and 12 passed below", False)
+    ev = m.derive_evidence(turn(read(), docs))
+    check("a piped fetch is neither failed nor credited from the words in its body", ev["signals"]["runtime_failed"] is False and ev["signals"]["runtime_observed"] is False)
+    piped = ("Bash", {"command": "set -o pipefail; kubectl get pods | tail -5"}, "web-1 Running", False)
+    check("a runtime command whose exit status speaks for it (pipefail) is credited", m.derive_evidence(turn(read(), piped))["signals"]["runtime_observed"] is True)
+
+    # --- a failed runtime check is cleared only by that same check succeeding
+    bad_curl = bash("curl -fsS https://prod.example.com/health", ok=False, text="curl: (22) The requested URL returned error: 503")
+    ok_curl = bash("curl -fsS https://prod.example.com/health")
+    other = bash("kubectl get pods")
+    seq = [read(), edit(), bash("pytest -q"), bad_curl, other, agent(REVIEW_CLEAN)]
+    check("a different, successful runtime command does not clear a failed health check (LOW, not HIGH)", label(m, *seq) == "LOW", label(m, *seq))
+    docs_ok = bash("curl -fsS https://docs.example.com/")
+    check("a successful check of another URL does not clear it either", label(m, read(), edit(), bash("pytest -q"), bad_curl, docs_ok, agent(REVIEW_CLEAN)) == "LOW")
+    check("the same health check succeeding later does", label(m, read(), edit(), bash("pytest -q"), bad_curl, other, ok_curl, agent(REVIEW_CLEAN)) == "HIGH")
+    check("... also with flags or a redirect that differ", label(m, read(), edit(), bash("pytest -q"), bad_curl, other, bash("curl -f -sS https://prod.example.com/health 2>&1"), agent(REVIEW_CLEAN)) == "HIGH")
+
+    # --- bounded per-call work: one Bash call of many test segments over a large result
+    big = "x" * 79 + "\n"
+    cmd = " && ".join(["pytest -q"] * 50)
+    t0 = time.monotonic()
+    ev = m.derive_evidence(turn(("Bash", {"command": cmd}, big * 100_000 + "5 passed in 1s\n", False)))  # no EvidenceBudgetExceeded: each pass over the result is made once
+    check("50 test segments over an 8 MB result are analysed within the budget, not abandoned (it took over 25 s)",
+          time.monotonic() - t0 < 3.0 and ev["confidence"] in ("NONE", "LOW", "MEDIUM"), f"{time.monotonic() - t0:.1f}s")
+    t0 = time.monotonic()
+    try:
+        m.derive_evidence(turn(*[("Read", {"file_path": f"/r/{i}"}, "x", False) for i in range(3)]), budget_s=-1.0)
+        raised = False
+    except m.EvidenceBudgetExceeded:
+        raised = True
+    check("a spent budget stops derivation at once, before any pass over the entries", raised and time.monotonic() - t0 < 0.5)
+    try:
+        m.derive_evidence([{"type": "user", "message": {"content": "hi"}}] * 5, budget_s=-1.0)
+        pre = False
+    except m.EvidenceBudgetExceeded:
+        pre = True
+    check("the pass that pairs tool calls with results is under the budget too", pre)
+    import types
+    clock = types.SimpleNamespace(now=0.0)
+    real_time, real_init = m.time, m._Facts.__init__
+
+    def jumping_init(self, text):
+        real_init(self, text)
+        clock.now = 100.0  # the clock jumps once a Bash result is being analysed
+
+    m.time, m._Facts.__init__ = types.SimpleNamespace(monotonic=lambda: clock.now), jumping_init
+    try:
+        m.derive_evidence(turn(bash("pytest -q && pytest -q")), budget_s=3.0)
+        in_loop = False
+    except m.EvidenceBudgetExceeded:
+        in_loop = True
+    finally:
+        m.time, m._Facts.__init__ = real_time, real_init
+    check("the deadline is also checked between the segments of one command", in_loop)
+    real_safe = m._safe
+
+    def jumping_safe(*a, **k):
+        clock.now = 100.0  # the clock jumps while the first tool call is being recorded
+        return real_safe(*a, **k)
+
+    clock.now = 0.0
+    m.time, m._safe = types.SimpleNamespace(monotonic=lambda: clock.now), jumping_safe
+    try:
+        m.derive_evidence(turn(read(), read(), read()), budget_s=3.0)
+        per_call = False
+    except m.EvidenceBudgetExceeded:
+        per_call = True
+    finally:
+        m.time, m._safe = real_time, real_safe
+    check("the deadline is checked before every tool call", per_call)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in turn(read(), bash("pytest -q"))) + "\n")
+        calls = []
+        real = tel.telemetry_summary
+        tel.telemetry_summary = lambda entries, budget_s=None: calls.append(budget_s) or real(entries, budget_s=budget_s)
+        tel.HOOK_START = time.monotonic() - 100
+        rec = tel.build_record({"transcript_path": str(tpath), "cwd": tmpdir, "session_id": "s"}, "Done.\n\nHarness metadata\nExecution: single agent\n")
+        check("the hook does not even start deriving evidence when its time is spent", calls == [] and "evidence_confidence" not in rec["observed"], str(calls))
+
+    # --- smaller fixes from the same reviews
+    check("the metadata block is read with CRLF line ends", tel.parse_metadata("Done.\r\n\r\nHarness metadata\r\nExecution: single agent\r\nConfidence: HIGH\r\n").get("confidence") == "HIGH")
+    check("a bare variable assignment is not a change, PATH= still is",
+          label(m, read(), edit(), bash("pytest -q"), bash("S=/tmp/x && ls $S")) == "MEDIUM" and label(m, read(), edit(), bash("pytest -q"), bash("PATH=/x")) == "LOW")
+    check("ReadNotifications cannot change the tree", label(m, read(), edit(), bash("pytest -q"), ("ReadNotifications", {}, "none", False)) == "MEDIUM")
+    blob = lambda cmd: json.dumps(m.derive_evidence(turn(bash(cmd)))["references"])
+    for cmd in ("curl -fsS -bsession=ZZR7GLUED https://app.example.com/health", "curl -fsSb 'session=ZZR7CLUSTER' https://app.example.com/health",
+                "curl -fsS --cert client.pem:ZZR7CERTPW https://app.example.com/health", "curl -fsS -H 'Cookie: session=\"ZZR7INNER\"; x=1' https://app.example.com/health"):
+        check(f"redacted in a printed reference: {cmd[:48]}", "ZZR7" not in blob(cmd), blob(cmd))
+    finish()
+
+
 def test_cli() -> None:
     print("groundwork_evidence.py — `groundwork evidence` prints the receipt, flags an over-claim, and says UNKNOWN when it cannot read")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1160,7 +1311,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_round7_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()
