@@ -1015,6 +1015,71 @@ def test_round4_review_fixes() -> None:
     finish()
 
 
+def test_round8_review_fixes() -> None:
+    print("groundwork_copilot.py — round-7 review: linear header patterns, Go %#v dumps, long bracketed lists, prefixed folded keys, -b spellings")
+    import json as json_mod
+    m = load()
+    leaks = lambda shapes: [k for k, v in shapes.items() if "ZZR8" in m.redact(v)[0]]
+
+    # --- MUST FIX 1: every header pattern is linear in runs of blanks (these took 6 to 46 seconds on 60 KB)
+    hostile = {"name: cookie then 300 blanks": "boom\nname: cookie" + " " * 300 + "\n", "name: cookie then 59,000 blanks": "name: cookie" + " " * 59000,
+               "Cookie: then 59,990 blanks": "Cookie:" + " " * 59990, "Cookie: then 59,990 tabs": "Cookie:" + "\t" * 59990,
+               "quoted key, comma, 59,990 blanks": "'Cookie'," + " " * 59990, "700 lines of name: cookie and 60 blanks": ("  - name: cookie" + " " * 60 + "\n") * 700,
+               "name: cookie then 20,000 blank lines": "name: cookie" + " \n" * 20000, "name: cookie then 25,000 commas and dashes": "name: cookie" + ",-" * 25000,
+               "cookie: repeated 8,000 times on one line": "cookie:" * 8000, "cookie:[ repeated on one line": "cookie:[" * 7000, "Authorization: [ on 3,500 lines": "Authorization: [\n" * 3500,
+               "folded values, 4,500 lines": "cookie: a=1;\n" * 4500, "-b with 59,000 backslashes": "curl -b \\\"" + "\\" * 59000}
+    slow = {}
+    for name, text in hostile.items():
+        t0 = time.monotonic()
+        m.redact(text)
+        slow[name] = time.monotonic() - t0
+    check("every header pattern finishes in under a second on 60 KB of blanks, tabs, commas, open brackets and backslashes",
+          max(slow.values()) < 1.0, str({k: round(v, 2) for k, v in slow.items() if v >= 0.3}))
+
+    # --- MUST FIX 2: Go %#v dumps ([]string{...}) are not stopped by the empty brackets
+    go = {"Go Authorization": 'got: http.Header{"Authorization":[]string{"Basic ZZR8GOBASIC9xKd2LmN=="}}', "Go Cookie": 'got: http.Header{"Cookie":[]string{"sid=ZZR8GOCOOKIE; theme=dark"}}',
+          "Go Set-Cookie": 'http.Header{"Set-Cookie":[]string{"a=1", "sid=ZZR8GOSET"}}'}
+    check("Go header dumps are redacted to the end of the line", not leaks(go), str(leaks(go)))
+
+    # --- MUST FIX 3: a bracketed list of any length is redacted through its closing bracket; an unclosed one to the end of the text
+    items = ", ".join(f"'c{i}=vvvvvvvvvvvvvvvvvvvv'" for i in range(700))
+    long_lists = {"single-line list of 20,000 characters": "{'set-cookie': ['first=ZZR8HEAD; Path=/', " + items + ", 'tail=ZZR8TAIL; Path=/']}",
+                  "Authorization list of 20,000 characters": '{"Authorization": ["' + "x" * 20000 + ' ZZR8TAIL"]}',
+                  "YAML cookie list of 300 items": "cookie:\n" + "".join(f"  - sid{i}=v\n" for i in range(299)) + "  - last=ZZR8LAST\nnext: x"}
+    check("no length cap lets the tail of a long cookie list or Authorization list through", not leaks(long_lists), str(leaks(long_lists)))
+    after = m.redact("before\nCookie: [ 'a=1',\n  'b=ZZR8UNCLOSED'\nlater lines\n")[0]
+    check("a list that is never closed is redacted to the end of the text (fail closed); what came before stays", "ZZR8" not in after and after.startswith("before\nCookie: [redacted]"), after)
+    check("empty brackets after the key do not end the redaction, and an ordinary bracket list still stops at its closing bracket",
+          m.redact("Cookie: [] ZZR8EMPTY")[0] == "Cookie: [redacted]" and m.redact("Cookie: ['a=ZZR8X'] and then more")[0] == "Cookie: [redacted] and then more")
+
+    # --- MUST FIX 4: a key that ends its line, or a folded first line, is found after any prefix
+    folded = {"prefixed empty value": "step 3 failed\n> Cookie:\n    \"sid=ZZR8NEXT1; theme=dark\"", "braced key": '{"cookie":\n    b\'sid=ZZR8NEXT2\'}',
+              "tuple key": "[(Set-Cookie:\n  ['sid=ZZR8NEXT3']", "folded after a semicolon, prefixed": "> Set-Cookie: a=1; Path=/;\n   sid=ZZR8NEXT4",
+              "key line with trailing blanks": "Cookie:   \n  - sid=ZZR8NEXT5\n  - b=2"}
+    check("an empty or folded Cookie value is redacted wherever the key sits on its line", not leaks(folded), str(leaks(folded)))
+    check("only the continuation lines are consumed", m.redact("Cookie:\n  a=1\n  b=2\nHost: x\n")[0] == "Cookie: [redacted]\nHost: x\n")
+    check("a Cookie line with a value and no fold, followed by an indented line, is not treated as folded",
+          m.redact("Cookie: a=1\n  note: x\n")[0] == "Cookie: [redacted]\n  note: x\n")
+
+    # --- MUST FIX 5: -b spellings (literal \\t, $"…", \\'…\\', and the same inside a second layer of escaping)
+    spellings = {"literal backslash-t": 'curl -b\\tsid=ZZR8TAB1;a=b https://x', "dollar double quote": 'curl -b $"sid=ZZR8DQ1; a=b" https://x',
+                 "escaped single quotes": "curl -b \\'sid=ZZR8ESQ1; a=b\\' https://x", "escaped double quotes": 'curl -b \\"sid=ZZR8EDQ1; a=b\\" https://x',
+                 "escaped twice (JSON of a JSON string)": json_mod.dumps(json_mod.dumps("curl -b 'sid=ZZR8TWICE1; a=b' https://x")),
+                 "dollar escaped double quote": 'curl -b $\\"sid=ZZR8DEDQ1\\" https://x'}
+    for k in ("literal backslash-t", "escaped single quotes", "escaped double quotes"):
+        spellings[k + ", inside JSON"] = json_mod.dumps(spellings[k])
+    check("-b is redacted in every spelling the earlier versions caught and in the new ones", not leaks(spellings), str(leaks(spellings)))
+    check("tokenizer_args does not hide a secret flag inside its own value",
+          "hunter2pass" not in m.redact("tokenizer_args: --token hunter2pass")[0] and m.redact("tokenizer_args: --max-length 512") == ("tokenizer_args: --max-length 512", 0))
+    check("a count or model name is exempt only as a whole name: `auth` is not a keyword of its own, so these rely on the exemption clauses",
+          all(secret not in m.redact(s)[0] for s, secret in (("tokens_auth: 1234567890", "1234567890"), ("tokens_authorization=1234567890", "1234567890"),
+                                                              ("tokenizer_auth: ZZR8abcdef", "ZZR8abcdef"), ("tokenizer_auth_key=ZZR8qrstuv", "ZZR8qrstuv"))),
+          str([m.redact(s)[0] for s in ("tokens_auth: 1234567890", "tokenizer_auth: ZZR8abcdef")]))
+    kept = ["git checkout -b feature", "grep -b 'needle' f", "sudo -b true", "max_tokens: 4096", "Cookie policy: strict", "x-cookie-policy: strict"]
+    check("harmless lookalikes stay readable", all(m.redact(s)[0] == s for s in kept), str([s for s in kept if m.redact(s)[0] != s]))
+    finish()
+
+
 def test_live_mention_canary() -> None:
     print("groundwork_copilot.py — LIVE (opt-in, GROUNDWORK_LIVE_TESTS=1, costs a few cents): a file named in the terminal text is not attached to the model's input")
     if os.environ.get("GROUNDWORK_LIVE_TESTS") != "1" or shutil.which("claude") is None:
@@ -1037,7 +1102,7 @@ def test_live_mention_canary() -> None:
 if __name__ == "__main__":
     for fn in (test_text_handling, test_prompt_and_call, test_terminal_resolution_refusals, test_pipeline_and_limits,
                test_project_facts_are_untrusted, test_command_output_and_reporting, test_real_tmux_two_panes, test_live_containment,
-               test_review_round_fixes, test_redaction_review_findings, test_round4_review_fixes, test_live_mention_canary):
+               test_review_round_fixes, test_redaction_review_findings, test_round4_review_fixes, test_round8_review_fixes, test_live_mention_canary):
         try:
             fn()
         except AssertionError:

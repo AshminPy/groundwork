@@ -83,7 +83,7 @@ _SECRET_PATTERNS = (
     # The two URL-credential patterns end their lookahead with (?![\w@-]|\.\w): the host (and optional port) must not be
     # followed by more name, another "@" (the password then contains an "@" and runs on) or ".<word>". Anything else —
     # "." "," "?" ")" "]" ";" "#" ":" "/" a quote, a space, the end — ends the URL, so the password is redacted.
-    (re.compile(r'''(?i)(?:\b|(?<=_)|(?<=\\n)|(?<=\\r)|(?<=\\t))((?:proxy-)?authorization[\\"']{0,4}[ \t]{0,20}[=:][ \t]{0,20})(?:\[[^\]]{0,16000}\]|"[^"]*"|'[^']*'|[^\r\n]+)'''), r"\1[redacted]"),
+    (re.compile(r'''(?i)(?:\b|(?<=_)|(?<=\\n)|(?<=\\r)|(?<=\\t))((?:proxy-)?authorization[\\"']{0,4}[ \t]{0,20}[=:][ \t]{0,20})(?:\[(?!\])[^\]]*\]|\[(?!\])[\s\S]*|"[^"]*"|'[^']*'|[^\r\n]+)'''), r"\1[redacted]"),
     (re.compile(r"(?i)\b(bearer[ \t]{1,20})[A-Za-z0-9._~+/=-]{8,}"), r"\1[redacted]"),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://[^\s/@:]*:)[^\s/]*?@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?![\w@-]|\.\w))"), r"\1[redacted]@"),
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://)[^\s/@:]+@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?![\w@-]|\.\w))"), r"\1[redacted]@"),
@@ -99,18 +99,17 @@ _SECRET_PATTERNS = (
     (re.compile(r"\b(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"), r"\1[redacted]"),
     (re.compile(r"\b(xox[abprs]-|xapp-)[A-Za-z0-9-]{8,}"), r"\1[redacted]"),
     # Cookies and Authorization, in the shapes real tools print. Each pattern anchors on a key or an option, never on a command word:
-    # (1) a cookie key at the start of a line whose value continues on indented lines (folded header after ";", empty value, YAML list);
-    (re.compile(r'''(?im)^([ \t\-]*["']?(?:set-)?cookie["']?[ \t]*:)[ \t]*(?:[^\r\n]*;)?[ \t]*(?:\r?\n(?:[ \t]+|-[ \t]+)[^\r\n]+){1,200}'''), r"\1 [redacted]"),
+    # (1) a cookie key whose value continues on indented lines (folded header after ";", empty value, YAML list): _redact_folded, a one-pass line function that runs before this table;
     # (2) a cookie header anywhere, also with a quoted or escaped-quoted key, or after a literal \r\n in a raw request dump: a bracketed list through its
-    #     closing bracket (any number of lines; with no closing bracket within 16,000 characters, the next 16,000), else the rest of the line
-    (re.compile(r'''(?i)(?:\b|(?<=_)|(?<=\\n)|(?<=\\r)|(?<=\\t))((?:set-)?cookie[\\"']{0,4}[ \t]{0,5}:[ \t]{0,20})(?:\[[^\]]{0,16000}\]|\[[\s\S]{0,16000}|[^\r\n]+)'''), r"\1[redacted]"),
+    #     closing bracket (any number of lines and any length), an unclosed one to the end of the text (fail closed), else the rest of the line (so Go's `[]string{"…"}` is redacted too)
+    (re.compile(r'''(?i)(?:\b|(?<=_)|(?<=\\n)|(?<=\\r)|(?<=\\t))((?:set-)?cookie[\\"']{0,4}[ \t]{0,5}:[ \t]{0,20})(?:\[(?!\])[^\]]*\]|\[(?!\])[\s\S]*|[^\r\n]+)'''), r"\1[redacted]"),
     # (3) -b / --cookie on any command: a quoted jar is one value, whatever its length ("; " separates cookies), escaped quotes and shell $'…' quoting
     #     included; an unquoted value must look like name=value, and a quoted one must contain "=", so `git checkout -b feature` and `grep -b 'needle' f` stay readable
-    (re.compile(r'''(?:^|(?<=\s))((?:-[A-Za-z]*b|--cookie)(?:[ \t=]+|(?=['"\\$])))(?:\$'(?:[^'\\]|\\.)*'|\\"[^"]*?\\"|'(?=[^'\r\n]*=)[^']*'|"(?=(?:[^"\\\r\n]|\\.)*=)(?:[^"\\]|\\.)*"|[^\s'"$\\]*=\S*)'''), r"\1[redacted]"),
+    (re.compile(r'''(?:^|(?<=\s))((?:-[A-Za-z]*b|--cookie)(?:[ \t=]+|(?:\\{1,4}[trn])+|(?=['"\\$])))(?:\$'(?:[^'\\]|\\.)*'|\$"(?:[^"\\]|\\.)*"|\$\\{1,4}"[^"]*?\\{1,4}"|\\{1,4}"[^"]*?\\{1,4}"|\\{1,4}'[^']*?\\{1,4}'|'(?=[^'\r\n]*=)[^']*'|"(?=(?:[^"\\\r\n]|\\.)*=)(?:[^"\\]|\\.)*"|[^\s'"$\\]*=\S*)'''), r"\1[redacted]"),
     # (4) a quoted key followed by a quoted value: Node rawHeaders ('Cookie',\n 'sid=…'), Python header tuples ('Set-Cookie', 'session=…')
-    (re.compile(r'''(?i)(['"](?:(?:set-|proxy-)?cookie|(?:proxy-)?authorization)['"][ \t]*,[ \t]*\r?\n?[ \t]*)(?!["']value["'][ \t]*[:=])(['"])(?:(?!\2)[^\r\n])*\2'''), r"\1[redacted]"),
+    (re.compile(r'''(?i)(['"](?:(?:set-|proxy-)?cookie|(?:proxy-)?authorization)['"][ \t]*,\s*)(?!["']value["'][ \t]*[:=])(['"])(?:(?!\2)[^\r\n])*\2'''), r"\1[redacted]"),
     # (5) name/value pairs: Kubernetes httpHeaders, Postman and HAR JSON
-    (re.compile(r'''(?i)(["']?(?:name|key|header)["']?[ \t]*[:=][ \t]*["']?(?:set-|proxy-)?(?:cookie|authorization)["']?[ \t]*,?[ \t]*\r?\n?[ \t]*-?[ \t]*["']?value["']?[ \t]*[:=][ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]+)'''), r"\1[redacted]"),
+    (re.compile(r'''(?i)(["']?(?:name|key|header)["']?[ \t]*[:=][ \t]*["']?(?:set-|proxy-)?(?:cookie|authorization)["']?[\s,\-]*["']?value["']?[ \t]*[:=][ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]+)'''), r"\1[redacted]"),
     # (6) server configuration directives: nginx proxy_set_header / add_header, Apache RequestHeader / Header
     (re.compile(r'''(?i)\b((?:proxy_set_header|proxy_pass_header|add_header|fastcgi_param|RequestHeader[ \t]+(?:set|add|append|merge)|Header[ \t]+(?:always[ \t]+)?(?:set|add|append|merge))[ \t]+(?:set-)?(?:cookie|authorization|http_cookie|http_authorization)[ \t]+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^;\r\n]+)'''), r"\1[redacted]"),
     # (7) curl -v: `* Added cookie name="value" for domain …`
@@ -244,7 +243,6 @@ def _redact_kv(text: str):
         vm = _VALUE_RE.match(text, k)
         if not vm:
             continue
-        pos = vm.end()
         raw = vm.group(0).strip("\"'\\").strip().lower()
         value = raw.rstrip(_TRAILING)
         name = text[m.start():end].lower()
@@ -254,12 +252,46 @@ def _redact_kv(text: str):
             continue  # `Tokens: 1523`, `max_tokens: 4096`, `tokenizer: gpt2`: counts and model names, not secrets
         if name == "pwd" and value[:1] in ("/", "~"):
             continue  # the shell's working-directory variable
+        pos = vm.end()  # only a redacted value hides what is inside it: `tokenizer_args: --token hunter2` still reaches `--token`
         out.append(text[last:k])
         out.append("[redacted]")
         last = vm.end()
         count += 1
     out.append(text[last:])
     return "".join(out), count
+
+
+_FOLD_KEY = re.compile(r"(?i)(?:\b|(?<=_))(?:set-)?cookie[\"']?[ \t]*:")
+_FOLD_LINE = re.compile(r"(?:[ \t]+|-[ \t]+)[^\r\n]")
+
+
+def _redact_folded(text: str):
+    """(text, count): a Cookie header whose value continues on the following indented lines — an empty value followed by indented
+    lines or a YAML list, or a first line that ends in ";" (an obsolete folded header). The value and every continuation line become
+    one [redacted]. One pass over the lines: linear whatever the line lengths, the number of keys or the number of continuation lines."""
+    lines = text.split("\n")
+    out, count, i, n = [], 0, 0, len(lines)
+    while i < n:
+        line = lines[i]
+        i += 1
+        keys = [m.end() for m in _FOLD_KEY.finditer(line)]
+        anchor = None
+        if keys:
+            stripped_len = len(line.rstrip(" \t\r"))
+            if stripped_len and line[stripped_len - 1] == ";" and keys[0] < stripped_len:
+                anchor = keys[0]  # the first line is a value that ends in ";": folded
+            elif keys[-1] >= stripped_len:
+                anchor = keys[-1]  # the key ends the line: an empty value
+        j = i
+        if anchor is not None:
+            while j < n and _FOLD_LINE.match(lines[j]):
+                j += 1
+        if anchor is not None and j > i:
+            out.append(line[:anchor] + " [redacted]")
+            i, count = j, count + 1
+        else:
+            out.append(line)
+    return "\n".join(out), count
 
 
 def _redact_keys(text: str):
@@ -300,6 +332,8 @@ def redact(text: str):
         # the END of a key whose BEGIN line is not in this text: everything before it is key body
         text = "[redacted private key]" + text[end.end():]
         count += 1
+    text, n = _redact_folded(text)
+    count += n
     for pat, repl in _SECRET_PATTERNS:
         text, n = pat.subn(repl, text)
         count += n
