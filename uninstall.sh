@@ -10,7 +10,7 @@
 #   - ~/.claude/groundwork/config.json (Groundwork 2.1's own capability/Routines selection —
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
-#     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
+#     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py, groundwork_evidence.py
 #   - the four hook entries, the deny rules, and the env defaults this repo's
 #     install.sh added to settings.json (via scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
@@ -71,7 +71,8 @@ rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
       "$CLAUDE_DIR/hooks/groundwork_telemetry.py" \
-      "$CLAUDE_DIR/hooks/groundwork_shared.py"
+      "$CLAUDE_DIR/hooks/groundwork_shared.py" \
+      "$CLAUDE_DIR/hooks/groundwork_evidence.py"
 # groundwork CLI PATH registration — remove exactly the marked block install.sh appended (same
 # exact-match limitation already documented elsewhere in this file: a byte-identical block a user
 # happened to add independently would also be removed). Never touches any other line in the file.
@@ -109,7 +110,8 @@ rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/require_material_review.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_session_snapshot.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_telemetry.*.pyc \
-      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc 2>/dev/null || true
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_evidence.*.pyc 2>/dev/null || true
 rmdir "$CLAUDE_DIR/hooks/__pycache__" 2>/dev/null || true
 if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ]; then
   for kept in telemetry reports investigations; do

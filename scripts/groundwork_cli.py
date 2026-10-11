@@ -60,6 +60,11 @@ INSTALLED_ROUTINES_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_routines
 # never forwarded: groundwork_statusline.py's zero-argv path is reserved for Claude Code's own
 # statusLine invocation (JSON on stdin) and would otherwise hang waiting for stdin here.
 INSTALLED_STATUSLINE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_statusline.py"
+# `evidence` is the same kind of pass-through, but to a module that lives in the HOOKS directory:
+# the Stop hook imports its derivation, and hooks/ and scripts/ install to different locations, so the
+# single copy is hooks/groundwork_evidence.py (copied by install.sh's hooks/*.py glob) and this forwards
+# to it. No evidence logic is duplicated here.
+INSTALLED_EVIDENCE_PY = CLAUDE_DIR / "hooks" / "groundwork_evidence.py"
 
 
 def _read_version() -> str | None:
@@ -142,6 +147,16 @@ def cmd_statusline(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_evidence(extra_argv: list[str]) -> int:
+    if not INSTALLED_EVIDENCE_PY.exists():
+        print(f"evidence: {INSTALLED_EVIDENCE_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run hooks/groundwork_evidence.py directly from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_EVIDENCE_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -182,6 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     )
     sub.add_parser(
+        "evidence",
+        help="evidence receipt for the last turn: what was inspected or run, and the confidence ceiling (see 'groundwork evidence --help')",
+        add_help=False,
+    )
+    sub.add_parser(
         "statusline",
         help="statusline display settings: config list/get/set/unset (see 'groundwork statusline config --help')",
         add_help=False,
@@ -205,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_routines(argv[1:])
     if argv and argv[0] == "statusline":
         return cmd_statusline(argv[1:])
+    if argv and argv[0] == "evidence":
+        return cmd_evidence(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

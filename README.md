@@ -160,6 +160,9 @@ groundwork routines run pr_followup  # run one routine now (same fail-closed pat
 groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
+
+groundwork evidence                  # what the last turn actually read/ran/reviewed, and the confidence ceiling
+groundwork evidence --json           # the same, machine-readable (also: --transcript PATH)
 ```
 
 Everything documented in this README as a direct script or `setup.sh` flag invocation keeps
@@ -170,6 +173,17 @@ model. `groundwork update`/`rollback` never reimplement the installer — see
 [docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
 forwards to the existing Routines execution/scheduling engine unchanged — see
 [docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
+`groundwork evidence` prints the **evidence receipt** for the last turn, derived from the session
+transcript rather than from what the model says: references to the files, URLs, repository objects,
+test/runtime commands (with outcomes) and reviews that were actually used, and an evidence-confidence
+**ceiling** (`NONE`/`LOW`/`MEDIUM`/`HIGH`; `UNKNOWN` if the transcript cannot be read). Confidence,
+validation state and references are three separate things; the ceiling can be too low but never too
+high, because an unrecognised action counts for nothing. A `Confidence:` label stated in the response
+is compared with the ceiling, and an over-claim is shown. References are printed on demand and never
+stored; the Stop-hook record keeps only the label and counts. Limits: a test run piped through
+anything but `tail`/`head`/`tee`/`cat`/`wc` is not credited, and a review delivered as a background
+agent's later message (not a tool result) is not credited. See
+[openspec/changes/add-evidence-receipt/](openspec/changes/add-evidence-receipt/).
 
 Per project, once, if you want spec-driven work there:
 ```bash
@@ -276,7 +290,8 @@ groundwork/
 │   ├── require_material_review.py     denies finishing a MATERIAL change without a fresh independent review reporting Must-fix: 0
 │   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ investigation continuity, harness version, profile) at session start
 │   ├── groundwork_telemetry.py        appends one schema-2 JSONL record per tool-using task (observed vs declared, fail-open)
-│   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
+│   ├── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
+│   └── groundwork_evidence.py         evidence receipt + confidence ceiling from the session transcript; imported by the telemetry hook, run as `groundwork evidence`
 ├── scripts/
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request

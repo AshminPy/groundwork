@@ -406,11 +406,45 @@ def test_statusline_dispatches_not_reimplements() -> None:
     finish()
 
 
+def test_evidence_dispatches_and_uninstall_removes_it() -> None:
+    print("groundwork_cli.py — `evidence` forwards verbatim to the installed hooks/groundwork_evidence.py (one copy, no "
+          "duplicated logic); install.sh puts it in place and uninstall.sh removes it")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-600:])
+        installed = e.cfg / "hooks" / "groundwork_evidence.py"
+        check("install.sh copies groundwork_evidence.py into the hooks dir (the glob), next to the telemetry hook that imports it",
+              installed.is_file() and (e.cfg / "hooks" / "groundwork_telemetry.py").is_file())
+        help_direct = subprocess.run(["python3", str(installed), "--help"], capture_output=True, text=True, env=e.env, timeout=30)
+        help_cli = e.run_cli("evidence", "--help")
+        check("groundwork evidence --help is byte-identical to the module's own help",
+              help_cli.stdout == help_direct.stdout and help_cli.returncode == help_direct.returncode == 0, help_cli.stdout[:300] + help_cli.stderr[:300])
+        entries = [{"type": "user", "message": {"role": "user", "content": "check"}},
+                   {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/repo/a.py"}}]}},
+                   {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x", "is_error": False}]}}]
+        tp = Path(tmpdir) / "t.jsonl"
+        tp.write_text("\n".join(json.dumps(x) for x in entries) + "\n")
+        direct = subprocess.run(["python3", str(installed), "--transcript", str(tp)], capture_output=True, text=True, env=e.env, timeout=30)
+        via = e.run_cli("evidence", "--transcript", str(tp))
+        check("groundwork evidence --transcript output and exit code are byte-identical to direct invocation",
+              via.stdout == direct.stdout and via.returncode == direct.returncode == 0 and "ceiling): LOW" in via.stdout, via.stdout + via.stderr)
+        top = e.run_cli("--help")
+        check("groundwork --help lists the evidence subcommand", "evidence" in top.stdout, top.stdout[:600])
+        u = e.run_uninstall()
+        check("uninstall.sh exits 0", u.returncode == 0, u.stdout[-600:] + u.stderr[-400:])
+        check("uninstall.sh removes groundwork_evidence.py", not installed.exists())
+        pyc = list((e.cfg / "hooks").glob("__pycache__/groundwork_evidence.*.pyc")) if (e.cfg / "hooks").exists() else []
+        check("uninstall.sh removes its bytecode too", not pyc, str(pyc))
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
               test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
               test_integrations_dispatches_not_reimplements, test_update_rollback_dispatches_not_reimplements,
-              test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements):
+              test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements,
+              test_evidence_dispatches_and_uninstall_removes_it):
         try:
             t()
         except AssertionError:

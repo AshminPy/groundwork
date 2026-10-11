@@ -45,6 +45,10 @@ except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook. A pattern that
     # matches nothing just means test-shaped commands stop being detected — degraded, not broken.
     TEST_CMD = re.compile(r"(?!x)x")
+try:
+    from groundwork_evidence import telemetry_summary, declared_exceeds  # evidence receipt (observed ceiling)
+except Exception:
+    telemetry_summary = declared_exceeds = None  # fail-open: the evidence fields are simply omitted
 
 META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
 # Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
@@ -339,7 +343,8 @@ def build_record(data: dict, text: str) -> dict:
     `declared` = what the model stated in its block and status sentence — recorded, not verified,
     except that agent count / mode / roles are reconciled against observed Agent calls (authoritative)."""
     meta = parse_metadata(text)
-    facts = turn_facts(current_turn(data.get("transcript_path", "")))
+    entries = current_turn(data.get("transcript_path", ""))
+    facts = turn_facts(entries)
     if not meta and not facts["tools"]:
         return {}  # conversational reply, no tool use: nothing to record
     execution, exec_count = parse_execution(meta.get("execution", ""))
@@ -362,6 +367,21 @@ def build_record(data: dict, text: str) -> dict:
     validation = next((v for k, v in VALIDATION_STATES.items() if k in validation_raw), "unknown")
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
     playbook = playbook_raw[0] if playbook_raw and playbook_raw[0] in PLAYBOOKS else "unknown"
+    # Evidence confidence is a CEILING derived from the transcript (hooks/groundwork_evidence.py), recorded as a
+    # label plus counts/booleans only — never a path, URL or command. The model's own stated label is recorded
+    # separately under `declared`, and the comparison is an observed fact. Additive and fail-open.
+    ceiling, ev_obs = None, {}
+    if telemetry_summary is not None:
+        try:
+            ev = telemetry_summary(entries)
+            ceiling = ev["confidence"]
+            ev_obs = {"evidence_confidence": ceiling, "evidence_signals": ev["signals"]}
+        except Exception:
+            ceiling, ev_obs = None, {}
+    stated = (meta.get("confidence") or meta.get("evidence confidence") or "").strip().strip("*").split()
+    declared_conf = stated[0].upper() if stated and stated[0].upper() in ("NONE", "LOW", "MEDIUM", "HIGH") else "unknown"
+    if ceiling is not None and declared_exceeds is not None:
+        ev_obs["declared_confidence_exceeds_observed"] = declared_exceeds(declared_conf, ceiling)
     cwd = data.get("cwd") or os.getcwd()
     return {
         "schema": 2,
@@ -381,6 +401,7 @@ def build_record(data: dict, text: str) -> dict:
             "tests_run": facts["tests_run"],
             "implementation_performed": facts["implementation_performed"],
             "deployment_performed": facts["deployment_performed"],
+            **ev_obs,
         },
         "declared": {
             "block_present": bool(meta),
@@ -389,6 +410,7 @@ def build_record(data: dict, text: str) -> dict:
             "agent_count": count,
             "agent_roles": roles[:12],
             "evidence_sources": labels(meta.get("evidence", ""), 8),
+            "evidence_confidence": declared_conf.lower(),
             "validation": validation,
             "environment": label(meta.get("environment") or ""),
             "outcome": outcome_from_text(text),
