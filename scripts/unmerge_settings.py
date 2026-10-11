@@ -84,6 +84,8 @@ def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = Fal
     remove_hook(hooks, "PreToolUse", PUSH_CMD, removed)
     remove_hook(hooks, "Stop", REVIEW_CMD, removed)
     remove_hook(hooks, "Stop", TELEMETRY_CMD, removed)
+    remove_hook(hooks, "PostToolUse", TELEMETRY_CMD, removed)
+    remove_hook(hooks, "PostToolUseFailure", TELEMETRY_CMD, removed)
     remove_hook(hooks, "SessionStart", SNAPSHOT_CMD, removed)
     if "hooks" in data and not data["hooks"]:
         del data["hooks"]

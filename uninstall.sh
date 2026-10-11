@@ -11,7 +11,8 @@
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
-#   - the four hook entries, the deny rules, and the env defaults this repo's
+#   - the hook entries (four hook scripts; groundwork_telemetry.py registers three — Stop,
+#     PostToolUse, PostToolUseFailure), the deny rules, and the env defaults this repo's
 #     install.sh added to settings.json (via scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
 #   - the groundwork CLI (bin/groundwork, bin/setup.sh, groundwork/env) and the marked

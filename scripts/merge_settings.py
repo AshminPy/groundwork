@@ -4,9 +4,12 @@ settings file, without touching anything else the user has configured.
 
 Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwrites
 the file wholesale — only adds/updates the specific keys Groundwork owns:
-  - hooks.PreToolUse / hooks.Stop / hooks.SessionStart: appends Groundwork's four
-    hook entries if not already present (matched by command string, so re-running
-    never duplicates).
+  - hooks.PreToolUse / hooks.Stop / hooks.SessionStart / hooks.PostToolUse /
+    hooks.PostToolUseFailure: appends Groundwork's six hook entries (four hook
+    scripts; groundwork_telemetry.py is registered three times — Stop for its
+    per-turn record, PostToolUse/PostToolUseFailure for its per-tool-call record,
+    added in the Usage Telemetry change) if not already present (matched by
+    command string, so re-running never duplicates).
   - permissions.deny: adds Groundwork's destructive-command deny patterns, skipping
     any already present.
   - env.GATEGUARD_EXEMPT_GLOBS / env.NODE_USE_SYSTEM_CA: set only if the user hasn't
@@ -171,6 +174,18 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
     if not has_command(stop, TELEMETRY_CMD):
         stop.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork task telemetry...", timeout=10))
         changed.append("hooks.Stop: groundwork_telemetry.py")
+
+    # Per-tool-call telemetry (Usage Telemetry, added alongside the per-turn Stop record above):
+    # same script, same file, two more events — fires on every tool call, so matcher="" (every
+    # tool) and a short timeout, since this must never add noticeable latency to a tool call.
+    post = hooks.setdefault("PostToolUse", [])
+    if not has_command(post, TELEMETRY_CMD):
+        post.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork tool-call telemetry...", matcher="", timeout=5))
+        changed.append("hooks.PostToolUse: groundwork_telemetry.py")
+    post_fail = hooks.setdefault("PostToolUseFailure", [])
+    if not has_command(post_fail, TELEMETRY_CMD):
+        post_fail.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork tool-call telemetry...", matcher="", timeout=5))
+        changed.append("hooks.PostToolUseFailure: groundwork_telemetry.py")
 
     start = hooks.setdefault("SessionStart", [])
     if not has_command(start, SNAPSHOT_CMD):

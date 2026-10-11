@@ -46,7 +46,7 @@ The installer SHALL register the hook idempotently and write `~/.claude/groundwo
 
 #### Scenario: Round trip
 - **WHEN** install runs twice then uninstall
-- **THEN** exactly one telemetry hook entry existed, and the records file survives the uninstall
+- **THEN** exactly three telemetry hook entries existed (one each on Stop, PostToolUse and PostToolUseFailure, all the same script), and the records files survive the uninstall
 
 ### Requirement: Record layout separates observed from declared
 Each record SHALL contain an `observed` object (facts the hook determined from the transcript and environment: profile, tools, MCP servers, agent calls and types, files changed, tests run, implementation and deployment flags) and a `declared` object (fields taken from the model's response: playbook, execution mode, agent count and roles, evidence sources, validation, environment, outcome, clarification flag). Declared fields SHALL be recorded as stated, never presented as verified.
@@ -61,6 +61,42 @@ Each record SHALL contain an `observed` object (facts the hook determined from t
 #### Scenario: ambiguous status stays unknown
 - **WHEN** the Status paragraph is "I looked at the code and the tests."
 - **THEN** `declared.outcome` is `unknown`
+
+### Requirement: Per-tool-call record
+In addition to the per-turn record, a PostToolUse/PostToolUseFailure hook SHALL append one JSON
+line per tool call to `~/.claude/groundwork/telemetry/tool_events.jsonl` (its own schema, a
+sibling file — not merged into `events.jsonl`, which has no per-call dimensions) containing only:
+timestamp, session id, the tool name, a category (`builtin` or `mcp`, by the same `mcp__<server>`
+prefix test the per-turn record already uses, with the server slug when `mcp`), and success/failure
+(PostToolUse vs. PostToolUseFailure), plus `interrupted: true` when a PostToolUseFailure carries
+`is_interrupt: true`. It SHALL NOT read or store `tool_input`, `tool_response` or `error` — only the
+event's own `tool_name`, `session_id` and the boolean `is_interrupt`. It SHALL share the per-turn
+record's permission model (0600 file, 0700 directory), fail-open behaviour, and `GROUNDWORK_TELEMETRY=off`
+switch, with its own path override `GROUNDWORK_TOOL_TELEMETRY_PATH`. `success` means Claude Code reported the call as completed; the hook never reads `tool_response`, so for example a Bash command that timed out into the background is still a completed call (INFERENCE: seen in a headless run, not stated in Claude Code's documentation). `interrupted` follows the documented `is_interrupt` flag; no real abort could be produced in a headless run, so that path is covered by payload tests only (RUNTIME VALIDATION REQUIRED).
+
+#### Scenario: A tool call succeeds
+- **WHEN** a `PostToolUse` event fires for `mcp__github__search_repositories`
+- **THEN** a record is appended with `category: "mcp"`, `mcp_server: "github"`, `success: true`, and no trace of the call's arguments or result
+
+#### Scenario: A tool call fails
+- **WHEN** a `PostToolUseFailure` event fires, with an error message containing a token or secret
+- **THEN** a record is appended with `success: false` and the error text never appears anywhere in the file
+
+#### Scenario: No tool name
+- **WHEN** the event carries no `tool_name`
+- **THEN** no record is appended
+
+#### Scenario: A tool call is aborted
+- **WHEN** a `PostToolUseFailure` event fires with `is_interrupt: true`
+- **THEN** a record is appended with `success: false` and `interrupted: true`, and the report counts it separately and excludes it from the success-rate denominator instead of treating it as a tool failure
+
+#### Scenario: A call never executes
+- **WHEN** a tool call is denied by permissions or rejected before execution
+- **THEN** Claude Code fires neither hook event, no record exists, and no report presents the row count as the number of calls attempted
+
+#### Scenario: A running tool is cancelled
+- **WHEN** a running tool is cancelled
+- **THEN** Claude Code fires no PostToolUseFailure event for it, so no failure row exists
 
 ### Requirement: Agent facts reconciled with observed calls
 `declared.agent_count`, `declared.execution_mode` and `declared.agent_roles` SHALL be reconciled against the Agent calls observed in the current turn: when calls were observed, the count is the observed number, the mode is at least `subagents`, and declared roles are kept only when their number matches; when no calls were observed and the block declares a single agent, the count is 0 with no roles; when nothing could be observed (unreadable transcript) the declared values are kept as stated.
