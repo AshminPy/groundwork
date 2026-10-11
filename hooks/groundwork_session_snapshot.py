@@ -305,7 +305,8 @@ def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
             modified, untracked, upstream, _ = state
             branch = entry.get("branch", "").removeprefix("refs/heads/") or "detached HEAD"
             what = f"{modified} modified, {untracked} untracked" if modified or untracked else "clean"
-            local_only.append(f"  {_clip_path(state_path, 90)}: {_clip_path(branch, 40)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {what}; {upstream}")
+            rank = 0 if modified or untracked else 1 if re.match(r"[1-9]\d* ahead", upstream) else 2  # uncommitted work first, then unpushed commits, then clean without an upstream
+            local_only.append((rank, f"  {_clip_path(state_path, 90)}: {_clip_path(branch, 40)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {what}; {upstream}"))
     if not (local_only or missing or locked_missing or unreadable or unexamined):
         return []
     parts = [f"{len(local_only)} with uncommitted changes, unpushed commits or no upstream", f"{pushed} clean and pushed"]
@@ -319,8 +320,10 @@ def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
         parts.append(f"{unexamined} not examined (time or count limit)")
     lines = [f"other worktrees of this repository: {', '.join(parts)} (all: git worktree list)"]
     used, shown = len(lines[0]), 0
-    for row in local_only[:MAX_WORKTREES_LISTED]:
-        if used + 1 + len(row) + OVERFLOW_LINE_CHARS > budget:
+    rows = [row for _, row in sorted(local_only, key=lambda ranked: ranked[0])]  # stable: git's listing order within a rank
+    for k, row in enumerate(rows[:MAX_WORKTREES_LISTED]):
+        reserve = OVERFLOW_LINE_CHARS if len(rows) > k + 1 else 0  # the "… N more" line is only needed when a row stays unlisted
+        if used + 1 + len(row) + reserve > budget:
             break
         lines.append(row)
         used += 1 + len(row)

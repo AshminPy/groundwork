@@ -727,13 +727,17 @@ def test_snapshot_worktrees() -> None:
         git(repo, "worktree", "add", "-q", "-b", "feat/latin", latin)
         check("a non-UTF-8 path does not make the whole section vanish", "other worktrees of this repository" in "\n".join(mod.worktree_facts(str(repo))))
 
-        # --- reading siblings must not rewrite their indexes
+        # --- reading siblings must not rewrite their indexes (the mutant that drops GIT_OPTIONAL_LOCKS is only visible when the
+        # caller's environment does not already carry it)
+        saved_locks = os.environ.pop("GIT_OPTIONAL_LOCKS", None)
         index = Path(git(dirty, "rev-parse", "--git-path", "index").strip())
         index = index if index.is_absolute() else dirty / index
         os.utime(dirty / "f.txt", (time.time() + 50, time.time() + 50))  # stale stat data: a plain `git status` would refresh the index
         before = index.stat().st_mtime_ns
         mod.worktree_facts(str(repo))
         check("listing siblings leaves their index file untouched (GIT_OPTIONAL_LOCKS=0)", index.stat().st_mtime_ns == before)
+        if saved_locks is not None:
+            os.environ["GIT_OPTIONAL_LOCKS"] = saved_locks
 
         # --- bounds
         mod.MAX_WORKTREES_EXAMINED = 2
@@ -1004,6 +1008,26 @@ def test_snapshot_worktrees_edge_cases() -> None:
                 bad.append((b, len("\n".join(sec)), len(sec)))
         check("worktree_facts: whatever the budget, the section fits it, whole lines only, and the summary is shown wherever it fits",
               not bad, str(bad))
+        # rows are ordered by how much work is at risk, not by the alphabet of git's admin directory names
+        ordr = mk(tmp / "ordr")
+        for nm in ("a1", "a2", "a3", "z-dirty"):
+            git(ordr, "worktree", "add", "-q", "-b", f"feat/{nm}", str(tmp / f"ordr-{nm}"))
+        (tmp / "ordr-z-dirty" / "scratch.txt").write_text("x")
+        listed_before, mod.MAX_WORKTREES_LISTED = mod.MAX_WORKTREES_LISTED, 3
+        try:
+            ordered = mod.worktree_facts(str(ordr))
+        finally:
+            mod.MAX_WORKTREES_LISTED = listed_before
+        check("a worktree with uncommitted changes is listed before clean ones that merely have no upstream, even when git lists it last",
+              len(ordered) == 5 and "z-dirty" in ordered[1] and "untracked" in ordered[1] and "1 more" in ordered[4], "\n".join(ordered))
+        # the last row needs no '… N more' line, so it is shown whenever it fits on its own
+        solo = mk(tmp / "solo")
+        git(solo, "worktree", "add", "-q", "-b", "feat/only", str(tmp / "solo-wt"))
+        (tmp / "solo-wt" / "x.txt").write_text("x")
+        solo_full = mod.worktree_facts(str(solo), budget=5000)
+        solo_exact = mod.worktree_facts(str(solo), budget=len("\n".join(solo_full)))
+        check("the only unlisted-able row is shown when summary + row fit, without room reserved for a '… N more' line",
+              len(solo_full) == 2 and solo_exact == solo_full, "\n".join(solo_exact))
         edge = real_wf(str(crowd), budget=cum[1])  # room for the summary and ONE row, not for that row plus a '… N more' line
         check("when one row would fit but not that row plus the '… N more' line, the count of the unlisted wins (the spec promises it)",
               len(edge) == 2 and "3 more" in edge[1], "\n".join(edge))
