@@ -8,7 +8,15 @@ Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) —
 
 ## Version history
 
-**Groundwork 2.3** (current) added the `groundwork` CLI (`--help`/`version`/`doctor`/
+**Groundwork 2.4** (current) added four capabilities, none of which changes existing behaviour unless used: per-tool-call
+usage telemetry (a minimal local record of which tools ran and whether each call succeeded), statusLine symbol presets
+(`symbol_set` and `separator`; the default output is unchanged), a session-start snapshot that names sibling git worktrees
+holding work that exists only on this machine, and `groundwork copilot explain` (read-only help with the output of the tmux pane it
+is typed in, or of piped text, with secret-shaped text redacted before anything is sent) — see
+[docs/RELEASE-REPORT-2.4.md](docs/RELEASE-REPORT-2.4.md), [docs/MACOS-SMOKE-TEST.md](docs/MACOS-SMOKE-TEST.md) and
+[CHANGELOG.md](CHANGELOG.md).
+
+**Groundwork 2.3** added the `groundwork` CLI (`--help`/`version`/`doctor`/
 `integrations`/`update`/`rollback`/`routines` — a single, discoverable command that dispatches to
 Groundwork's existing functionality, reimplementing none of it), self-update/rollback to a real
 published release, and Routines readiness/quiet-interaction refinements — see
@@ -331,6 +339,8 @@ groundwork/
     ├── VALIDATION.md                  real test results and live runs, including the failures on the way
     ├── RELEASE-REPORT-2.0.md          Groundwork 2.0 release-readiness report: per-capability evidence, test results, known limitations
     ├── RELEASE-REPORT-2.1.md          Groundwork 2.1 release report: same shape, this version's evidence
+    ├── RELEASE-REPORT-2.4.md          Groundwork 2.4 release notes and report: scope, evidence, known limitations
+    ├── MACOS-SMOKE-TEST.md            short macOS smoke test for 2.4 (throwaway HOME, nothing of yours is touched)
     ├── TROUBLESHOOTING.md
     ├── UPGRADE-ROLLBACK.md
     ├── FUTURE-SCOPE.md                agreed direction, CURRENT vs FUTURE clearly separated

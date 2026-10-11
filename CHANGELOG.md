@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.0 — 2026-10-11
 
 - **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on
   Claude Code's `PostToolUse`/`PostToolUseFailure` hook events (confirmed current against
