@@ -124,8 +124,6 @@ _KEYWORDS = {
     "builtin", "command", "source", "."}
 _FAIL_COUNT = re.compile(r"\b[1-9]\d*\s+(?:failed|errors?)\b")
 _PASS_COUNT = re.compile(r"\b[1-9]\d*\s+passed\b")
-_NOTHING_RAN = re.compile(
-    r"(?i)\bno tests ran\b|collected 0 items|\b0 passed\b|\bran 0 tests\b|\[no tests to run\]|no test files|\bno tests found\b")
 _READ_ERROR = re.compile(
     r"(?i)no such file|cannot access|permission denied|not a git repository|fatal:|unknown revision|bad revision|"
     r"command not found|is a directory|invalid option|unrecognized option|usage:")
@@ -655,8 +653,7 @@ def derive_evidence(entries: list) -> dict:
                     if not runs or background:
                         continue  # lists/help/version/dry-run, or not finished: neither evidence nor a change
                     ok = _outcome(j, segs, conns, pipefail, is_error, text)
-                    if ok is True and (not text.strip() or (_NOTHING_RAN.search(text) and not _positive_summary(runner, text)) or _FAIL_COUNT.search(text)
-                                       or not _positive_summary(runner, text)
+                    if ok is True and (_FAIL_COUNT.search(text) or not _positive_summary(runner, text)
                                        or (re.search(r"\bskipped\b", text) and not _PASS_COUNT.search(text))):
                         ok = None  # exit 0 but nothing demonstrably ran, or the output contradicts the exit status
                     cwd = _cwd_of(segs, j)
