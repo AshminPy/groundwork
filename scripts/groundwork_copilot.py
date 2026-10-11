@@ -190,6 +190,7 @@ def clean_text(raw: str) -> str:
 
 _KW = re.compile(r"(?i)token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|passphrase|sessionid|phpsessid|jsessionid")
 _VALUE_RE = re.compile(_VALUE)
+_CLOSED_RE = re.compile(_VALUE[:_VALUE.index("|[^\\s\"']+")] + ")")  # the closed-quote alternatives of _VALUE: a quoted value whose closing quote lies inside the probe
 _NAME_CHAR = re.compile(r"[\w.-]")
 _TF_VALUE = re.compile(r'\{\s{0,20}"value"\s{0,5}:\s{0,20}')   # terraform state: "password": {"value": "x"}
 _COUNT_VALUE = re.compile(r"[\d,._]+")
@@ -246,7 +247,10 @@ def _redact_kv(text: str):
         vm = _VALUE_RE.match(text, k, limit)  # a bounded look: an exempt value is not read in full, so a run of exempt names cannot make this quadratic
         if not vm:
             continue
-        long_value = vm.end() >= limit and limit < n  # longer than the probe: no benign word, no count
+        quoted = text[k] in "\"'" or text.startswith(("\\\"", "\\'"), k)
+        # Longer than the probe, or opened with a quote whose closer is past it (the match then fell through to a bare word or a lone backslash): the
+        # probe has not seen the value, so no benign word, count or empty value is decided from it
+        long_value = limit < n and (vm.end() >= limit or (quoted and not _CLOSED_RE.match(text, k, limit)))
         raw = vm.group(0).strip("\"'\\").strip().lower()
         value = raw.rstrip(_TRAILING)
         name = text[m.start():end].lower()

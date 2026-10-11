@@ -143,6 +143,7 @@ MUTANTS = [
     ('JWT starts after a hyphen (quadratic)', '(?<![\\w-])(eyJ)[A-Za-z0-9_-]{8,}', '\\b(eyJ)[A-Za-z0-9_-]{8,}'),
     ('git facts not bounded before redaction', 'clean_text(project_facts(info["path"]))[:FACTS_CHARS]', 'clean_text(project_facts(info["path"]))'),
     ('folded cookie key without escaped quotes', 'cookie[\\\\\\"\']{0,4}[ \\t]*:")', 'cookie[\\"\']?[ \\t]*:")'),
+    ('kv: a quote whose closer is past the probe is conclusive', '(vm.end() >= limit or (quoted and not _CLOSED_RE.match(text, k, limit)))', 'vm.end() >= limit'),
 ]
 
 # Mutants that cannot change behaviour, with the reason. They are not counted as caught or survived.

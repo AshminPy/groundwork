@@ -1113,6 +1113,16 @@ def test_round9_review_fixes() -> None:
           "ZZR9" not in m.redact("password: " + "a" * 5000 + "ZZR9")[0] and "ZZR9" not in m.redact('password: "' + "b" * 5000 + 'ZZR9"')[0])
     check("a long value that starts with 64 closing brackets is not taken for an empty one (they are stripped as trailing punctuation)",
           "ZZR9" not in m.redact("password: " + "}" * 70 + "ZZR9")[0] and m.redact("password: }")[0] == "password: }")
+    import json as json_mod
+    words = " ".join(["abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse", "access", "accident"])
+    quoted_long = {"escaped JSON, 64 hex": json_mod.dumps(json_mod.dumps({"password": "a1b2c3d4" * 8 + "ZZR10"})),
+                   "escaped quotes in a Kubernetes annotation": 'annotation \\"password\\": \\"' + "Zm9v" * 22 + 'ZZR10\\"',
+                   "a quoted passphrase of 12 words": 'export WALLET_PASSPHRASE="' + words + ' ZZR10"',
+                   "a quoted passphrase on a flag": 'gpg --batch --passphrase "correct horse battery staple correct horse battery staple correct ZZR10" -c file',
+                   "a quote, a space, then 72 characters": 'SECRET=" ' + "x" * 72 + 'ZZR10 "',
+                   "a benign first word in a long quoted value": 'secret: "unknown ' + "y" * 72 + 'ZZR10"'}
+    leaked = [k for k, v in quoted_long.items() if "ZZR10" in m.redact(v)[0]]
+    check("a value opened with a quote whose closer is past the probe is read in full (escaped JSON, long phrases, a benign or empty first word)", not leaked, str(leaked))
     check("a long value is never taken for a count: digits first, then letters",
           "ZZR9" not in m.redact("tokens: " + "1" * 70 + "ZZR9")[0] and m.redact("tokens: 4096")[0] == "tokens: 4096")
     check("exempt names and values stay readable, a secret flag inside an exempt value is still redacted",
