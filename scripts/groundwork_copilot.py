@@ -60,6 +60,8 @@ MAX_CHARS = 16000
 CAPTURE_LINES = 1500       # the wider window that is redacted BEFORE it is cut down, so a secret split by the cut is still seen
 CAPTURE_CHARS = 60_000
 FACT_LINE_CHARS = 300
+FACTS_CHARS = 20_000       # git facts (a commit subject can be any length) are cut to this BEFORE redaction, like the question
+PROBE_CHARS = 64           # _redact_kv decides every exemption from this many characters of a value
 STDIN_BYTES = 2_000_000    # only the tail of piped input is kept
 CLAUDE_TIMEOUT_S = 120
 BUDGET_USD = "0.25"
@@ -96,7 +98,7 @@ _SECRET_PATTERNS = (
     (re.compile(r"\b(glpat-)[A-Za-z0-9_-]{10,}"), r"\1[redacted]"),
     (re.compile(r"\b(npm_)[A-Za-z0-9]{30,}"), r"\1[redacted]"),
     (re.compile(r"\b(SG\.)[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), r"\1[redacted]"),
-    (re.compile(r"\b(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"), r"\1[redacted]"),
+    (re.compile(r"(?<![\w-])(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"), r"\1[redacted]"),  # not after "-" either: "eyJ-" x N restarted at every "-eyJ" (quadratic)
     (re.compile(r"\b(xox[abprs]-|xapp-)[A-Za-z0-9-]{8,}"), r"\1[redacted]"),
     # Cookies and Authorization, in the shapes real tools print. Each pattern anchors on a key or an option, never on a command word:
     # (1) a cookie key whose value continues on indented lines (folded header after ";", empty value, YAML list): _redact_folded, a one-pass line function that runs before this table;
@@ -200,8 +202,8 @@ _TRAILING = ",;.)]}>"
 def _redact_kv(text: str):
     """(text, count): redact the value after `<name containing a secret word> = / : value` — JSON ("password": "x"),
     env (DB_PASSWORD=x), headers (token: x) — and after `--flag value` when the flag name holds a secret word.
-    Found by locating the keywords first and inspecting a bounded window around each (<= 40 name characters, <= 10
-    blanks), so the work is bounded (near-linear in the input size in the fuzz runs); a value that is plainly not a secret
+    Found by locating the keywords first and inspecting a bounded window around each (<= 40 name characters, <= 40
+    blanks, a 64-character probe of the value), so the work is bounded (near-linear in the input size in the fuzz runs); a value that is plainly not a secret
     ("none", "}", "too short") is left readable."""
     out, last, pos, count = [], 0, 0, 0
     n = len(text)
@@ -240,18 +242,22 @@ def _redact_kv(text: str):
             tf = _TF_VALUE.match(text, k)
             if tf:
                 k = tf.end()
-        vm = _VALUE_RE.match(text, k)
+        limit = min(n, k + PROBE_CHARS)
+        vm = _VALUE_RE.match(text, k, limit)  # a bounded look: an exempt value is not read in full, so a run of exempt names cannot make this quadratic
         if not vm:
             continue
+        long_value = vm.end() >= limit and limit < n  # longer than the probe: no benign word, no count
         raw = vm.group(0).strip("\"'\\").strip().lower()
         value = raw.rstrip(_TRAILING)
         name = text[m.start():end].lower()
-        if not value or raw in _BENIGN_VALUES or value in _BENIGN_VALUES:
+        if not long_value and (not value or raw in _BENIGN_VALUES or value in _BENIGN_VALUES):
             continue  # plainly not a secret: "none", "required", "}", a bare punctuation mark
-        if (name.startswith("tokens") and _COUNT_VALUE.fullmatch(value) and not _SECRET_WORD.search(name)) or _TOKENIZER_NAME.fullmatch(name):
+        if (name.startswith("tokens") and not long_value and _COUNT_VALUE.fullmatch(value) and not _SECRET_WORD.search(name)) or _TOKENIZER_NAME.fullmatch(name):
             continue  # `Tokens: 1523`, `max_tokens: 4096`, `tokenizer: gpt2`: counts and model names, not secrets
         if name == "pwd" and value[:1] in ("/", "~"):
             continue  # the shell's working-directory variable
+        if long_value:
+            vm = _VALUE_RE.match(text, k)  # the whole value, now that it will be redacted
         pos = vm.end()  # only a redacted value hides what is inside it: `tokenizer_args: --token hunter2` still reaches `--token`
         out.append(text[last:k])
         out.append("[redacted]")
@@ -261,7 +267,7 @@ def _redact_kv(text: str):
     return "".join(out), count
 
 
-_FOLD_KEY = re.compile(r"(?i)(?:\b|(?<=_))(?:set-)?cookie[\"']?[ \t]*:")
+_FOLD_KEY = re.compile(r"(?i)(?:\b|(?<=_))(?:set-)?cookie[\\\"']{0,4}[ \t]*:")
 _FOLD_LINE = re.compile(r"(?:[ \t]+|-[ \t]+)[^\r\n]")
 
 
@@ -579,7 +585,7 @@ def gather(env, stdin_mode, lines, stdin_text=None):
     text = bound(text, CAPTURE_LINES, CAPTURE_CHARS)
     text, _ = redact(text)
     text = bound(text, lines)
-    facts, _ = redact(clean_text(project_facts(info["path"])))
+    facts, _ = redact(clean_text(project_facts(info["path"]))[:FACTS_CHARS])
     if not text.strip():
         raise CopilotError("there is no recent output to explain in this terminal" if provider == "tmux" else "nothing was piped in")
     redactions = len(_REDACTED_MARK.findall(text)) + len(_REDACTED_MARK.findall(facts))

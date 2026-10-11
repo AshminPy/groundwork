@@ -1080,6 +1080,51 @@ def test_round8_review_fixes() -> None:
     finish()
 
 
+def test_round9_review_fixes() -> None:
+    print("groundwork_copilot.py — round-8 review: exempt values are read once, the JWT pattern is linear, git facts are bounded before redaction")
+    m = load()
+    # --- MUST FIX 1 and 2: a run of exempt names, or of '-eyJ', is linear (3.0 s, 1.5 s and 0.8 s on 60 KB before)
+    hostile = {"pwd:/ x12000": "pwd:/" * 12000, "tokenizer: x6000": "tokenizer:" * 6000, "eyJ- x15000": "eyJ-" * 15000,
+               "tokens: 5 x6000": "tokens: 5 " * 6000, "none, password: x5000": "password: none " * 4000}
+    slow = {}
+    for name, text in hostile.items():
+        t0 = time.monotonic()
+        m.redact(text)
+        slow[name] = time.monotonic() - t0
+    check("exempt values and JWT starts cost time linear in the input (each under half a second on 60 KB)", max(slow.values()) < 0.5, str({k: round(v, 2) for k, v in slow.items()}))
+    # the facts path: a 200,000-character commit subject is cut before it is redacted
+    real_facts = m.project_facts
+    m.project_facts = lambda path: "Git: last commit: " + "pwd:/" * 40000
+    try:
+        t0 = time.monotonic()
+        _, facts_text, _, _ = m.gather({}, True, 10, "boom\n")
+        elapsed = time.monotonic() - t0
+    finally:
+        m.project_facts = real_facts
+    check("a 200,000-character commit subject is handled in well under a second", elapsed < 1.0 and len(facts_text) <= m.FACT_LINE_CHARS * 2, f"{elapsed:.2f}s {len(facts_text)}")
+    m.project_facts = lambda path: "a\n" * 50000
+    try:
+        _, facts_text, _, _ = m.gather({}, True, 10, "boom\n")
+    finally:
+        m.project_facts = real_facts
+    check("git facts are cut to FACTS_CHARS before redaction", len(facts_text) <= m.FACTS_CHARS, str(len(facts_text)))
+    # --- what the bounded probe must not change
+    check("a value longer than the probe is still redacted in full, quoted or not",
+          "ZZR9" not in m.redact("password: " + "a" * 5000 + "ZZR9")[0] and "ZZR9" not in m.redact('password: "' + "b" * 5000 + 'ZZR9"')[0])
+    check("a long value that starts with 64 closing brackets is not taken for an empty one (they are stripped as trailing punctuation)",
+          "ZZR9" not in m.redact("password: " + "}" * 70 + "ZZR9")[0] and m.redact("password: }")[0] == "password: }")
+    check("a long value is never taken for a count: digits first, then letters",
+          "ZZR9" not in m.redact("tokens: " + "1" * 70 + "ZZR9")[0] and m.redact("tokens: 4096")[0] == "tokens: 4096")
+    check("exempt names and values stay readable, a secret flag inside an exempt value is still redacted",
+          m.redact("pwd: /home/u")[0] == "pwd: /home/u" and m.redact("tokenizer: gpt2")[0] == "tokenizer: gpt2"
+          and "hunter2pass" not in m.redact("tokenizer_args: --token hunter2pass")[0])
+    check("a JWT after a space, quote or equals sign is redacted, a JWT after a hyphen is a documented gap",
+          all("ZZR9" not in m.redact(s + "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.ZZR9efgh")[0] for s in ("jwt ", '"', "x=", "Bearer ")))
+    # --- smaller fixes
+    check("a folded Cookie key written with escaped quotes is found", "ZZR9" not in m.redact('\\"Cookie\\":\n    \'sid=ZZR9\'')[0])
+    finish()
+
+
 def test_live_mention_canary() -> None:
     print("groundwork_copilot.py — LIVE (opt-in, GROUNDWORK_LIVE_TESTS=1, costs a few cents): a file named in the terminal text is not attached to the model's input")
     if os.environ.get("GROUNDWORK_LIVE_TESTS") != "1" or shutil.which("claude") is None:
@@ -1102,7 +1147,7 @@ def test_live_mention_canary() -> None:
 if __name__ == "__main__":
     for fn in (test_text_handling, test_prompt_and_call, test_terminal_resolution_refusals, test_pipeline_and_limits,
                test_project_facts_are_untrusted, test_command_output_and_reporting, test_real_tmux_two_panes, test_live_containment,
-               test_review_round_fixes, test_redaction_review_findings, test_round4_review_fixes, test_round8_review_fixes, test_live_mention_canary):
+               test_review_round_fixes, test_redaction_review_findings, test_round4_review_fixes, test_round8_review_fixes, test_round9_review_fixes, test_live_mention_canary):
         try:
             fn()
         except AssertionError:
