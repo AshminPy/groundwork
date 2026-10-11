@@ -299,12 +299,14 @@ def test_symbol_set_presets_render_correct_glyphs() -> None:
             for symbol_set, (connected, configured, available) in expectations.items():
                 out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG,
                                                   "mode": mode, "symbol_set": symbol_set})
-                check(f"[{mode}] symbol_set={symbol_set} shows its own CONNECTED glyph ({connected!r})",
-                      connected in out, out)
-                check(f"[{mode}] symbol_set={symbol_set} shows its own CONFIGURED glyph ({configured!r})",
-                      configured in out, out)
-                check(f"[{mode}] symbol_set={symbol_set} shows its own AVAILABLE glyph ({available!r})",
-                      available in out, out)
+                # the glyph must sit next to the integration that is in that state (GitHub CONNECTED, AWS
+                # CONFIGURED, Datadog AVAILABLE) — presence anywhere in the line would not notice a swapped mapping
+                check(f"[{mode}] symbol_set={symbol_set}: GitHub (CONNECTED) renders {connected!r}",
+                      f"GitHub {connected} " in out, out)
+                check(f"[{mode}] symbol_set={symbol_set}: AWS (CONFIGURED) renders {configured!r}",
+                      f"AWS {configured} " in out, out)
+                check(f"[{mode}] symbol_set={symbol_set}: Datadog (AVAILABLE) renders {available!r}",
+                      f"Datadog {available} " in out, out)
                 other_glyphs = [g for name, glyphs in expectations.items() if name != symbol_set for g in glyphs]
                 check(f"[{mode}] symbol_set={symbol_set} shows none of the other presets' glyphs",
                       not any(g in out for g in other_glyphs), (out, other_glyphs))
@@ -331,7 +333,15 @@ def test_separator_presets() -> None:
         check("separator='ascii' renders the | field separator instead of │",
               "|" in ascii_out and "│" not in ascii_out, ascii_out)
         check("separator='unicode' output has no bare | field separator",
-              "│" in unicode_out, unicode_out)
+              "|" not in unicode_out, unicode_out)
+        # the integrations row joins its entries with the same separator (pins the exact default format an
+        # existing config renders; the age is time-dependent, hence \d+)
+        import re as _re
+        row = r"AWS \S+ · \d+s {sep} Datadog \S+ · \d+s {sep} GitHub \S+ · \d+s"
+        check("default integrations row joins its entries with ' │ ' (existing-config format unchanged)",
+              _re.search(row.format(sep="│"), unicode_out) is not None, unicode_out)
+        check("separator='ascii' integrations row joins its entries with ' | '",
+              _re.search(row.format(sep=r"\|"), ascii_out) is not None, ascii_out)
     finish()
 
 

@@ -62,10 +62,10 @@ DEFAULT_STATUSLINE_CONFIG = {
     "plain_text": False,         # True: ASCII-only fallback, no Unicode symbols — takes precedence
                                  # over symbol_set/separator below (see _fmt_integrations()/render()):
                                  # plain_text already replaces symbols with words and │ with | entirely,
-                                 # so a chosen symbol_set/separator is simply never consulted while it's on
+                                 # so a chosen symbol_set/separator has no effect while it's on
     "symbol_set": "default",     # "default" | "ascii" | "emoji" — which SYMBOL_SETS preset renders the
                                  # integrations row's CONNECTED/CONFIGURED/AVAILABLE glyphs (ignored when
-                                 # plain_text is true). Two fixed presets only — no arbitrary custom
+                                 # plain_text is true). Fixed presets only — no arbitrary custom
                                  # symbol strings (display/injection risk; out of scope for this change).
                                  # NOTE: "ascii" changes only these glyphs — the rest of the line still has
                                  # Unicode (the git ✓/✗ marker, the ' · ' joiners), so it is NOT an ASCII-only
