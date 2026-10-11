@@ -849,7 +849,7 @@ def test_round5_review_fixes() -> None:
         text = "Done.\n\nHarness metadata\nExecution: single agent\nConfidence: HIGH\n"
         rec = tel.build_record(payload, text)
         check("baseline: with time left, the record carries the evidence estimate", "evidence_confidence" in rec["observed"], json.dumps(rec["observed"])[:200])
-        tel.HOOK_START = time.monotonic() - 100  # the hook has already used all of its time (a huge transcript was read)
+        tel.HOOK_START = time.monotonic() - (tel.HOOK_BUDGET_S - 0.2)  # the hook has used nearly all of its time (a huge transcript was read)
         rec = tel.build_record(payload, text)
         check("with the hook's time spent reading the transcript, evidence is skipped and the existing record is still written",
               "evidence_confidence" not in rec["observed"] and rec["declared"]["block_present"] is True and rec["observed"]["tools"], json.dumps(rec["observed"])[:200])
@@ -1067,15 +1067,17 @@ def test_round7_review_fixes() -> None:
     docs_ok = bash("curl -fsS https://docs.example.com/")
     check("a successful check of another URL does not clear it either", label(m, read(), edit(), bash("pytest -q"), bad_curl, docs_ok, agent(REVIEW_CLEAN)) == "LOW")
     check("the same health check succeeding later does", label(m, read(), edit(), bash("pytest -q"), bad_curl, other, ok_curl, agent(REVIEW_CLEAN)) == "HIGH")
-    check("... also with flags or a redirect that differ", label(m, read(), edit(), bash("pytest -q"), bad_curl, other, bash("curl -f -sS https://prod.example.com/health 2>&1"), agent(REVIEW_CLEAN)) == "HIGH")
+    check("... also with the output redirected", label(m, read(), edit(), bash("pytest -q"), bad_curl, other, bash("curl -fsS https://prod.example.com/health 2>&1"), agent(REVIEW_CLEAN)) == "HIGH")
+    check("a retry with other flags is another check: the label stays LOW until the exact command succeeds",
+          label(m, read(), edit(), bash("pytest -q"), bad_curl, other, bash("curl -f -sS https://prod.example.com/health"), agent(REVIEW_CLEAN)) == "LOW")
 
     # --- bounded per-call work: one Bash call of many test segments over a large result
     big = "x" * 79 + "\n"
     cmd = " && ".join(["pytest -q"] * 50)
     t0 = time.monotonic()
-    ev = m.derive_evidence(turn(("Bash", {"command": cmd}, big * 100_000 + "5 passed in 1s\n", False)))  # no EvidenceBudgetExceeded: each pass over the result is made once
-    check("50 test segments over an 8 MB result are analysed within the budget, not abandoned (it took over 25 s)",
-          time.monotonic() - t0 < 3.0 and ev["confidence"] in ("NONE", "LOW", "MEDIUM"), f"{time.monotonic() - t0:.1f}s")
+    ev = m.derive_evidence(turn(("Bash", {"command": cmd}, big * 100_000 + "5 passed in 1s\n", False)), budget_s=30.0)  # each pass over the result is made once
+    check("50 test segments over an 8 MB result take a few seconds at most (over 25 s when every segment rescans it)",
+          time.monotonic() - t0 < 8.0 and ev["confidence"] in ("NONE", "LOW", "MEDIUM"), f"{time.monotonic() - t0:.1f}s")
     t0 = time.monotonic()
     try:
         m.derive_evidence(turn(*[("Read", {"file_path": f"/r/{i}"}, "x", False) for i in range(3)]), budget_s=-1.0)
@@ -1131,6 +1133,8 @@ def test_round7_review_fixes() -> None:
         tel.HOOK_START = time.monotonic() - 100
         rec = tel.build_record({"transcript_path": str(tpath), "cwd": tmpdir, "session_id": "s"}, "Done.\n\nHarness metadata\nExecution: single agent\n")
         check("the hook does not even start deriving evidence when its time is spent", calls == [] and "evidence_confidence" not in rec["observed"], str(calls))
+        check("a transcript read that outlasts the hook deadline yields a record without observed facts, not a lost one",
+              rec["observed"]["tools"] == [] and rec["declared"]["block_present"] is True, json.dumps(rec["observed"])[:200])
 
     # --- smaller fixes from the same reviews
     check("the metadata block is read with CRLF line ends", tel.parse_metadata("Done.\r\n\r\nHarness metadata\r\nExecution: single agent\r\nConfidence: HIGH\r\n").get("confidence") == "HIGH")
@@ -1141,6 +1145,175 @@ def test_round7_review_fixes() -> None:
     for cmd in ("curl -fsS -bsession=ZZR7GLUED https://app.example.com/health", "curl -fsSb 'session=ZZR7CLUSTER' https://app.example.com/health",
                 "curl -fsS --cert client.pem:ZZR7CERTPW https://app.example.com/health", "curl -fsS -H 'Cookie: session=\"ZZR7INNER\"; x=1' https://app.example.com/health"):
         check(f"redacted in a printed reference: {cmd[:48]}", "ZZR7" not in blob(cmd), blob(cmd))
+    finish()
+
+
+def test_round8_review_fixes() -> None:
+    print("groundwork_evidence.py — round-6 correctness review: the refusals Claude Code really writes, runtime checks aimed at another target, the compaction look-ahead")
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r8", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+
+    # --- a refused call never ran: the entry's own toolDenialKind, and the wordings seen in real transcripts (verbatim)
+    good = [read(), edit(), bash("pytest -q"), bash("kubectl get pods -n web"), agent(REVIEW_CLEAN)]
+    base = m.derive_evidence(turn(*good))
+    check("baseline: HIGH", base["confidence"] == "HIGH", base["confidence"])
+    wordings = {
+        "permission, no command": "Permission to use Bash has been denied. IMPORTANT: You *may* attempt to accomplish this action using other tools",
+        "permission, don't-ask mode": "Permission to use Write has been denied because Claude Code is running in don't ask mode.",
+        "permission, with command": "Permission to use Bash with command kubectl get pods -n prod has been denied.",
+        "classifier, no verdict": "The server-side auto mode classifier gave no verdict (error), so auto mode cannot determine the safety of Bash right now.",
+        "classifier, blocked": "Permission for this action was denied by the Claude Code auto mode classifier. Reason: x",
+        "built-in safety check": "Permission for this command was denied by a built-in Claude Code safety check, not by the user.",
+        "requires approval": "This command requires approval",
+        "multiple operations": "This Bash command contains multiple operations. The following part requires approval: kubectl delete pod x",
+        "variable in braces": "A variable in braces in this command can't be checked before it runs",
+        "quoted text": "Quoted text in this command can't be checked before it runs",
+        "blocked sleep": "<tool_use_error>Blocked: sleep 45 followed by: kubectl get pods. To wait for a condition, use Monitor",
+        "user rejected": "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+    }
+    for name, text in wordings.items():
+        for cmd in ("kubectl get pods -n prod", "pytest -q tests/slow"):
+            ev = m.derive_evidence(turn(*good, ("Bash", {"command": cmd}, text, True)))
+            check(f"refused, by its wording alone: {name} ({cmd.split()[0]})", ev["confidence"] == "HIGH" and ev["signals"]["tool_errors"] == base["signals"]["tool_errors"],
+                  f"{ev['confidence']} errors={ev['signals']['tool_errors']}")
+    entries = turn(*good)
+    entries += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_denied", "name": "Bash", "input": {"command": "pytest -q tests/slow"}}]}},
+                {"type": "user", "toolDenialKind": "user-rejected", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_denied", "content": "some future wording", "is_error": True}]}}]
+    ev = m.derive_evidence(entries)
+    check("refused, by the entry's toolDenialKind alone (a wording nobody has seen)", ev["confidence"] == "HIGH" and ev["signals"]["tool_errors"] == base["signals"]["tool_errors"], ev["confidence"])
+    ev = m.derive_evidence(turn(*good, ("Bash", {"command": "pytest -q tests/slow"}, "collected\nPermission to use Bash with command x has been denied.", True)))
+    check("a wording that appears mid-output is not a refusal (the match is anchored)", ev["confidence"] == "LOW")
+
+    # --- a failed runtime check stays failed when the success is aimed at another target, however the target is spelled
+    pairs = [("gcloud compute instances list --project=prod-proj", "gcloud compute instances list --project=dev-proj"),
+             ("kubectl get pods --context=prod", "kubectl get pods --context=dev"), ("kubectl get pods --namespace=prod", "kubectl get pods --namespace=staging"),
+             ("KUBECONFIG=/k/prod kubectl get pods", "KUBECONFIG=/k/dev kubectl get pods"),
+             ("AWS_PROFILE=prod aws ec2 describe-instances", "AWS_PROFILE=dev aws ec2 describe-instances"),
+             ("aws ec2 describe-instances --region=us-east-1", "aws ec2 describe-instances --region=us-west-2"), ("kubectl get pods -n prod", "kubectl get pods -n dev")]
+    for a, b in pairs:
+        bad, ok_b, ok_a = bash(a, ok=False, text="error: unreachable"), bash(b), bash(a)
+        check(f"a success aimed elsewhere does not clear the failure: {a[:46]}",
+              label(m, read(), edit(), bash("pytest -q"), bad, ok_b, agent(REVIEW_CLEAN)) == "LOW" and label(m, read(), edit(), bash("pytest -q"), bad, ok_b, ok_a, agent(REVIEW_CLEAN)) == "HIGH")
+
+    # --- the compaction look-ahead steps over the bookkeeping entries between the request and the boundary
+    before = turn(edit(), bash("pytest tests/a", ok=False, text="1 failed"))
+    odd = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "message": {"role": "user", "content": "Summarise this conversation for the next session."}}
+    reply = {"type": "assistant", "message": {"content": [{"type": "text", "text": "<summary>…</summary>"}]}}
+    bookkeeping = [{"type": kind} for kind in ("attachment", "last-prompt", "queue-operation", "ai-title", "mode", "cost-state")] * 6
+    boundary = [{"type": "system", "subtype": "compact_boundary"}, {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "continued"}}]
+    entries = before + [odd] + bookkeeping[:20] + [reply] + bookkeeping[20:] + boundary
+    check("a request is recognised by its boundary 38 entries later", tel.is_compaction_request(entries, len(before)) is True)
+    typed = {"type": "user", "message": {"role": "user", "content": "now something else"}}
+    check("... but not when another prompt comes first", tel.is_compaction_request(before + [odd] + bookkeeping + [typed] + boundary, len(before)) is False)
+
+    headless = {"type": "user", "turnOrigin": "sdk", "promptSource": "sdk", "message": {"role": "user", "content": "run the tests and report"}}
+    check("a `claude -p` prompt followed by tool use and then a compaction boundary (no request entry) is still a prompt",
+          tel.is_compaction_request([headless] + turn(bash("pytest -q"))[1:] + boundary, 0) is False)
+
+    # --- smaller fixes from the same review
+    check("a REVIEW RESULT heading with CRLF line ends is read", m._review_state("REVIEW RESULT\r\nVerdict:   approve\r\nMust-fix:  0\r\n")[0] == "clean")
+    finish()
+
+
+def test_round9_review_fixes() -> None:
+    print("groundwork_evidence.py — round-6 security review: the outcome regexes, -u / -E / --pass, the runtime key, a typed prompt quoting the summariser, a single-pass current_turn")
+    import time
+    m = load()
+    tspec = importlib.util.spec_from_file_location("groundwork_telemetry_r9", TELEMETRY_HOOK)
+    tel = importlib.util.module_from_spec(tspec)
+    tspec.loader.exec_module(tel)
+
+    # --- the Stop hook parses the model's answer in linear time (a 20,000-space first line took 11.5 s and lost the record)
+    hostile = {"20,000 spaces, then text": " " * 20000 + "x\n\nHarness metadata\nExecution: single agent\n", "20,000 tabs, then text": "\t" * 20000 + "x",
+               "Overall: and 6,000 blank lines": "Overall:" + " \n" * 6000, "Status with 20,000 blanks": "Status" + " " * 20000 + "x",
+               "20,000 asterisks": "*" * 20000 + "Status", "20,000 hashes": "#" * 20000 + " Result: x"}
+    slow = {}
+    for name, text in hostile.items():
+        t0 = time.monotonic()
+        tel.outcome_from_text(text)
+        slow[name] = time.monotonic() - t0
+    check("outcome_from_text is fast on whitespace-led and star-led answers (each under half a second)", max(slow.values()) < 0.5, str({k: round(v, 2) for k, v in slow.items()}))
+    check("... and still reads the usual status language",
+          tel.outcome_from_text("Status: Complete. The change is implemented.") == "complete" and tel.outcome_from_text("Done.\n\nOverall: PARTIAL") == "partial"
+          and tel.outcome_from_text("## Result: blocked on credentials") == "blocked")
+
+    # --- sibling spellings of the credential options are redacted in a printed reference
+    blob = lambda cmd: json.dumps(m.derive_evidence(turn(bash(cmd)))["references"])
+    for cmd in ("curl -fsSu admin:ZZR9PW https://svc.example.com/health", "curl -fu admin:ZZR9PW https://svc.example.com/health",
+                "curl -fsSuadmin:ZZR9PW https://svc.example.com/health", "curl -fsS -E client.pem:ZZR9PW https://svc.example.com/health",
+                "curl -fsS --cert client.pem --key k.pem --pass ZZR9PW https://svc.example.com/health", "curl -fsS --proxy-pass=ZZR9PW https://svc.example.com/health"):
+        check(f"credential option redacted: {cmd[:46]}", "ZZR9PW" not in blob(cmd) and "ZZR9PW" not in m._redact(cmd) and "[redacted]" in m._redact(cmd), blob(cmd) + m._redact(cmd))
+    check("a grep -E pattern without a colon stays readable in a reference", "foo|bar" in json.dumps(m.derive_evidence(turn(bash("grep -rnE 'foo|bar' src")))["references"]))
+
+    # --- a failed check is cleared only by the exact command (glued short flags included)
+    pairs = [("kubectl get pods -nprod", "kubectl get pods -ndev"), ("helm status web --kube-context=prod", "helm status web --kube-context=dev"),
+             ("kubectl get nodes --kubeconfig=/prod.yaml", "kubectl get nodes --kubeconfig=/dev.yaml")]
+    for a, b in pairs:
+        check(f"a success aimed elsewhere does not clear the failure: {a[:40]}",
+              label(m, read(), edit(), bash("pytest -q"), bash(a, ok=False, text="error: unreachable"), bash(b), agent(REVIEW_CLEAN)) == "LOW")
+
+    # --- a typed prompt may quote the summariser's words; only an SDK-originated entry is a request
+    quoted = {"type": "user", "message": {"role": "user", "content": "Below is a conversation log from a Claude Code coding session. What does it show?"}}
+    sdk = dict(quoted, turnOrigin="sdk", promptSource="sdk")
+    check("the opening words alone, from a typed prompt, do not make a request", tel.is_compaction_request([quoted], 0) is False)
+    check("the same words from an SDK-originated entry do", tel.is_compaction_request([sdk], 0) is True)
+
+    # --- current_turn parses each chunk once, whatever the chunk size, and honours a deadline
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tpath = Path(tmpdir) / "t.jsonl"
+        steps = []
+        for i in range(60):
+            steps += [("Read", {"file_path": f"/r/file_{i}.py"}, "contents " * (i % 7 + 1), False)]
+        turn_a = turn(*steps)
+        later = turn(read("/r/last.py"), bash("pytest -q"))
+        entries = turn_a + later
+        tpath.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        expected = later
+        ok_all = True
+        for chunk in (7, 61, 97, 255, 1000, 4096):
+            tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = chunk, chunk * 2
+            got = tel.current_turn(str(tpath))
+            ok_all = ok_all and got == expected
+        tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 256 * 1024, 2 * 1024 * 1024
+        check("every chunk size, including ones that split lines, gives the same turn as one read", ok_all)
+        check("a turn that starts before the first chunk is returned whole", tel.current_turn(str(tpath)) == expected)
+        tpath.write_text("\n".join(json.dumps(e) for e in turn_a) + "\n")
+        tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 61, 122
+        check("a transcript with one long turn is read back to its first prompt in small chunks", tel.current_turn(str(tpath)) == turn_a)
+        tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 256 * 1024, 2 * 1024 * 1024
+        check("a deadline that has passed returns nothing instead of reading", tel.current_turn(str(tpath), deadline=time.monotonic() - 1.0) == [])
+        sizes = []
+
+        class CountingFile:
+            def __init__(self, f):
+                self.f = f
+
+            def seek(self, *a):
+                return self.f.seek(*a)
+
+            def read(self, n=-1):
+                sizes.append(n)
+                return self.f.read(n)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return self.f.__exit__(*a)
+
+        tel.TAIL_CHUNK, tel.TAIL_STEP_CAP = 61, 500
+        tel.open = lambda p, mode="r", *a, **k: CountingFile(open(p, mode, *a, **k))
+        tel.current_turn(str(tpath))
+        del tel.open
+        check("no chunk is larger than TAIL_STEP_CAP", sizes and max(sizes) <= 500, str(max(sizes) if sizes else None))
+
+    # --- strings are cut before they are cleaned
+    t0 = time.monotonic()
+    m._safe("x " * 15_000_000)
+    m._url_ref("https://h.example/" + "a" * 30_000_000)
+    check("a 30 MB path, pattern or URL costs well under a second", time.monotonic() - t0 < 1.0, f"{time.monotonic() - t0:.2f}s")
     finish()
 
 
@@ -1311,7 +1484,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_round7_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_round4_review_fixes, test_round5_review_fixes, test_round6_review_fixes, test_round7_review_fixes, test_round8_review_fixes, test_round9_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()

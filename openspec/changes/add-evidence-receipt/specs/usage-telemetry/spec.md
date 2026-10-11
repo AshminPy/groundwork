@@ -20,5 +20,9 @@ The per-turn record SHALL carry, under `observed`, the evidence-confidence estim
 - **THEN** the turn still starts at the human prompt, so edits and failures from before the compaction count toward the estimate and the `observed` counts
 
 #### Scenario: The summariser request of a compaction
-- **WHEN** a compaction inserts its summariser request as a user entry (`sdk`-originated, opening "Below is a conversation log from a Claude Code coding session") before the boundary and the summary
+- **WHEN** a compaction inserts its summariser request as a user entry (`sdk`-originated, opening "Below is a conversation log from a Claude Code coding session", or followed within 200 entries, bookkeeping entries included, by the boundary) before the boundary and the summary
 - **THEN** it does not start a turn, while a `claude -p` prompt (also `sdk`) and a typed prompt still do
+
+#### Scenario: A long run of blanks in the model's answer
+- **WHEN** the model's final message starts with 20,000 spaces or tabs, or `Overall:` is followed by thousands of blank lines
+- **THEN** the Stop hook still finishes well inside its timeout and writes the record, because the status regexes bound their blank runs; and a transcript read that outlasts the hook deadline yields a record without observed facts rather than a lost one

@@ -111,14 +111,14 @@ The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic
 
 #### Scenario: A failed runtime check
 - **WHEN** a recognised runtime check (a `curl --fail` health check, `kubectl get`) fails after an earlier success, or is the only thing the turn did
-- **THEN** the confidence is `LOW`, never `HIGH` and never `NONE`, until that same check (same words and target) succeeds; a different successful check, such as `kubectl get pods` after a failed health `curl`, does not clear it
+- **THEN** the confidence is `LOW`, never `HIGH` and never `NONE`, until that same command line (redirections aside) succeeds; a different successful check, such as `kubectl get pods` after a failed health `curl`, or the same command aimed at another target (`--project=dev`, `-ndev`, `KUBECONFIG=/dev`), does not clear it
 
 #### Scenario: A failure seen through a pipe is cleared by the same tests run plainly
 - **WHEN** `pytest tests/a 2>&1 | tail -3` fails and `pytest tests/a` then passes
 - **THEN** the failure is cleared, because where output goes is not part of what is tested; a pass of different tests does not clear it
 
 #### Scenario: A refused call is not evidence
-- **WHEN** a Bash call returns an error that is a hook refusal, `Permission to use Bash with command … has been denied`, a denial by the built-in safety check or the auto-mode classifier, or the person's rejection
+- **WHEN** a Bash call returns an error that is a hook refusal, `Permission to use Bash [with command …] has been denied`, a denial by the built-in safety check or the auto-mode classifier, an approval prompt (`This command requires approval`), `<tool_use_error>Blocked:`, or the person's rejection, or its result entry carries a `toolDenialKind`
 - **THEN** the call is ignored: it is not a failed check, a failed test, a change or a tool error
 
 #### Scenario: Words in a runtime command's output

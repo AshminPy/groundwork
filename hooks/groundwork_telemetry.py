@@ -81,6 +81,7 @@ TOKEN_SHAPED = re.compile(r"[a-z0-9_-]*\d[a-z0-9_-]*")  # a "word" containing a 
 PLAYBOOKS = {"RESEARCH", "EXPLAIN", "DESIGN", "PLAN", "IMPLEMENT", "TROUBLESHOOT", "VALIDATE", "AUDIT", "DEPLOY", "DOCUMENT"}
 TAIL_CHUNK = 256 * 1024          # first backward read; doubles each step
 TAIL_CAP = 32 * 1024 * 1024      # never read more than this from the end of the transcript
+TAIL_STEP_CAP = 2 * 1024 * 1024  # no chunk is larger than this, so the deadline is looked at often enough
 HOOK_START = time.monotonic()    # the Stop hook has a 10 s timeout (scripts/merge_settings.py)
 HOOK_BUDGET_S = 7.0              # evidence is derived only with time left under this, so it can never cost the existing record
 EVIDENCE_BUDGET_S = 3.0          # the most derive_evidence may use
@@ -89,10 +90,10 @@ HEADLINE = re.compile(r"^\s*Groundwork\s+\S+\s*[·\-–—|]\s*([A-Za-z]+)\s*$",
 # Outcome — model-declared, read from the response's own status language (output-contract.md Layer 1
 # and the playbooks' Status / Result vocabularies). Precedence inside a sentence: failed > blocked >
 # partial > complete; "not done"-style negations count as partial; nothing recognisable -> unknown.
-OVERALL = re.compile(r"Overall:\s*\**\s*(COMPLETE|PARTIAL|BLOCKED|PLANNED|FAILED)", re.IGNORECASE)
-STATUS_HEAD = re.compile(r"(?:^|\n)[ \t]*(?:#+[ \t]*)?\**[ \t]*(?:Status|Result)[ \t]*\**[ \t]*:?[ \t]*\**[ \t]*(.*)", re.IGNORECASE)
+OVERALL = re.compile(r"Overall:\s{0,20}\**\s{0,20}(COMPLETE|PARTIAL|BLOCKED|PLANNED|FAILED)", re.IGNORECASE)  # runs of blanks are bounded: adjacent \s* were quadratic on a model answer that starts with 20,000 spaces
+STATUS_HEAD = re.compile(r"(?:^|\n)[ \t]{0,20}(?:#+[ \t]{0,20})?\**[ \t]{0,20}(?:Status|Result)[ \t]{0,20}\**[ \t]{0,20}:?[ \t]{0,20}\**[ \t]{0,20}(.*)", re.IGNORECASE)
 NOTHING_LEFT = re.compile(r"\b(?:next(?: action| step)?|your move|remaining|open items?)\s*\**\s*:\s*\**\s*(?:none|nothing)\b", re.IGNORECASE)
-LEAD_HEAD = re.compile(r"(?:^|\n)[ \t]*(?:#+[ \t]*)?\**[ \t]*(?:Answer|Recommendation|Deliverable|Plan|Goal)[ \t]*\**[ \t]*:?", re.IGNORECASE)
+LEAD_HEAD = re.compile(r"(?:^|\n)[ \t]{0,20}(?:#+[ \t]{0,20})?\**[ \t]{0,20}(?:Answer|Recommendation|Deliverable|Plan|Goal)[ \t]{0,20}\**[ \t]{0,20}:?", re.IGNORECASE)
 BOLD_LEAD = re.compile(r"^\s*\*\*(?:(?:my )?(?:call|finding|verdict|answer|result|status)\s*:\s*)?(.+?)\*\*", re.IGNORECASE)
 # A plain opening line that starts with a state word is explicit status language too ("Complete. subtract() added…").
 STATE_LEAD = re.compile(r"^\s*(?:complete[d]?|partial(?:ly)?|blocked|failed|fixed|done|deployed|resolved|root cause found|not verified|pass|fail|verified)\b[.:—-]", re.IGNORECASE)
@@ -218,42 +219,47 @@ def _entry_text(e: dict) -> str:
 
 def is_compaction_request(entries: list, i: int) -> bool:
     """Is entries[i] the summariser request of a context compaction? By its opening words, or because it is SDK-originated and a compaction
-    boundary follows within a few entries before the model uses any tool (an `sdk` entry alone is not enough: `claude -p` prompts are `sdk` too)."""
+    boundary follows within 200 entries before the model uses any tool or another prompt arrives (an `sdk` entry alone is not enough: `claude -p` prompts are `sdk` too)."""
     e = entries[i]
+    if e.get("turnOrigin") != "sdk":
+        return False  # a typed prompt may quote the summariser's words; only an SDK-originated entry is a request
     if _entry_text(e).lstrip().startswith(_COMPACTION_PROMPT):
         return True
-    if e.get("turnOrigin") != "sdk":
-        return False
-    for later in entries[i + 1:i + 21]:
+    for later in entries[i + 1:i + 201]:  # bookkeeping entries (attachment, last-prompt, …) sit between the request and the boundary: 34 to 37 entries in the real ones
         if later.get("subtype") == "compact_boundary" or later.get("isCompactSummary"):
             return True
         content = (later.get("message") or {}).get("content")
         if later.get("type") == "assistant" and isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
             return False
+        if is_human_prompt(later):
+            return False  # another prompt ends the look-ahead
     return False
 
 
-def current_turn(transcript_path: str) -> list:
+def current_turn(transcript_path: str, deadline: float | None = None) -> list:
     """Entries after the last human prompt (a 'user' entry that carries no tool_result).
 
-    Reads the transcript backwards in growing chunks and stops at the first human prompt it
-    meets, so cost follows the size of the current turn, not of the whole session. At most
-    TAIL_CAP bytes are read; a turn longer than that contributes only its tail (facts are then
-    a lower bound, which is acceptable for aggregate reporting)."""
+    Reads the transcript backwards in growing chunks (each chunk is parsed once, never again) and stops at the first
+    human prompt it meets, so cost follows the size of the current turn, not of the whole session. At most TAIL_CAP
+    bytes are read; a turn longer than that contributes only its tail (facts are then a lower bound, which is acceptable
+    for aggregate reporting). With a `deadline` (time.monotonic()), reading stops there and nothing is returned: the
+    record is then written without observed facts, exactly as for an unreadable transcript."""
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as f:
-            pos, buf, step = size, b"", TAIL_CHUNK
+            pos, step, carry, entries = size, TAIL_CHUNK, b"", []
             while True:
+                if deadline is not None and time.monotonic() > deadline:
+                    return []
                 take = min(step, pos, TAIL_CAP - (size - pos))  # never more than TAIL_CAP in total
                 pos -= take
                 f.seek(pos)
-                buf = f.read(take) + buf
-                step = min(step * 2, TAIL_CAP)
-                lines = buf.split(b"\n")
+                lines = (f.read(take) + carry).split(b"\n")
                 if pos > 0:
-                    lines = lines[1:]  # first piece may be a partial line; it completes next round
-                entries = []
+                    carry, lines = lines[0], lines[1:]  # the first piece may be a partial line; it completes with the next, older chunk
+                else:
+                    carry = b""
+                parsed = []
                 for raw in lines:
                     raw = raw.strip()
                     if not raw:
@@ -263,16 +269,14 @@ def current_turn(transcript_path: str) -> list:
                     except Exception:
                         continue
                     if isinstance(e, dict):
-                        entries.append(e)
-                start = None
-                for i in range(len(entries) - 1, -1, -1):
-                    if is_human_prompt(entries[i]) and not is_compaction_request(entries, i):
-                        start = i
-                        break
-                if start is not None:
-                    return entries[start:]
+                        parsed.append(e)
+                entries = parsed + entries
+                for i in range(len(parsed) - 1, -1, -1):
+                    if is_human_prompt(parsed[i]) and not is_compaction_request(entries, i):
+                        return entries[i:]
                 if pos == 0 or size - pos >= TAIL_CAP:
                     return entries
+                step = min(step * 2, TAIL_STEP_CAP)
     except Exception:
         return []
 
@@ -405,7 +409,7 @@ def build_record(data: dict, text: str) -> dict:
     `declared` = what the model stated in its block and status sentence — recorded, not verified,
     except that agent count / mode / roles are reconciled against observed Agent calls (authoritative)."""
     meta = parse_metadata(text)
-    entries = current_turn(data.get("transcript_path", ""))
+    entries = current_turn(data.get("transcript_path", ""), deadline=HOOK_START + HOOK_BUDGET_S)
     facts = turn_facts(entries)
     if not meta and not facts["tools"]:
         return {}  # conversational reply, no tool use: nothing to record

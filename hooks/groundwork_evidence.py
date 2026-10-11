@@ -71,6 +71,8 @@ Known gaps, stated rather than hidden (the label can be too high in these cases)
   * only the last 32 MB of a transcript are read: in a turn longer than that, earlier failures and changes are not
     seen (the label can be too high); a turn of 40 MB measured 1.0 s, a 104 MB transcript with a short turn 0.12 s;
   * calls are ordered by when they were issued; parallel calls in one message have no defined effect order;
+  * the work budget is checked between units of work, not inside one pass over a result (a 30 MB result under several
+    distinct runners measured 4.7 s in the Stop hook);
   * a failing `&&` chain marks every segment before the last as failed (conservative); piped `go test | tail` and mocha
     failures are not seen; the receipt command spelled by path and `SendMessage` count as changes;
   * only the first 4,000 characters of a command or reference text are considered, so a secret that straddles that
@@ -245,7 +247,7 @@ _READ_ERROR = re.compile(
     r"command not found|is a directory|invalid option|unrecognized option|usage:")
 PRIORITY = {"review": 0, "test": 1, "runtime": 2, "repo": 3, "url": 4, "mcp": 5, "file": 6, "search": 7, "command": 8}
 
-_RESULT_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?REVIEW RESULT(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
+_RESULT_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?REVIEW RESULT(?:\*\*)?[ \t\r]*$", re.MULTILINE | re.IGNORECASE)
 _FIELD_KEY = re.compile(r"[A-Za-z][A-Za-z -]*")
 
 
@@ -278,10 +280,10 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*\S+(?:\s+\S+)?"), "authorization: [redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
     (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*(?:[^'\"\n]|(?<==)\"[^\"\n]*\")+"), "cookie: [redacted]"),  # up to the closing quote (a quoted value after "=" is inside it): browser-copied headers hold several cookies
-    (re.compile(r"(?i)(?:^|(?<=\s))(?:-u|--user|--proxy-user)\s+\S+"), "-u [redacted]"),
+    (re.compile(r"(?i)(?:^|(?<=\s))(?:-[A-Za-z]*u(?:\s+|(?=[^\s=-]+:))|--user\s+|--proxy-user\s+)\S+"), "-u [redacted]"),  # also clustered (-fsSu) and glued (-uuser:pw)
+    (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]*E(?:\s+(?=\S*:)|(?=\S*:))|--pass(?:\s+|=)|--proxy-pass(?:\s+|=)|--key-pass(?:\s+|=))\S+"), "-E [redacted]"),  # -E file:password, --pass
     (re.compile(r"(?:^|(?<=\s))(?:-[A-Za-z]*b(?:\s+|=)|-[A-Za-z]*b(?=[^\s=]*=)|--cookie(?:\s+|=))(?:'[^']*'|\"[^\"]*\"|\S+)"), "-b [redacted]"),  # also clustered (-fsSb) and glued (-bsid=…)
     (re.compile(r"(?:^|(?<=\s))(--cert[= ]\s*[^\s:]*:)\S+"), r"\1[redacted]"),  # --cert file:password
-    (re.compile(r"(?:^|(?<=\s))-u[^\s:=]+:\S+"), "-u [redacted]"),  # -uuser:pw, glued
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
     (re.compile(r"(?i)\b\w{0,30}(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)\w{0,30}\s*[=:]\s*\S+"),
@@ -327,7 +329,7 @@ def _redact(s: str) -> str:
 
 def _safe(s, n: int = REF_CAP) -> str:
     """Redact first, then clip: a secret cut in half by the cap would no longer match its pattern."""
-    return _clip(_redact(_clip(s, 4000)), n)  # 4000 bounds the regex work per reference (every pattern is bounded)
+    return _clip(_redact(_clip(str(s)[:16_000], 4000)), n)  # 16,000 raw characters bound the cleaning, 4000 clean ones the regex work (every pattern is bounded)
 
 
 def _command_word(seg: str) -> str:
@@ -506,10 +508,11 @@ def _read_ok(i: int, segs: list, conns: list, pipefail: bool, is_error: bool, te
 
 
 def _runtime_key(segment: str) -> tuple:
-    """Which check a runtime command is: its words without flags and without where output goes, so `curl -f URL 2>&1` and `curl -f URL` are one
-    check and `kubectl get pods` after a failed `curl -f URL` is another."""
-    words = segment[_PREFIX.match(segment).end():].split()
-    return tuple(w for w in words if not w.startswith("-") and not re.match(r"\d*[<>]|&>", w))
+    """Which check a runtime command is: its exact words except where output goes, so `curl -f URL 2>&1` and `curl -f URL` are one check and
+    `kubectl get pods` after a failed `curl -f URL` is another. Flags stay in the key (`--project=prod`, `-n prod`, `-nprod`, `KUBECONFIG=/k/prod
+    kubectl …`): the same command aimed at another environment is another check, and a retry with other flags is too (the label stays LOW until the
+    exact command succeeds)."""
+    return tuple(w for w in segment.split() if not re.match(r"\d*[<>]|&>", w))
 
 
 def _starts(pattern, segment: str) -> bool:
@@ -671,13 +674,19 @@ def _tool_words(tool: str) -> set:
     return {w.lower() for w in re.split(r"[_\-\s]+|(?<=[a-z])(?=[A-Z])", tool) if w}
 
 
-_REFUSED = re.compile(r"PreToolUse:\S+ hook error|Permission (?:to use \S+ with|for this (?:command|action) was denied)|The user doesn't want to proceed with this tool use")
+_REFUSED = re.compile(
+    r"PreToolUse:\S+ hook error|Permission (?:to use \S+ (?:with|has been denied)|for this (?:command|action) was denied)"
+    r"|The user doesn't want to proceed with this tool use|The server-side auto mode classifier"
+    r"|This (?:Bash )?command (?:requires approval|contains multiple operations)"
+    r"|(?:A variable in braces|Quoted text) in this command can't be checked before it runs|<tool_use_error>Blocked:")
 
 
 def _blocked_by_policy(is_error: bool, text: str) -> bool:
     """A PreToolUse hook (e.g. a fact-forcing gate), the permission system or the person refused the call: it never ran, so it is not evidence.
-    The wordings are read from real transcripts (hook banner, "Permission to use Bash with command …", "Permission for this command was denied …",
-    the auto-mode classifier); the user-rejection sentence is from the documented tool-result text and not seen in the local transcripts (UNVERIFIED)."""
+    The primary signal is the transcript entry's own `toolDenialKind` field (permission-rule, user-rejected, automode-unavailable, automode-blocked;
+    read from the local transcripts, absent from the official docs: UNVERIFIED there). The wordings are the fallback: the hook banner, "Permission to
+    use Bash [with command …] has been denied", "Permission for this command was denied …", the auto-mode classifier, "requires approval" and the
+    "can't be checked before it runs" prompts, "<tool_use_error>Blocked:"; the user-rejection sentence is not seen in any local transcript (UNVERIFIED)."""
     return is_error and _REFUSED.match(text) is not None
 
 
@@ -775,6 +784,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
     uses = {}      # tool_use_id -> (name, input)
     order = []     # tool_use_ids in call order
     results = {}   # tool_use_id -> (is_error, text)
+    refused = set()  # tool_use_ids whose result entry carries a toolDenialKind: the permission system or the person refused the call
     for n, e in enumerate(entries):
         if n % 2048 == 0 and time.monotonic() > deadline:
             raise EvidenceBudgetExceeded(f"more than {budget_s:g} s of work")
@@ -789,6 +799,8 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
                 order.append(b["id"])
             elif b.get("type") == "tool_result" and b.get("tool_use_id"):
                 results[b["tool_use_id"]] = (bool(b.get("is_error")), _text(b.get("content")))
+                if e.get("toolDenialKind"):
+                    refused.add(b["tool_use_id"])
 
     refs = {}
     dropped = [0]
@@ -823,7 +835,7 @@ def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
         if uid not in results:
             continue  # still running, or never answered: no outcome, no evidence
         is_error, text = results[uid]
-        if _blocked_by_policy(is_error, text):
+        if uid in refused or _blocked_by_policy(is_error, text):
             continue
         if is_error:
             sig["tool_errors"] += 1
