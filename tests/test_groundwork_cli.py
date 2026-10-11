@@ -424,7 +424,7 @@ def test_copilot_dispatches_not_reimplements() -> None:
                              env={k: v for k, v in e.env.items() if not k.startswith("TMUX")}, timeout=30)
         check("outside tmux both refuse identically and point at --stdin (exit 1)", outside.returncode == via.returncode == 1 and outside.stderr == via.stderr and "--stdin" in via.stderr, via.stderr)
         top = e.run_cli("--help")
-        check("groundwork --help lists the copilot subcommand", "copilot" in top.stdout, top.stdout[:600])
+        check("groundwork --help lists the copilot subcommand as its own entry", __import__("re").search(r"(?m)^\s+copilot\s+\S", top.stdout) is not None, top.stdout[:600])
     finish()
 
 

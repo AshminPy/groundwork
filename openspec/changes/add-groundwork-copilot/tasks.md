@@ -1,16 +1,18 @@
 ## 1. Implementation
-- [x] 1.1 `scripts/groundwork_copilot.py`: terminal resolution (tmux pane + controlling-tty proof), bounded capture, ANSI strip, invocation-line cut, secret redaction, project facts, fenced prompt, tool-less model call, `--stdin`, `--dry-run`, `--json`
+- [x] 1.1 `scripts/groundwork_copilot.py`: terminal resolution (tmux pane + controlling-tty proof), bounded capture, ANSI strip, invocation-line cut, secret redaction, project facts, fenced prompt, contained model call (`--safe-mode --tools ""`, prompt on stdin, scratch cwd), `--stdin`, `--dry-run`, `--json`
 - [x] 1.2 `scripts/groundwork_cli.py`: `groundwork copilot` pass-through; `install.sh` copies the module
 - [x] 1.3 README, ARCHITECTURE, CHANGELOG
 
 ## 2. Verification
 - [x] 2.1 Unit tests (text handling, prompt/call flags, refusals, stdin path, project facts)
 - [x] 2.2 Real tmux test: two panes/projects/failures, isolation both ways, hostile instruction not executed, secret redacted, spoofed pane id refused, dry-run sends nothing
-- [x] 2.3 Mutation checks of ten safety clauses (all caught)
+- [x] 2.3 Mutation checks of the safety clauses (26 mutants, all caught after the review fixes)
 - [x] 2.4 Real model call on a genuine traceback in a real pane (answer grounded in the pane; cause the output could not show reported UNKNOWN)
 - [x] 2.5 CLI dispatch test
 - [x] 2.6 Full suite and `openspec validate --all --strict` against the main baseline
-- [ ] 2.7 Independent fresh-context review; fix MUST FIX; confirmation review
+- [x] 2.7a Independent security + correctness reviews (13 MUST FIX: tools not inert, redaction after cutting, redaction gaps, ReDoS, unredacted facts outside the fence, fsmonitor, prompt in argv, non-UTF-8 stdin, multi-line errors, unproven clauses); all fixed
+- [ ] 2.7b Fresh confirmation review
+- [x] 2.9 Live containment check against the real claude (project hook + MCP server canary; tool and MCP lists empty with `--safe-mode`, 30 tools / 2 servers without)
 - [ ] 2.8 Owner trial on macOS terminals (RUNTIME VALIDATION REQUIRED); iTerm2 / Terminal.app readers not built
 
 ## 3. Deferred by design
