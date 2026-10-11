@@ -16,8 +16,12 @@ The system SHALL derive, for the current turn of a session transcript, a list of
 The system SHALL report an evidence confidence of `NONE`, `LOW`, `MEDIUM` or `HIGH` computed by a fixed rule from recognised signals, and SHALL document that it is an estimate that can be too high where the system cannot see. A passing test run, a successful runtime observation and an independent review SHALL count only if nothing that could change the working tree came after them: an Edit/Write, a non-review subagent, an ambiguous Bash command, or a Bash command that is not on a short list of known read-only commands or that redirects output to a file. `HIGH` requires a passing last test run, a successful runtime observation, an inspected repository or external source, and independent reviews since the last change that all reported zero MUST FIX; `MEDIUM` requires a passing test run, a successful runtime observation, or a fetched external source, with no failing test, review finding or unverified change; `LOW` applies to inspection only or to any failing check, review finding, or change nothing verified; `NONE` applies when nothing was inspected or run. A test failure SHALL be cleared only by a later pass of the same scope or an unscoped pass of the same runner. A test-shaped run whose result cannot be attributed SHALL withdraw an earlier pass. The system SHALL report `UNKNOWN` instead of a label when the transcript cannot be read.
 
 #### Scenario: Unknown actions never raise the label
-- **WHEN** a turn's only command is one the system does not recognise
-- **THEN** the confidence is `NONE`
+- **WHEN** a turn's only action is a command, subagent, skill or tool the system does not recognise
+- **THEN** the confidence is `LOW` (it may have changed the tree and nothing verified it), never `NONE` and never higher
+
+#### Scenario: Every possible change is counted
+- **WHEN** a web page was fetched, tests passed, and then a heredoc write, an unparseable command, a non-review subagent, a local MCP writer or editor, a skill or an unknown tool ran
+- **THEN** the confidence is `LOW`, exactly as for an `Edit`
 
 #### Scenario: A failing check caps the label
 - **WHEN** a source was fetched successfully and the last recognised test run failed
@@ -47,7 +51,7 @@ No permission, hook decision, block or approval SHALL depend on the estimate or 
 - **THEN** the Stop hook records that fact and does not block the stop
 
 ### Requirement: Commands are credited only when they parse unambiguously and really run or observe
-The system SHALL credit a test or runtime command only when the Bash command splits unambiguously into segments, quotes respected, the command's exit status can speak for that segment, and the command actually runs tests or observes a system. Heredocs, command or process substitution, `${…}`, `$'…'`, unquoted comments, a backslash-newline continuation, text over 20,000 characters, subshells and groups, background jobs, unbalanced quotes, segments starting with `exit`, `return`, `trap`, `eval`, `exec`, `!` or a control-flow keyword (also when the word is quoted or escaped), and any `||` in the chain SHALL result in no credit and SHALL count as a possible change. Invocations that only list, print help or version, collect (`--collect-only`, `--collectonly`, `--listTests`) or dry-run (`--notest`), scripts that merely live under a tests directory, runs with no output or only skips, and runs that did not finish (background) SHALL NOT be credited as test runs. Runtime credit SHALL exclude local-configuration listings and `gh`, and `curl` SHALL need `--fail`, an http(s) URL and no POST or upload option in short or long form. A segment followed only by `;` or a newline SHALL NOT be credited unless it is last. A recognised test command whose output goes only through pure `tail`, `head`, `tee`, `cat` or `wc` filters SHALL be judged by the runner's own pass/fail summary, and by exit status under `set -o pipefail`.
+The system SHALL credit a test or runtime command only when the Bash command splits unambiguously into segments, quotes respected, the command's exit status can speak for that segment, and the command actually runs tests or observes a system. Heredocs, command or process substitution, `${…}`, `$'…'`, unquoted comments, a backslash-newline continuation, text over 20,000 characters, subshells and groups, background jobs, unbalanced quotes, segments starting with `exit`, `return`, `trap`, `eval`, `exec`, `!` or a control-flow keyword (also when the word is quoted or escaped), and a test or runtime segment in a chain with `||` SHALL NOT be credited (the other segments of the chain are judged on their own). Invocations that only list, print help or version, collect (`--collect-only`, `--collectonly`, `--listTests`) or dry-run (`--notest`), scripts that merely live under a tests directory, runs with no output (including the harness's "no output" placeholder), a "nothing to be done" / "no tests ran" notice, `go test` packages whose only result is `[no tests to run]`, or only skips, and runs that did not finish (background) SHALL NOT be credited as test runs. Runtime credit SHALL exclude local-configuration listings and `gh`, and `curl` SHALL need `--fail`, an http(s) URL and no POST or upload option in short or long form (options are read one by one, case-sensitively, including inside a cluster such as `-fsSd`), `wget` SHALL need `--spider`, and a download that saves a file (`-o`/`-O`/`--output`/`--remote-name`, or wget without `--spider`) SHALL count as a change; `gcloud` and `az` verbs SHALL match as whole words. A segment followed only by `;` or a newline SHALL NOT be credited unless it is last. A recognised test command whose output goes only through pure `tail`, `head`, `tee`, `cat` or `wc` filters SHALL be judged by the runner's own pass/fail summary, and by exit status under `set -o pipefail`.
 
 #### Scenario: A quoted connector is not a command boundary
 - **WHEN** a command is `echo "a && pytest"` and it succeeds
@@ -62,7 +66,7 @@ The system SHALL credit a test or runtime command only when the Bash command spl
 - **THEN** no test run is recorded
 
 #### Scenario: Differential check against a real shell
-- **WHEN** about 1,000 compositions of simple commands are run in a real bash with a fake `pytest` that can pass or fail
+- **WHEN** 5,292 compositions of simple commands are run in a real bash with a fake `pytest` that can pass or fail
 - **THEN** none is credited as a pass unless the fake `pytest` ran and a failing one would not have been credited
 
 ### Requirement: Only reviews that report a verdict count
@@ -93,3 +97,14 @@ The system SHALL keep each source's identity (file path, URL host and path, `own
 #### Scenario: Over-claim is flagged
 - **WHEN** the last response states `Confidence: HIGH` and the estimate is `MEDIUM`
 - **THEN** the output says the declared label exceeds what was observed
+
+### Requirement: Bounded work and a readable failure
+The estimate SHALL be derived within a fixed work budget (3 seconds of monotonic time): when the budget is spent `derive_evidence` raises `EvidenceBudgetExceeded`, the Stop hook records no observed evidence for the turn, and `groundwork evidence` prints `UNKNOWN` with the reason. A Bash command of more than 20,000 characters or more than 50 segments SHALL NOT be parsed and SHALL NOT be credited. Parsing of a review result SHALL be linear in its length. `groundwork evidence` SHALL NOT print a traceback for an unreadable, unsearchable or over-long transcript path, a lone surrogate in a printed reference, or an output encoding that cannot show the receipt's punctuation.
+
+#### Scenario: Hostile output shapes
+- **WHEN** a result is 30,000 blank lines after `npm test`, or a REVIEW RESULT block is followed by thousands of space-padded lines, or forty 20,000-character commands of 2,850 segments each are run
+- **THEN** the turn is analysed in well under two seconds, and none of those commands is credited
+
+#### Scenario: A redirect notice
+- **WHEN** a WebFetch result is a `REDIRECT DETECTED` notice
+- **THEN** it is neither an external source nor a listed reference

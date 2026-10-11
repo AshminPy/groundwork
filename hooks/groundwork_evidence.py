@@ -42,6 +42,11 @@ deliberately builds transcript content to look like evidence (a command crafted 
 REVIEW RESULT block); that residual is the same one the review gate documents.
 
 Known gaps, stated rather than hidden (the label can be too high in these cases):
+  * a commit whose message comes from a `$(cat <<'EOF' …)` heredoc is not parsed (it withdraws earlier verification),
+    `terraform plan` and `kubectl apply --dry-run=none` match the shared test-command pattern, and a
+    reviewer-named subagent that edits files is not seen as a change; the transcript file is written
+    asynchronously by Claude Code and may lag the current turn (official hooks reference), so the last edit may
+    not be in it yet and the label can then be too high;
   * a Bash command is judged from its text: environment effects (PATH, aliases, functions or files
     defined by an earlier `source`/`export`), arguments that expand from variables, and tools that
     wrap others (`docker run … pytest`, `make` targets that do not test) are not modelled;
@@ -71,7 +76,9 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
+import time
 import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -87,6 +94,9 @@ RANK = {name: i for i, name in enumerate(LABELS)}
 MAX_REFS = 60
 REF_CAP = 140
 COLLECT_PER_KIND = 500  # bound memory on a huge turn without letting reads crowd out tests/reviews
+MAX_COMMAND_CHARS = 20_000  # a longer command is not parsed and is not credited
+MAX_SEGMENTS = 50           # more pieces than this is not a command anyone reads: not parsed (the per-segment rescans are quadratic)
+WORK_BUDGET_S = 3.0         # derive_evidence gives up (EvidenceBudgetExceeded) after this much monotonic time; the Stop hook's timeout is 10 s
 
 READ_TOOLS = {"Read", "LS", "NotebookRead"}
 SEARCH_TOOLS = {"Grep", "Glob"}
@@ -99,7 +109,8 @@ _MUTATING_WORDS = {
     "create", "update", "delete", "remove", "write", "send", "post", "put", "patch", "push", "merge", "execute",
     "run", "trigger", "upsert", "insert", "set", "add", "archive", "close", "reply", "forward", "share", "move",
     "copy", "apply", "import", "upload", "submit", "assign", "cancel", "approve", "label", "unlabel", "mark",
-    "trash", "restore", "duplicate", "convert", "spawn", "stop", "fork", "enable", "disable"}
+    "trash", "restore", "duplicate", "convert", "spawn", "stop", "fork", "enable", "disable",
+    "replace", "edit", "rename", "clear", "truncate", "append", "overwrite", "save", "commit", "checkout", "reset"}
 _REVIEW_KIND = re.compile(r"(?<![a-z])review")  # "preview-writer" is not a reviewer
 
 _PREFIX = re.compile(r"(?:\w+=\S*\s+)*(?:python3?\s+-m\s+|uv\s+run\s+|poetry\s+run\s+|npx\s+)?")
@@ -109,9 +120,9 @@ _REPO_CMD = re.compile(
 # A deliberately conservative list: a command not matched here is simply not counted as runtime.
 _RUNTIME_CMD = re.compile(
     r"(?:kubectl\s+(?:get|describe|logs|top|rollout\s+status)|helm\s+(?:status|list|get)|"
-    r"gcloud\s+(?!config\b|auth\b|info\b|components\b|help\b|version\b|init\b|topic\b)(?:\S+\s+)*?(?:describe|list)|"
+    r"gcloud\s+(?!config\b|auth\b|info\b|components\b|help\b|version\b|init\b|topic\b)(?:\S+\s+)*?(?:describe|list)(?=\s|$)|"
     r"aws\s+(?!configure\b|help\b)\S+\s+(?:describe|list|get)\S*|"
-    r"az\s+(?!account\b|configure\b|config\b|version\b|login\b|help\b)(?:\S+\s+)*?(?:show|list)|"
+    r"az\s+(?!account\b|configure\b|config\b|version\b|login\b|help\b)(?:\S+\s+)*?(?:show|list)(?=\s|$)|"
     r"docker\s+(?:ps|logs|inspect|stats)|systemctl\s+status|journalctl|curl|wget|"
     r"groundwork\s+doctor)\b")
 _PIPEFAIL = re.compile(r"set\s+-[a-z]*o\s+pipefail\b")
@@ -129,11 +140,94 @@ _NO_RUN = re.compile(
     r"(?:^|\s)(?:--collect-only|--co|--version|--help|--fixtures|--fixtures-per-test|--markers|--setup-plan|"
     r"--collectonly|--setup-only|--no-run|--list|--list-sessions|--listenvs|--listenvs-all|--notest|--listTests|-help|-list|-version|-h|-V|--client)"
     r"(?:\s|=|$)")
-_CURL_FAIL = re.compile(r"(?:^|\s)(?:--fail(?:-with-body)?|-[A-Za-z]*f[A-Za-z]*)(?:\s|$)")
-_CURL_ACTION = re.compile(r"(?:^|\s)(?:-X\s*(?!GET\b|HEAD\b)\w+|--request(?:=|\s+)(?!GET\b|HEAD\b)\w+|--method(?:=|\s+)(?!GET\b|HEAD\b)\w+|"
-                          r"-d|--data\S*|--json|--post-data|--post-file|--body-data|--body-file|-F|--form\S*|-T|--upload-file)(?:\s|=|$)", re.I)
+_FETCH_LONG_ACTION = {"--data", "--data-ascii", "--data-binary", "--data-raw", "--data-urlencode", "--json", "--form", "--form-string",
+                      "--upload-file", "--post-data", "--post-file", "--body-data", "--body-file"}
+_CURL_VALUE_OPTS = set("AbCeEHKmPQrtuUwxyYz")  # short options that take a value: the rest of the cluster, or the next word, is that value
+_NO_FILE = ("/dev/null", "-")
+
+
+def _fetch_options(rest: str):
+    """(fail, action, writes) for a curl or wget command line, read option by option: a short-option cluster such as
+    `-fsSd` is scanned character by character (case matters: -f is --fail, -F is a form upload), long options by name,
+    and a value such as `-X POST` or `-o file` is never mistaken for an option. `action` = a POST, upload or other
+    non-GET request; `writes` = the response is saved to a file. An unreadable command line is both (nothing is credited)."""
+    try:
+        tokens = shlex.split(rest)
+    except ValueError:
+        return False, True, True
+    fail = action = writes = False
+    i = 1  # tokens[0] is the command word
+
+    def value(attached: str):
+        nonlocal i
+        if attached:
+            return attached
+        v = tokens[i] if i < len(tokens) else ""
+        i += 1
+        return v
+
+    while i < len(tokens):
+        tok = tokens[i]
+        i += 1
+        if tok.startswith("--"):
+            name, eq, val = tok.partition("=")
+            if name in ("--fail", "--fail-with-body"):
+                fail = True
+            elif name in _FETCH_LONG_ACTION:
+                action = True
+            elif name in ("--request", "--method"):
+                if value(val if eq else "").upper() not in ("GET", "HEAD"):
+                    action = True
+            elif name in ("--output", "--output-document", "--dump-header", "--cookie-jar"):
+                if value(val if eq else "") not in _NO_FILE:
+                    writes = True
+            elif name in ("--remote-name", "--remote-name-all"):
+                writes = True
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            j = 1
+            while j < len(tok):
+                c = tok[j]
+                j += 1
+                if c == "f":
+                    fail = True
+                elif c in "dFT":
+                    action = True
+                    break
+                elif c == "X":
+                    if value(tok[j:]).upper() not in ("GET", "HEAD"):
+                        action = True
+                    break
+                elif c == "O":
+                    writes = True
+                elif c in "ocD":
+                    if value(tok[j:]) not in _NO_FILE:
+                        writes = True
+                    break
+                elif c in _CURL_VALUE_OPTS:
+                    value(tok[j:])
+                    break
+    return fail, action, writes
+
+
+def _fetch_word(segment: str) -> str:
+    word = _first_word(segment[_PREFIX.match(segment).end():])
+    return word if word in ("curl", "wget") else ""
+
+
+def _fetch_writes(segment: str) -> bool:
+    """curl/wget that saves the response to a file: -o/-O/--output/--remote-name/-D/-c (but not to /dev/null or -), and any
+    wget without --spider (wget downloads by default)."""
+    word = _fetch_word(segment)
+    if not word:
+        return False
+    rest = segment[_PREFIX.match(segment).end():]
+    if word == "wget" and "--spider" not in rest.split():
+        return True
+    return _fetch_options(rest)[2]
+
+
 _RISKY_ENV = re.compile(r"(?:^|\s)(?:PATH|PYTHONPATH|PYTHONSTARTUP|PYTEST_\w+|LD_\w+|DYLD_\w+|NODE_OPTIONS|BASH_ENV|ENV|GIT_\w+)=")
-_WRITE_FLAG = re.compile(r"(?:^|\s)(?:-o|-O|--output|--output-document)(?:\s|=|$)")
 _PY_TEST_SCRIPT = re.compile(r"python3?\s+(?:-[A-Za-z]\S*\s+)*(?:\S*/)?(?:test_\S*|\S*_tests?|run_?tests?)\.py\b")
 _KEYWORDS = {
     "exit", "return", "trap", "eval", "exec", "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
@@ -147,7 +241,30 @@ _READ_ERROR = re.compile(
 PRIORITY = {"review": 0, "test": 1, "runtime": 2, "repo": 3, "url": 4, "mcp": 5, "file": 6, "search": 7, "command": 8}
 
 _RESULT_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?REVIEW RESULT(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
-_RESULT_FIELD = re.compile(r"^[ \t]*(?:[-*][ \t]*)?\**[ \t]*([A-Za-z][A-Za-z -]*?)[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*$")
+_FIELD_KEY = re.compile(r"[A-Za-z][A-Za-z -]*")
+
+
+def _parse_field(line: str):
+    """(key, value) of a `- **Verdict:** approve`-style line, or None. Written as a scan, not a regex: the regex form
+    backtracked badly on long runs of spaces (found by independent review)."""
+    s = line.strip()
+    i, n = 0, len(s)
+    if i < n and s[i] in "-*":
+        i += 1
+        while i < n and s[i] in " \t":
+            i += 1
+    while i < n and s[i] == "*":
+        i += 1
+    while i < n and s[i] in " \t":
+        i += 1
+    j = s.find(":", i)
+    if j < 0:
+        return None
+    key = s[i:j].rstrip(" \t*")
+    if not _FIELD_KEY.fullmatch(key):
+        return None
+    value = s[j + 1:].lstrip(" \t").lstrip("*").strip(" \t")
+    return (key, value) if value else None
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _SECRETS = [  # (pattern, replacement) applied in order to every printed reference
@@ -155,8 +272,9 @@ _SECRETS = [  # (pattern, replacement) applied in order to every printed referen
     (re.compile(r"(?<![\w.%+-])[\w.%+-]+:[^\s/@:]+@(?=[\w-]+\.)"), "[redacted]@"),
     (re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*\S+(?:\s+\S+)?"), "authorization: [redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "bearer [redacted]"),
-    (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*\S+"), "cookie: [redacted]"),
+    (re.compile(r"(?i)\b(?:set-)?cookie\s*:\s*[^'\"\n]+"), "cookie: [redacted]"),  # up to the closing quote: browser-copied headers hold several cookies
     (re.compile(r"(?i)(?:^|(?<=\s))(?:-u|--user|--proxy-user)\s+\S+"), "-u [redacted]"),
+    (re.compile(r"(?:^|(?<=\s))-u[^\s:=]+:\S+"), "-u [redacted]"),  # -uuser:pw, glued
     (re.compile(r"(?i)(--?[\w-]{0,30}(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[\w-]{0,30})(?:=|\s+)\S+"),
      r"\1 [redacted]"),
     (re.compile(r"(?i)\b\w{0,30}(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)\w{0,30}\s*[=:]\s*\S+"),
@@ -178,7 +296,7 @@ def _text(content) -> str:
     return ""
 
 
-_DROP_CATEGORIES = {"Cc", "Cf", "Zl", "Zp", "Co", "Cn"}  # control, format (bidi, zero-width, tag), separators, private/unassigned
+_DROP_CATEGORIES = {"Cc", "Cf", "Cs", "Zl", "Zp", "Co", "Cn"}  # control, format (bidi, zero-width, tag), lone surrogates, separators, private/unassigned
 
 
 def _drop_invisible(s: str) -> str:
@@ -225,7 +343,7 @@ def _split(command: str):
     changes control flow or the exit status (`exit`, `trap`, `if`, `for`, `!`, …). A wrong split could
     credit a test that never ran."""
     text = command.strip()
-    if not text or len(text) > 20_000 or any(t in text for t in ("<<", "`", "$(", "<(", ">(", "${", "$'", '$"', "\\\n")):
+    if not text or len(text) > MAX_COMMAND_CHARS or any(t in text for t in ("<<", "`", "$(", "<(", ">(", "${", "$'", '$"', "\\\n")):
         return None  # (a backslash-newline continues a line, which can turn a later # into a comment)
     pieces, cur, quote, i = [], [], None, 0
 
@@ -290,6 +408,8 @@ def _split(command: str):
     elif pieces:
         pieces[-1][1] = None  # a trailing ; or newline
     if not pieces:
+        return None
+    if len(pieces) > MAX_SEGMENTS:
         return None
     segs = [p[0] for p in pieces]
     for seg in segs:
@@ -393,14 +513,22 @@ _SUMMARY = (  # a positive "tests really ran and passed" line, per runner family
     (re.compile(r"^(?:tox|nox)\b"), re.compile(r"(?i)\bpassed\b|congratulations|: OK\b|was successful")),
     (re.compile(r"^unittest\b"), re.compile(r"(?m)^Ran [1-9]\d* tests?\b")),
     (re.compile(r"^cargo test\b"), re.compile(r"test result: ok\. [1-9]\d* passed")),
-    (re.compile(r"^go test\b"), re.compile(r"(?m)^(?:ok|PASS)\b")),
-    (re.compile(r"^(?:npm|yarn)\b"), re.compile(r"(?i)\b[1-9]\d* (?:passed|passing)\b|Tests:\s+(?:\d+ \w+, )?[1-9]\d* passed|(?m:^\s*(?:PASS|ok)\b)")),
+    (re.compile(r"^go test\b"), re.compile(r"(?m)^ok\b(?![^\n]*\[no tests to run\])")),  # a package that ran; `-run` matching nothing says so
+    (re.compile(r"^(?:npm|yarn)\b"), re.compile(r"(?i)\b[1-9]\d* (?:passed|passing)\b|Tests:\s+(?:\d+ \w+, )?[1-9]\d* passed|(?m:^[ \t]*(?:PASS|ok)\b)")),
 )
+
+
+_NOTHING_RAN = re.compile(r"(?i)\bnothing to be done\b|\bno tests? (?:ran|found|were run)\b|\bcollected 0 items\b")
+_NO_OUTPUT = re.compile(r"(?is)\(\s*(?:bash\s+)?(?:completed\s+)?with\s+no\s+output\s*\)")
 
 
 def _positive_summary(runner: str, text: str) -> bool:
     """Does the output carry the runner's own positive summary? Runners without a known summary line are accepted
-    on exit status plus non-empty output."""
+    on exit status plus output that says something: empty output (or the harness's "no output" placeholder) and a
+    "nothing to be done" / "no tests to run" notice are not a test run, whatever the runner."""
+    stripped = text.strip()
+    if not stripped or _NO_OUTPUT.fullmatch(stripped) or _NOTHING_RAN.search(text):
+        return False
     for family, pattern in _SUMMARY:
         if family.match(runner):
             return pattern.search(text) is not None
@@ -424,10 +552,11 @@ def _runtime_shape_ok(segment: str) -> bool:
         return False
     word = _first_word(rest)
     if word in ("curl", "wget"):
-        if not re.search(r"https?://", rest) or _CURL_ACTION.search(rest):
+        if not re.search(r"https?://", rest):
             return False
-        if word == "curl" and not _CURL_FAIL.search(rest):
-            return False
+        fail, action, _ = _fetch_options(rest)
+        if action or (word == "curl" and not fail):
+            return False  # (a wget without --spider never gets here: _fetch_writes made it a change first)
     return True
 
 
@@ -473,6 +602,9 @@ def _benign(segment: str) -> bool:
     return w in _BENIGN_WORDS
 
 
+_REDIRECT = re.compile(r"\s*REDIRECT DETECTED\b", re.IGNORECASE)
+
+
 def _substantive(text: str) -> bool:
     """A tool result that actually returned something (not empty, `[]`, `{}`, or a no-match notice)."""
     t = text.strip()
@@ -490,6 +622,17 @@ def _blocked_by_policy(is_error: bool, text: str) -> bool:
     return is_error and re.match(r"PreToolUse:\S+ hook error", text) is not None
 
 
+_PLAIN_FINDINGS = re.compile(r"(?im)^\W*(?:must[- ]?fix\W{0,4}[1-9]\d{0,5}\b|verdict\W{0,4}changes[- _]required\b)")
+
+
+def _unparsed_or_findings(tail: str, verdict=None, must_fix=None):
+    """A block the strict layout rules do not accept is 'unparsed' (no credit) -- unless it plainly states findings
+    (`Must-fix: 3`, `Verdict: changes-required` on a line of its own near the heading): that can only lower the label."""
+    if (must_fix or 0) > 0 or verdict == "changes-required" or _PLAIN_FINDINGS.search(tail[:2000]):
+        return "findings", verdict, must_fix
+    return "unparsed", verdict, must_fix
+
+
 def _review_state(text: str):
     """(state, verdict, must_fix) from the LAST `REVIEW RESULT` heading block in a reviewer's result.
     state: 'clean' (Verdict approve and Must-fix exactly a bare 0), 'findings' (a parsed block that is not
@@ -501,29 +644,29 @@ def _review_state(text: str):
     fields, consumed = {}, 0
     for line in text[headings[-1].end():].splitlines(keepends=True):
         stripped = line.strip()
-        if len(stripped) > 200:  # no field is this long; also bounds the regex work
+        if len(stripped) > 200:  # no field is this long: a block that starts after (or is interrupted by) such a line is not a result block
             break
         if not stripped:
             if fields:
                 break
             consumed += len(line)
             continue
-        f = _RESULT_FIELD.match(stripped)
+        f = _parse_field(stripped)
         if not f:
             if fields:
                 break
             consumed += len(line)
             continue
-        fields[f.group(1).strip().lower()] = f.group(2).strip().strip("*").strip()
+        fields[f[0].strip().lower()] = f[1].strip().strip("*").strip()
         consumed += len(line)
     if len(text[headings[-1].end() + consumed:].strip()) > 600:
-        return "unparsed", None, None  # a block quoted in the middle of a longer report is not the reviewer's final result
+        return _unparsed_or_findings(text[headings[-1].end():])  # a block quoted in the middle of a longer report is not the reviewer's final result
     verdict = fields.get("verdict", "").lower().replace("_", "-").replace(" ", "-")
     verdict = {"approve": "approve", "approved": "approve", "changes-required": "changes-required"}.get(verdict)
     raw = fields.get("must-fix", fields.get("must fix", ""))
     must_fix = int(raw) if re.fullmatch(r"\d{1,6}", raw) else None
     if verdict is None or must_fix is None:
-        return "unparsed", verdict, must_fix
+        return _unparsed_or_findings(text[headings[-1].end():], verdict, must_fix)
     return ("clean" if verdict == "approve" and must_fix == 0 else "findings"), verdict, must_fix
 
 
@@ -549,8 +692,15 @@ def _url_ref(url: str) -> str:
     return _clip(url, 60)
 
 
-def derive_evidence(entries: list) -> dict:
-    """entries: the transcript entries of one turn. Returns {confidence, signals, references, reasons}."""
+class EvidenceBudgetExceeded(Exception):
+    """derive_evidence ran out of its time budget: the result is UNKNOWN, never a slow hook."""
+
+
+def derive_evidence(entries: list, budget_s: float | None = None) -> dict:
+    """entries: the transcript entries of one turn. Returns {confidence, signals, references, reasons}.
+    Raises EvidenceBudgetExceeded when it takes longer than `budget_s` (monotonic seconds): callers treat that as UNKNOWN."""
+    budget_s = WORK_BUDGET_S if budget_s is None else budget_s  # read now, not when the function was defined
+    deadline = time.monotonic() + budget_s
     entries = [e for e in entries if isinstance(e, dict) and not e.get("isSidechain")]
     uses = {}      # tool_use_id -> (name, input)
     order = []     # tool_use_ids in call order
@@ -587,10 +737,16 @@ def derive_evidence(entries: list) -> dict:
             item["ok"] = ok
         bucket.append(item)
 
-    def mutate(pos):
+    def mutate(pos, edit=False):
+        """Something may have changed the tree after this position: earlier verification no longer counts. Every such
+        event is counted (an edit as an edit, anything else as an other change), so the label's cap sees all of them."""
         st["mut"] = pos
+        if not edit:
+            sig["other_changes"] += 1
 
     for idx, uid in enumerate(order):
+        if time.monotonic() > deadline:
+            raise EvidenceBudgetExceeded(f"more than {budget_s:g} s of work")
         name, inp = uses[uid]
         if uid not in results:
             continue  # still running, or never answered: no outcome, no evidence
@@ -603,7 +759,7 @@ def derive_evidence(entries: list) -> dict:
             fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
             if fp and not is_error:
                 edited.add(fp)
-                mutate((idx, 0))
+                mutate((idx, 0), edit=True)
         elif name in READ_TOOLS:
             if not is_error:
                 sig["repo_inspected"] = True
@@ -613,7 +769,7 @@ def derive_evidence(entries: list) -> dict:
                 sig["repo_inspected"] = True
                 add("search", f"{name.lower()} {inp.get('pattern') or ''} in {inp.get('path') or '.'}")
         elif name == "WebFetch":
-            if not is_error and _substantive(text):
+            if not is_error and _substantive(text) and not _REDIRECT.match(text):  # a redirect notice fetched nothing
                 sig["external_source"] = True
                 add("url", _url_ref(inp.get("url", "")))
         elif name == "WebSearch":
@@ -659,8 +815,7 @@ def derive_evidence(entries: list) -> dict:
                 follows_recognised = prev_recognised and j > 0 and conns[j - 1] == "|"
                 prev_recognised = False
                 if _RISKY_ENV.search(segment[:_PREFIX.match(segment).end()]):
-                    sig["other_changes"] += 1  # PATH=…, PYTEST_ADDOPTS=…: the command is not what it looks like
-                    mutate(pos)
+                    mutate(pos)  # PATH=…, PYTEST_ADDOPTS=…: the command is not what it looks like
                     continue
                 tinfo = _test_info(segment)
                 if tinfo is not None:
@@ -695,9 +850,8 @@ def derive_evidence(entries: list) -> dict:
                     continue
                 if _starts(_RUNTIME_CMD, segment):
                     prev_recognised = True
-                    if _writes_file(segment) or _WRITE_FLAG.search(segment):
-                        sig["other_changes"] += 1  # `curl … > src/a.py`, `wget -O f`, `kubectl get … > f`: it wrote a file
-                        mutate(pos)
+                    if _writes_file(segment) or _fetch_writes(segment):
+                        mutate(pos)  # `curl … > src/a.py`, `wget -O f`, `kubectl get … > f`: it wrote a file
                         continue
                     if _runtime_shape_ok(segment) and not background \
                             and _outcome(j, segs, conns, pipefail, is_error, text) is True:
@@ -707,7 +861,6 @@ def derive_evidence(entries: list) -> dict:
                 if _is_repo_read(segment):
                     prev_recognised = True
                     if _writes_file(segment):
-                        sig["other_changes"] += 1
                         mutate(pos)
                     elif j == 0 and not background and _read_ok(j, segs, conns, pipefail, is_error, text):
                         sig["repo_inspected"] = True  # only the command itself, not a filter later in a pipeline
@@ -718,8 +871,7 @@ def derive_evidence(entries: list) -> dict:
                     continue
                 if _benign(segment) and not _writes_file(segment):
                     continue
-                sig["other_changes"] += 1  # not on the known read-only list: it may have changed the tree
-                mutate(pos)
+                mutate(pos)  # not on the known read-only list: it may have changed the tree
         else:
             if name not in _BENIGN_TOOLS:
                 mutate((idx, 0))  # Skill, SlashCommand, PowerShell, a tool this version has never seen: it may have changed things
@@ -881,11 +1033,20 @@ def main(argv=None) -> int:
     ap.add_argument("--transcript", help="transcript .jsonl to read (default: the newest for this directory's project)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # a terminal that cannot show "—" or "→" must still get the receipt
+        except (AttributeError, ValueError, OSError):
+            pass
     try:
         path = Path(args.transcript).expanduser() if args.transcript else _default_transcript()
     except (RuntimeError, OSError):
         path = None
-    if path is None or not path.is_file():
+    try:
+        readable = path is not None and path.is_file()
+    except (OSError, ValueError):  # an unsearchable directory, a name that is too long, an embedded NUL
+        readable = False
+    if not readable:
         return _unknown(args, "that transcript is not a readable file" if args.transcript else
                         "no readable transcript found for this directory (run it from the project, or pass --transcript)")
     try:
@@ -897,6 +1058,8 @@ def main(argv=None) -> int:
         return _unknown(args, f"could not read {_clip(path, 200)}", str(path))
     try:
         ev = derive_evidence(entries)
+    except EvidenceBudgetExceeded:
+        return _unknown(args, f"the transcript took more than {WORK_BUDGET_S:g} s to analyse, so no estimate was made", str(path))
     except Exception as exc:  # a transcript shape this version did not anticipate must not become a traceback
         return _unknown(args, f"the transcript could not be analysed ({type(exc).__name__})", str(path))
     declared = ""

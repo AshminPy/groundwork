@@ -4,7 +4,9 @@
 Synthetic transcripts only; no Claude Code needed.
 Run: python3 tests/test_evidence.py   (or: python3 -m pytest tests -q)
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -415,7 +417,8 @@ def test_runtime_and_mcp_and_search_credit() -> None:
                 "gcloud compute instances list", "aws ec2 describe-instances", "az vm list", "docker ps"):
         check(f"a runtime observation: {cmd}", rt(cmd), cmd)
     check("an MCP list returning [] contributes nothing", label(m, ("mcp__x__list_triggers", {}, "[]", False)) == "NONE")
-    check("a mutating tool with a read-verb prefix contributes nothing", label(m, ("mcp__x__get_or_create_user", {}, "{\"id\": 1}", False)) == "NONE")
+    check("a mutating tool with a read-verb prefix is no evidence, and counts as a possible change (LOW, never NONE or MEDIUM)",
+          label(m, ("mcp__x__get_or_create_user", {}, "{\"id\": 1}", False)) == "LOW")
     check("an MCP list with content is an external source (MEDIUM)", label(m, ("mcp__x__list_monitors", {}, "monitors: a, b", False)) == "MEDIUM")
     check("a Grep with no matches inspected nothing", label(m, ("Grep", {"pattern": "def foo"}, "No matches found", False)) == "NONE")
     ev = m.derive_evidence(turn(("Grep", {"pattern": "def foo", "path": "src"}, "src/a.py:3:def foo()", False)))
@@ -692,6 +695,145 @@ def _cli(args, env=None):
     return subprocess.run([sys.executable, str(MODULE), *args], capture_output=True, text=True, timeout=30, env=e)
 
 
+def test_round4_review_fixes() -> None:
+    print("groundwork_evidence.py — round-3 security review: bounded work, no traceback, every change counted, redirects, empty runs, redaction")
+    import time
+    m = load()
+    # --- 1. bounded work: shapes that used to take seconds (quadratic regexes and rescans) now finish fast, and a budget exists
+    t0 = time.monotonic()
+    ev = m.derive_evidence(turn(("Bash", {"command": "npm test"}, "\n" * 30000 + "3 passing", False)))
+    check("npm test output of 30,000 blank lines is handled in well under the old 8 s", time.monotonic() - t0 < 2.0, f"{time.monotonic() - t0:.1f}s")
+    t0 = time.monotonic()
+    block = "REVIEW RESULT\n" + ("a" + " " * 190 + "b\n") * 5000
+    m.derive_evidence(turn(agent(block)))
+    check("a REVIEW RESULT followed by thousands of space-padded lines is linear (old: 12 s)", time.monotonic() - t0 < 2.0, f"{time.monotonic() - t0:.1f}s")
+    t0 = time.monotonic()
+    ev = m.derive_evidence(turn(*[("Bash", {"command": "pytest;" * 2850}, "5 passed", False)] * 40))
+    check("forty 20,000-character commands of 2,850 segments each: not parsed, not credited, and fast (old: 10 s)",
+          time.monotonic() - t0 < 2.0 and ev["signals"]["tests_ran"] == 0, f"{time.monotonic() - t0:.1f}s")
+    check("a command of more than MAX_SEGMENTS segments is not parsed", m._split(";".join(["echo x"] * (m.MAX_SEGMENTS + 1))) is None
+          and m._split(";".join(["echo x"] * m.MAX_SEGMENTS)) is not None)
+    try:
+        m.derive_evidence(turn(read(), bash("pytest -q")), budget_s=0.0)
+        check("a spent work budget raises EvidenceBudgetExceeded (callers treat it as UNKNOWN)", False)
+    except m.EvidenceBudgetExceeded:
+        check("a spent work budget raises EvidenceBudgetExceeded (callers treat it as UNKNOWN)", True)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        tpath = tmp / "t.jsonl"
+        tpath.write_text("\n".join(json.dumps(e) for e in turn(read(), bash("pytest -q"))) + "\n")
+        m2 = load()
+        m2.WORK_BUDGET_S = 0.0
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = m2.main(["--transcript", str(tpath)])
+        check("a spent budget in the CLI: UNKNOWN with the reason, exit 1, no traceback",
+              code == 1 and "UNKNOWN" in out.getvalue() and "took more than" in out.getvalue() and "Traceback" not in err.getvalue(), out.getvalue() + err.getvalue())
+
+        # --- 2. the CLI never prints a traceback
+        sur = tmp / "sur.jsonl"
+        sur.write_text("\n".join(json.dumps(e) for e in turn(("Read", {"file_path": "/repo/a\ud83d.py"}, "contents", False))) + "\n")
+        r = _cli(["--transcript", str(sur)])
+        check("a lone surrogate in a path: the receipt is printed, exit 0, no traceback", r.returncode == 0 and "Traceback" not in r.stderr
+              and "Evidence confidence" in r.stdout, r.stdout + r.stderr)
+        r = _cli(["--transcript", "/" + "x" * 5000])
+        check("a 5,000-character --transcript path: UNKNOWN, exit 1, no traceback", r.returncode == 1 and "UNKNOWN" in r.stdout and "Traceback" not in r.stderr, r.stdout + r.stderr)
+        declared = turn(read(), edit(), bash("pytest -q"))
+        declared.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done.\n\nHarness metadata\nGroundwork 2.x · IMPLEMENT\nConfidence:  HIGH\nValidation:  verified"}]}})
+        dpath = tmp / "declared.jsonl"
+        dpath.write_text("\n".join(json.dumps(e) for e in declared) + "\n")
+        r = _cli(["--transcript", str(dpath)], env={"PYTHONIOENCODING": "latin-1"})
+        check("a latin-1 terminal still gets the receipt (the dash in 'HIGH — EXCEEDS' cannot be encoded and is replaced)",
+              r.returncode == 0 and "Declared in the last response: HIGH" in r.stdout and "Traceback" not in r.stderr, r.stdout + r.stderr)
+    check("lone surrogates are removed from printed text", "\ud83d" not in m._clip("a\ud83db"))
+
+    # --- 3. every possible change is counted, so the label cannot stay MEDIUM after one the code does not model
+    base = [("WebFetch", {"url": "https://docs.example/a"}, "page text", False), bash("pytest -q")]
+    for name, change in (("a heredoc write", ("Bash", {"command": "cat > /r/a.py <<'EOF'\nx = 1\nEOF"}, "done", False)),
+                         ("a non-review subagent", ("Agent", {"subagent_type": "general-purpose", "description": "do it"}, "done", False)),
+                         ("a local MCP writer", ("mcp__fs__write_file", {"path": "/r/a.py"}, "ok", False)),
+                         ("an unknown tool", ("Skill", {"skill": "x"}, "ok", False)),
+                         ("a command over the length cap", ("Bash", {"command": "echo " + "x" * 21000}, "done", False)),
+                         ("an MCP tool that edits in place", ("mcp__fs__search_and_replace", {"path": "/r/a.py"}, "ok", False))):
+        check(f"after verification, {name} caps the label at LOW", label(m, *base, change) == "LOW", label(m, *base, change))
+    ev = m.derive_evidence(turn(("Bash", {"command": "cat > /r/a.py <<'EOF'\nx = 1\nEOF"}, "done", False)))
+    check("a turn whose only action is a write is LOW and does not claim that nothing was run",
+          ev["confidence"] == "LOW" and not any("nothing was inspected or run" in r for r in ev["reasons"]), json.dumps(ev["reasons"]))
+
+    # --- 4. a redirect notice fetched nothing
+    redirect = "REDIRECT DETECTED: The URL redirects to a location that was not fetched automatically.\nOriginal URL: https://a.example\nRedirect URL: https://b.example"
+    ev = m.derive_evidence(turn(("WebFetch", {"url": "https://a.example/x"}, redirect, False)))
+    check("a WebFetch redirect notice is not a fetched source and not a reference", ev["confidence"] == "NONE" and ev["references"] == [], json.dumps(ev))
+
+    # --- 5. a run that printed nothing, or said there was nothing to do, is not a test run
+    tests = lambda cmd, text: m.derive_evidence(turn(bash(cmd, text=text)))["signals"]["tests_ran"]
+    check("make test with no output (the harness placeholder) is not a test run", tests("make test", "(Bash completed with no output)") == 0)
+    check("make test saying 'Nothing to be done' is not a test run", tests("make test", "make: Nothing to be done for 'test'.") == 0)
+    check("an empty-output script run is not a test run", tests("python3 tests/test_x.py", "") == 0)
+    check("go test -run matching nothing is not a test run", tests("go test -run TestTypo ./...", "ok  \tx/y\t0.003s [no tests to run]") == 0)
+    check("a make test that printed something is still credited", tests("make test", "all 5 checks passed") == 1)
+    check("go test with one package that ran and one that matched nothing is a pass",
+          tests("go test ./...", "ok  \tx/a\t0.01s\nok  \tx/b\t0.00s [no tests to run]") == 1)
+
+    # --- 6. credentials in commands shown as references
+    blob = lambda cmd: json.dumps(m.derive_evidence(turn(bash(cmd)))["references"])
+    cmd = "curl -sf -H 'Cookie: sid=abc123; csrf=SECRETCSRF' https://x.example/health"
+    check("a multi-cookie header is redacted to the closing quote", "SECRETCSRF" not in blob(cmd) and "abc123" not in blob(cmd), blob(cmd))
+    check("curl -uadmin:hunter2 (glued) is redacted", "hunter2" not in blob("curl -sf -uadmin:hunter2 https://x.example/health"), blob("curl -sf -uadmin:hunter2 https://x.example/health"))
+
+    # --- command classification from the correctness review
+    rt = lambda cmd: m.derive_evidence(turn(bash(cmd)))["signals"]["runtime_observed"]
+    after_pass = lambda cmd: label(m, read(), bash("pytest -q"), bash(cmd))
+    for cmd in ("gcloud run deploy list-api --image gcr.io/p/img", "gcloud compute instances delete describe-me --quiet",
+                "az group delete --name list-rg --yes", "az webapp create --name show-app --resource-group g"):
+        check(f"a resource named like a verb is not a runtime observation, and the command counts as a change: {cmd}",
+              not rt(cmd) and after_pass(cmd) == "LOW", f"{rt(cmd)} {after_pass(cmd)}")
+    for cmd in ("gcloud compute instances list", "gcloud run services describe web", "az vm show -g g -n n", "az vm list"):
+        check(f"still a runtime observation: {cmd}", rt(cmd), cmd)
+    for cmd in ("curl -fsSd a=b https://x.example/jobs", "curl -fsSXPOST https://x.example/jobs", "curl -sfT f https://x.example/up",
+                "curl -sf -XPOST https://x.example/jobs", "curl -sf --request=POST https://x.example/jobs", "curl -sf -F a=@f https://x.example/up",
+                "curl -sf --upload-file f https://x.example/up", "curl -sf --data-binary @f https://x.example/up", "curl -sf --json '{}' https://x.example/up",
+                "wget --spider --post-data=a=b https://x.example/jobs"):
+        check(f"an upload or POST, however spelled, is not an observation: {cmd}", not rt(cmd), cmd)
+    for cmd in ("curl -f https://x.example/h", "curl -sS -f https://x.example/h", "curl -f -s https://x.example/h", "curl -fsS https://x.example/h",
+                "curl -sf -X GET https://x.example/h", "curl -sfI https://x.example/h", "curl --fail -H 'Accept: a' https://x.example/h",
+                "curl -fsSL -o /dev/null -w '%{http_code}' https://x.example/h", "wget --spider https://x.example/h"):
+        check(f"a plain request that fails on HTTP errors is an observation: {cmd}", rt(cmd), cmd)
+    check("-F (a form upload) is not -f (fail): curl -D headers.txt -f is an observation of a file write, not credited",
+          after_pass("curl -fsS -D headers.txt https://x.example/h") == "LOW")
+    for cmd in ("curl -fsSLO https://x.example/f.tgz", "curl -fsS -o out.json https://x.example/h", "wget https://x.example/f.tgz",
+                "curl -fsS --output=out.json https://x.example/h"):
+        check(f"a download is a change, not an observation: {cmd}", not rt(cmd) and after_pass(cmd) == "LOW", f"{rt(cmd)} {after_pass(cmd)}")
+    check("a curl line that cannot be read (trailing backslash) is neither an observation nor harmless",
+          not rt("curl -sf https://x.example/h \\") and after_pass("curl -sf https://x.example/h \\") == "LOW")
+    check("kubectl get -o json is an observation, not a file write", rt("kubectl get pods -o json") and after_pass("kubectl get pods -o json") == "MEDIUM")
+    check("curl -o /dev/null is not a file write", after_pass("curl -fsS -o /dev/null https://x.example/h") == "MEDIUM")
+
+    # --- review blocks with an off layout
+    off = [("blank lines between the fields", "REVIEW RESULT\n\nVerdict: changes-required\n\nMust-fix: 3\n"),
+           ("more than 600 characters after the block", "REVIEW RESULT\nVerdict: changes-required\nMust-fix: 3\n" + "x" * 700),
+           ("approve with findings", "REVIEW RESULT\nVerdict: approve\nMust-fix: 2")]
+    for name, body in off:
+        got = label(m, read(), edit(), bash("pytest -q"), agent(body))
+        check(f"a review that plainly reports findings caps the label even with {name}", got == "LOW", got)
+    clean_off = "REVIEW RESULT\n\nVerdict: approve\n\nMust-fix: 0\n"
+    check("a clean-looking block with an off layout earns no credit (unparsed, not clean)",
+          label(m, read(), edit(), bash("pytest -q"), agent(clean_off)) == "MEDIUM", label(m, read(), edit(), bash("pytest -q"), agent(clean_off)))
+    stray = "REVIEW RESULT\nVerdict: approve\n(1) a note about the verdict: see below\nMust-fix: 0"
+    check("a line that is not a 'Key: value' field inside the block ends it (the count after it is not read, so no HIGH)",
+          label(m, read(), edit(), bash("pytest -q"), bash("kubectl get pods"), agent(stray)) == "MEDIUM")
+    long_gap = "REVIEW RESULT\n" + "z" * 250 + "\nVerdict: approve\nMust-fix: 0"
+    check("a clean-looking block that only starts after a 250-character line is not the reviewer's result block (no HIGH)",
+          label(m, read(), edit(), bash("pytest -q"), bash("kubectl get pods"), agent(long_gap)) == "MEDIUM")
+    check("the legacy Task tool name is a reviewer like Agent",
+          label(m, read(), bash("pytest -q"), bash("kubectl get pods"), ("Task", {"subagent_type": "ecc:code-reviewer", "description": "review"}, REVIEW_CLEAN, False)) == "HIGH")
+    check("a failed Edit changed nothing", label(m, read(), bash("pytest -q"), ("Edit", {"file_path": "/repo/a.py", "old_string": "a", "new_string": "b"}, "String not found", True)) == "MEDIUM")
+    check("pytest with '0 passed' is not a pass", m.derive_evidence(turn(bash("pytest -q", text="0 passed in 0.01s")))["signals"]["tests_ran"] == 0)
+    check("a command of more than MAX_COMMAND_CHARS is not parsed (no timing involved)",
+          m._split("pytest -q && " * 3000) is None and m._split("a" * (m.MAX_COMMAND_CHARS + 1)) is None and m._split("pytest -q") is not None)
+    finish()
+
+
 def test_cli() -> None:
     print("groundwork_evidence.py — `groundwork evidence` prints the receipt, flags an over-claim, and says UNKNOWN when it cannot read")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -859,7 +1001,7 @@ if __name__ == "__main__":
                test_shell_constructs_the_splitter_cannot_model, test_differential_against_real_bash,
                test_runtime_and_mcp_and_search_credit, test_false_references_and_reads, test_redaction_and_terminal_safety,
                test_sidechain_and_collect_cap, test_declared_label_parsing,
-               test_round3_regressions, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
+               test_round3_regressions, test_round4_review_fixes, test_cli, test_cli_default_transcript_scope, test_stop_hook_unreadable_transcript_and_label_parsing,
                test_stop_hook_integration):
         try:
             fn()

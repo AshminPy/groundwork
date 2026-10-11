@@ -308,12 +308,14 @@ groundwork/
 │   ├── test_hooks.py                  hooks, settings merge/unmerge, legacy migration
 │   ├── test_playbooks.py              routing rule, playbooks, output contract, install.sh / uninstall.sh
 │   ├── test_telemetry.py              telemetry hook (classifier, privacy, tail read, fail-open)
+│   ├── test_evidence.py               evidence receipt and confidence estimate (label rule, command attribution against a real bash, redaction, bounded work, CLI)
 │   ├── test_report.py                 dashboard generator (metrics, filters, Python↔JS parity, schedules)
 │   ├── test_setup.py                  setup.sh (backup, prerequisites, choices, verify, rollback, uninstall, capabilities, doctor, routines)
 │   ├── test_groundwork_config.py      capability config (profiles, validation, fail-open, CLAUDE_CONFIG_DIR resolution)
 │   ├── test_groundwork_routines.py    Routines (safety contract, off-switches, scheduling, telemetry)
 │   ├── test_groundwork_integrations.py Integration Catalog (state combinations, presence≠connected, no secret exposure, doc consistency)
-│   └── test_groundwork_statusline.py  statusLine (session isolation, cache-only integrations, fail-safe, measured execution time)
+│   ├── test_groundwork_statusline.py  statusLine (session isolation, cache-only integrations, fail-safe, measured execution time)
+│   └── mutation/mutate_evidence.py    mutation check of the evidence receipt's safety clauses (works on a copy; not collected by pytest)
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
