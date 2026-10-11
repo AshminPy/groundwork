@@ -41,7 +41,6 @@ MUTANTS = [
     ('facts not redacted', 'facts, _ = redact(clean_text(project_facts(info["path"])))', 'facts = project_facts(info["path"])'),
     ('facts lines not cut', 'facts = "\\n".join(line[:FACT_LINE_CHARS] for line in facts.split("\\n"))', 'pass'),
     ('text not cleaned', '    text = clean_text(raw)\n', '    text = strip_ansi(raw)\n'),
-    ('fsmonitor allowed', '_GIT_SAFE = ["-c", "core.fsmonitor=false", ', '_GIT_SAFE = ['),
     ('signature check allowed', '"-c", "log.showSignature=false", ', ''),
     ('git status back', '    last = _git(path, "log", "-1", "--format=%h %s") or "(no commits)"\n', '    _git(path, "status", "--porcelain")\n    last = _git(path, "log", "-1", "--format=%h %s") or "(no commits)"\n'),
     ('no ancestry check', 'if not is_ancestor(info["pid"], env):', 'if False:'),
@@ -85,6 +84,12 @@ MUTANTS = [
     ('private-use and unassigned kept', '"Zp", "Co", "Cn"}', '"Zp"}'),
 ]
 
+# Mutants that cannot change behaviour, with the reason. They are not counted as caught or survived.
+EQUIVALENT = {
+    "fsmonitor allowed": "the tool no longer runs `git status` (the only command of the three it runs that reads the index), "
+                         "so core.fsmonitor=false is defence in depth: the fsmonitor canary test passes with the flag removed",
+}
+
 survived = []
 which = sys.argv[1:]
 for name, old, new in MUTANTS:
@@ -109,5 +114,7 @@ for name, old, new in MUTANTS:
         survived.append(name)
 shutil.rmtree(WORK, ignore_errors=True)
 total = len([m for m in MUTANTS if not which or m[0] in which])
+for name, why in EQUIVALENT.items():
+    print(f"EQUIVALENT (not counted) {name}: {why}")
 print(f"\n{total - len(survived)}/{total} caught; survivors: {survived}")
 sys.exit(1 if survived else 0)

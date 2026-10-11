@@ -9,9 +9,11 @@
 What it does, in order: (1) works out which terminal it was typed in, (2) reads a bounded slice of THAT
 terminal's recent output, (3) adds a few project facts (directory, git branch, last commit), (4) removes
 invisible and control characters and redacts secret-shaped text from all of it, (5) asks Claude once with
-`claude -p --safe-mode --tools ""`, the prompt passed on stdin, and (6) prints the answer. It never
-executes anything itself, keeps no state, and starts no agent runtime or daemon: it is one subprocess call
-to the Claude Code the user already has, with the credentials Claude Code already uses.
+`claude -p --safe-mode --tools ""`, the prompt passed on stdin, and (6) prints the answer. It never runs
+a command taken from the terminal text (it starts only git, ps, tmux and claude, with fixed arguments), keeps
+no state, and starts no agent runtime or daemon: it is one subprocess call to the Claude Code the user
+already has, with the credentials and environment (for example ANTHROPIC_BASE_URL) that Claude Code already
+uses: the redacted prompt goes wherever that environment sends it.
 
 What "no tools" means here, verified on Claude Code 2.1.296 (see openspec/changes/add-groundwork-copilot):
 `--tools ""` alone only removes the BUILT-IN tools. MCP tools from installed plugins stayed in the model's
@@ -20,7 +22,10 @@ tool list, and a project's `.claude/settings.json` hooks and `.mcp.json` servers
 model's tool list was empty and neither a project hook nor a project MCP server ran. Admin-managed
 (policy) settings still apply. If the installed claude does not know `--safe-mode`, the fallback is
 `--strict-mcp-config --setting-sources user` (also verified for tools and project hooks/servers, but your
-own USER-level hooks and settings still apply). The call runs in an empty scratch directory.
+own USER-level hooks and settings still apply, and so do the hooks of enabled plugins, which then receive the
+redacted prompt; a reviewer also measured it as several times more expensive per call because far more
+skills and agents load, which I have not re-measured). The tool switches to the fallback only when stderr
+says `unknown option '--safe-mode'`, and says so on stderr. The call runs in an empty scratch directory.
 
 Session isolation is structural, not a convention: the only terminal it can read is the one named by the
 invoking process's own $TMUX_PANE, and it refuses unless that pane's tty is the process's controlling tty
@@ -165,7 +170,7 @@ def _redact_kv(text: str):
     """(text, count): redact the value after `<name containing a secret word> = / : value` — JSON ("password": "x"),
     env (DB_PASSWORD=x), headers (token: x) — and after `--flag value` when the flag name holds a secret word.
     Found by locating the keywords first and inspecting a bounded window around each (<= 40 name characters, <= 10
-    blanks), so the work is linear in the number of keyword occurrences; a value that is plainly not a secret
+    blanks), so the work is bounded (near-linear in the input size in the fuzz runs); a value that is plainly not a secret
     ("none", "}", "too short") is left readable."""
     out, last, pos, count = [], 0, 0, 0
     n = len(text)
