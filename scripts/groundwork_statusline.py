@@ -67,9 +67,13 @@ DEFAULT_STATUSLINE_CONFIG = {
                                  # integrations row's CONNECTED/CONFIGURED/AVAILABLE glyphs (ignored when
                                  # plain_text is true). Two fixed presets only — no arbitrary custom
                                  # symbol strings (display/injection risk; out of scope for this change).
+                                 # NOTE: "ascii" changes only these glyphs — the rest of the line still has
+                                 # Unicode (the git ✓/✗ marker, the ' · ' joiners), so it is NOT an ASCII-only
+                                 # line; plain_text is the only fully ASCII mode.
     "separator": "unicode",      # "unicode" | "ascii" — which SEPARATORS preset renders the field
                                  # separator (ignored when plain_text is true, which always uses "|").
-                                 # Two fixed presets only — no arbitrary custom separator string.
+                                 # Two fixed presets only — no arbitrary custom separator string. Alone this
+                                 # does not make the line ASCII-only either (see symbol_set's note).
     "max_integrations": 4,       # compact mode only; detailed shows all cached, non-empty entries
     "integrations_min_state": "available",  # "available" | "configured" | "connected" — lowest
                                              # summary state still shown (e.g. "connected" hides
