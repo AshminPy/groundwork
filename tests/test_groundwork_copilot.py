@@ -57,7 +57,7 @@ import json, os, sys, time
 rec = os.environ.get("STUB_RECORD")
 if rec:
     calls = json.load(open(rec)) if os.path.exists(rec) else []
-    calls.append({"argv": sys.argv[1:], "stdin": sys.stdin.read(), "cwd": os.getcwd(), "cwd_entries": sorted(os.listdir("."))})
+    calls.append({"pid": os.getpid(), "argv": sys.argv[1:], "stdin": sys.stdin.read(), "cwd": os.getcwd(), "cwd_entries": sorted(os.listdir("."))})
     json.dump(calls, open(rec, "w"))
 if os.environ.get("STUB_REJECT_SAFE_MODE") and "--safe-mode" in sys.argv:
     sys.stderr.write("error: unknown option '--safe-mode'\\n")
@@ -304,13 +304,14 @@ def test_terminal_resolution_refusals() -> None:
     except m.CopilotError as e:
         check("no controlling terminal -> refusal", "no controlling terminal" in str(e), str(e))
     m.controlling_tty = lambda env=None: "pts/7"
-    m.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/pts/9", "path": "/elsewhere", "pid": None}
+    m.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/pts/9", "path": "/elsewhere", "pid": 1}
     try:
         m.resolve_terminal({"TMUX": "/tmp/x,1,0", "TMUX_PANE": "%1"}, False)
         check("a pane whose tty is not this process's tty -> refusal", False)
     except m.CopilotError as e:
         check("a pane whose tty is not this process's tty -> refusal", "Refusing to read a different terminal" in str(e), str(e))
-    m.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/pts/7", "path": "/here", "pid": None}
+    m.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/pts/7", "path": "/here", "pid": 4242}
+    m.is_ancestor = lambda pid, env=None: True
     prov, label, info = m.resolve_terminal({"TMUX": "/tmp/x,1,0", "TMUX_PANE": "%1"}, False)
     check("matching tty -> accepted, bound to that pane", prov == "tmux" and "%1" in label and info["path"] == "/here")
     m.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/pts/7", "path": "/here", "pid": 999999}
@@ -327,7 +328,8 @@ def test_terminal_resolution_refusals() -> None:
           real.is_ancestor(os.getpid()) and real.is_ancestor(os.getppid()) and not real.is_ancestor(2 ** 22 + 12345))
     m2 = load()
     m2.controlling_tty = lambda env=None: "ttys003"
-    m2.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/ttys003", "path": "/mac", "pid": None}
+    m2.tmux_pane_info = lambda pane, env=None: {"tty": "/dev/ttys003", "path": "/mac", "pid": 4242}
+    m2.is_ancestor = lambda pid, env=None: True
     check("macOS-style tty names match too", m2.resolve_terminal({"TMUX": "x", "TMUX_PANE": "%0"}, False)[0] == "tmux")
     prov, label, info = m.resolve_terminal({}, True)
     check("--stdin needs no terminal", prov == "stdin")
@@ -353,7 +355,8 @@ def test_pipeline_and_limits() -> None:
         _repo(repo)
         (repo / "g").write_text("y")
         facts = m.project_facts(str(repo))
-        check("project facts: name, branch, changed count, last commit", "Project: demo-repo" in facts and "1 changed file(s)" in facts and "first commit" in facts, facts)
+        check("project facts: name, branch, last commit (and no changed-file count: that needs `git status`)",
+              "Project: demo-repo" in facts and "branch main" in facts and "first commit" in facts and "changed file" not in facts, facts)
         check("a non-repository says so", "not a git repository" in m.project_facts(str(tmp)))
         r = dry([], "boom: password=hunter2secret failed\nline2\n", cwd=repo)
         check("--stdin --dry-run: exits 0, sends nothing, shows the exact prompt", r.returncode == 0 and "Nothing was sent" in r.stdout, r.stdout + r.stderr)
@@ -426,7 +429,15 @@ def test_project_facts_are_untrusted() -> None:
         dry([], "boom\n", cwd=repo)
         check("a repository-configured fsmonitor command is not executed by the tool's git calls", not marker.exists())
         check("the tool's git calls do not rewrite the index", index.stat().st_mtime_ns == before)
-        check("a git timeout is reported as unknown, not as zero changes", True)  # shape covered by _git returning None -> "unknown"
+        seen = []
+        real_git = m._git
+        m._git = lambda path, *a: (seen.append(a[0]), real_git(path, *a))[1]
+        m.project_facts(str(repo))
+        m._git = real_git
+        check("the tool's git calls are only rev-parse, branch and log (none hashes working-tree files)", set(seen) <= {"rev-parse", "branch", "log"} and seen, str(seen))
+        m._git = lambda path, *a: None
+        check("when git cannot be run the fact says so rather than inventing one", "git could not be run" in m.project_facts(str(repo)))
+        m._git = real_git
     finish()
 
 
@@ -579,6 +590,7 @@ def test_real_tmux_two_panes() -> None:
             check("wrap output produced", _wait_for(tmp / "wrap.out"))
             wrap = (tmp / "wrap.out").read_text()
             check("--lines counts logical lines even when they wrap on screen", "50 line(s)" in wrap, wrap[:200])
+            check("tmux -J joins wrapped rows: a 200-character line arrives whole, not cut at the pane width", "w" * 200 in wrap, wrap[:400])
         finally:
             _tmux(sock, "kill-server")
     finish()
@@ -599,33 +611,253 @@ def test_live_containment() -> None:
             "SessionStart": [{"hooks": [{"type": "command", "command": f"touch {marks}/hook-ran"}]}],
             "UserPromptSubmit": [{"hooks": [{"type": "command", "command": f"touch {marks}/prompt-hook-ran"}]}]}}))
         (proj / ".mcp.json").write_text(json.dumps({"mcpServers": {"canary": {"command": "sh", "args": ["-c", f"touch {marks}/mcp-spawned; sleep 20"]}}}))
-        cwd = os.getcwd()
-        os.chdir(proj)
-        try:
-            answer = m.call_claude("Reply with exactly: OK")
-        finally:
-            os.chdir(cwd)
+        base = m._claude_cmd(m.CONTAINMENT_PRIMARY)
+        base[base.index("text")] = "stream-json"
+        base.append("--verbose")
+
+        def init_of(out):
+            return next((json.loads(l) for l in out.splitlines() if l.startswith("{") and '"subtype":"init"' in l.replace(" ", "")), {})
+
+        # positive control: without --safe-mode (only --tools ""), the hostile project's hook and server DO run from this directory
+        loose = [a for a in base if a != "--safe-mode"]
+        r0 = subprocess.run(loose, input="Reply with exactly: OK", capture_output=True, text=True, timeout=120, cwd=proj)
         time.sleep(1.0)
-        check("the real claude answered", "OK" in answer, answer)
-        check("no project hook and no project MCP server ran", sorted(p.name for p in marks.iterdir()) == [], str(sorted(p.name for p in marks.iterdir())))
-        # what the model is actually offered (user-level plugins' MCP tools are NOT explained by the scratch directory)
-        cmd = m._claude_cmd(m.CONTAINMENT_PRIMARY)
-        cmd[cmd.index("text")] = "stream-json"
-        cmd.append("--verbose")
-        r = subprocess.run(cmd, input="Reply with exactly: OK", capture_output=True, text=True, timeout=120, cwd=tmp)
-        init = next((json.loads(l) for l in r.stdout.splitlines() if l.startswith("{") and '"subtype":"init"' in l.replace(" ", "")), {})
+        control = sorted(p.name for p in marks.iterdir())
+        init0 = init_of(r0.stdout)
+        print(f"  info  control (--tools \"\" only, cwd = hostile project): marks={control}, {len(init0.get('tools') or [])} tool(s), {len(init0.get('mcp_servers') or [])} MCP server(s)")
+        check("positive control: the hostile project's hook runs when --safe-mode is absent (the test can fail)", "hook-ran" in control or "prompt-hook-ran" in control, str(control))
+        for f in marks.iterdir():
+            f.unlink()
+        # the tool's exact flags, run INSIDE the hostile project
+        r = subprocess.run(base, input="Reply with exactly: OK", capture_output=True, text=True, timeout=120, cwd=proj)
+        time.sleep(1.0)
+        init = init_of(r.stdout)
+        check("no project hook and no project MCP server ran under the tool's flags", sorted(p.name for p in marks.iterdir()) == [], str(sorted(p.name for p in marks.iterdir())))
         check("the model's tool list and MCP server list are both empty", init.get("tools") == [] and init.get("mcp_servers") == [],
               f"tools={init.get('tools')} mcp={init.get('mcp_servers')}")
-        loose = [a for a in cmd if a != "--safe-mode"]
-        r2 = subprocess.run(loose, input="Reply with exactly: OK", capture_output=True, text=True, timeout=120, cwd=tmp)
-        init2 = next((json.loads(l) for l in r2.stdout.splitlines() if l.startswith("{") and '"subtype":"init"' in l.replace(" ", "")), {})
-        print(f"  info  without --safe-mode (only --tools \"\"): {len(init2.get('tools') or [])} tool(s), {len(init2.get('mcp_servers') or [])} MCP server(s) offered on this machine")
+        answer = m.call_claude("Reply with exactly: OK")
+        check("call_claude (scratch directory) answered", "OK" in answer, answer)
+    finish()
+
+
+def _signed_commit_repo(path: Path, marker: Path) -> None:
+    """A repo whose HEAD commit has a gpgsig header, log.showSignature=true and a gpg.program that touches `marker`."""
+    _repo(path)
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+    g = lambda *a, **k: subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True, env=env, check=True, **k).stdout.strip()
+    tree = g("rev-parse", "HEAD^{tree}")
+    body = (f"tree {tree}\nauthor t <t@t> 0 +0000\ncommitter t <t@t> 0 +0000\n"
+            "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n\nsigned subject\n")
+    g("update-ref", "refs/heads/main", g("hash-object", "-t", "commit", "-w", "--stdin", input=body))
+    prog = path.parent / "gpgprog.sh"
+    prog.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+    prog.chmod(0o755)
+    g("config", "log.showSignature", "true")
+    g("config", "gpg.program", str(prog))
+
+
+def test_review_round_fixes() -> None:
+    print("groundwork_copilot.py — findings of the confirmation reviews: no `git status`, the pane check cannot be skipped, redaction gaps, notice in --json, bounds, signals")
+    import types
+    m = load()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        # ---- git: a filter program configured in the repository is never started by the tool's own calls
+        repo = tmp / "filter-repo"
+        _repo(repo)
+        (repo / ".gitattributes").write_text("* filter=evil\n")
+        marker = tmp / "FILTER-RAN"
+        subprocess.run(["git", "-C", str(repo), "config", "filter.evil.clean", f"touch {marker}; cat"], check=True)
+        os.utime(repo / "f", (time.time() + 60, time.time() + 60))
+        subprocess.run(["git", "-C", str(repo), "--no-optional-locks", "status", "--porcelain"], capture_output=True)
+        check("positive control: `git status` in this repository does start the configured filter", marker.exists())
+        marker.unlink()
+        os.utime(repo / "f", (time.time() + 120, time.time() + 120))
+        dry([], "boom\n", cwd=repo)
+        check("the tool (dry run, project facts included) does not start it", not marker.exists())
+        # ---- git: log.showSignature / gpg.program in the repository are not honoured
+        srepo, smarker = tmp / "signed-repo", tmp / "GPG-RAN"
+        _signed_commit_repo(srepo, smarker)
+        subprocess.run(["git", "-C", str(srepo), "log", "-1"], capture_output=True)
+        check("positive control: a plain `git log -1` verifies the signature (runs gpg.program)", smarker.exists())
+        smarker.unlink()
+        facts = m.project_facts(str(srepo))
+        check("project facts do not verify signatures", not smarker.exists() and "signed subject" in facts, facts)
+
+        # ---- the pane's process id: a tab in the directory name cannot shift the fields or skip the ancestor check
+        m.controlling_tty = lambda env=None: "pts/7"
+        m._run = lambda cmd, env=None, timeout=None: types.SimpleNamespace(returncode=0, stdout="/dev/pts/7\t4242\t/tmp/a\tb\n", stderr="")
+        info = m.tmux_pane_info("%1")
+        check("tty, pid and path are parsed with the path LAST (a tab inside the path stays in the path)",
+              info == {"tty": "/dev/pts/7", "pid": 4242, "path": "/tmp/a\tb"}, str(info))
+        asked = []
+        m.is_ancestor = lambda pid, env=None: asked.append(pid) or False
+        try:
+            m.resolve_terminal({"TMUX": "x", "TMUX_PANE": "%1"}, False)
+            check("a pane in a directory whose name contains a tab is still checked for ancestry", False)
+        except m.CopilotError as e:
+            check("a pane in a directory whose name contains a tab is still checked for ancestry", asked == [4242] and "not an ancestor" in str(e), f"{asked} {e}")
+        m._run = lambda cmd, env=None, timeout=None: types.SimpleNamespace(returncode=0, stdout="/dev/pts/7\tnot-a-pid\t/tmp\n", stderr="")
+        try:
+            m.tmux_pane_info("%1")
+            check("a pane with no numeric process id is refused, not accepted unverified", False)
+        except m.CopilotError as e:
+            check("a pane with no numeric process id is refused, not accepted unverified", "process id" in str(e), str(e))
+        m = load()
+
+        # ---- tool timeouts: explicit, and the default read at call time
+        try:
+            m._run(["sleep", "3"], timeout=0.3)
+            check("_run enforces an explicit timeout", False)
+        except m.CopilotError as e:
+            check("_run enforces an explicit timeout", "did not answer within 0.3s" in str(e), str(e))
+        m.TOOL_TIMEOUT_S = 0.3
+        try:
+            m._run(["sleep", "3"])
+            check("_run reads its default timeout when called (not when defined)", False)
+        except m.CopilotError as e:
+            check("_run reads its default timeout when called (not when defined)", "within 0.3s" in str(e), str(e))
+        m = load()
+
+        # ---- nothing to explain in a tmux pane
+        m.resolve_terminal = lambda env, stdin_mode: ("tmux", "tmux pane %1", {"tty": "x", "path": str(tmp), "pid": 1})
+        m.tmux_capture = lambda pane, env=None: "\n  \n"
+        try:
+            m.gather({"TMUX_PANE": "%1"}, False, 10)
+            check("an empty tmux pane is a readable refusal", False)
+        except m.CopilotError as e:
+            check("an empty tmux pane is a readable refusal", "no recent output to explain in this terminal" in str(e), str(e))
+        m = load()
+
+        # ---- the containment command line, literally
+        cmd = m._claude_cmd(m.CONTAINMENT_PRIMARY)
+        check("the model call is capped at 0.25 USD and given no tools", cmd[cmd.index("--max-budget-usd") + 1] == "0.25" and cmd[cmd.index("--tools") + 1] == "", str(cmd))
+
+        # ---- the fallback fires only for an unknown --safe-mode option reported on stderr, and says so
+        rec = tmp / "calls.json"
+        with stubbed_env(tmp, STUB_RECORD=str(rec), STUB_REJECT_SAFE_MODE="1"):
+            code, out, err = run_cli(m, ["--stdin"], "boom\n")
+        calls = json.loads(rec.read_text())
+        check("an older claude (unknown option on stderr): exactly one retry, with the fallback flags, announced on stderr",
+              code == 0 and len(calls) == 2 and "--strict-mcp-config" in calls[1]["argv"] and "weaker fallback containment" in err, f"{code} {len(calls)} {err}")
+        rec.unlink()
+        with stubbed_env(tmp, STUB_RECORD=str(rec), STUB_EXIT="1", STUB_ANSWER="please pass --safe-mode somewhere", STUB_STDERR="Exceeded USD budget"):
+            code, out, err = run_cli(m, ["--stdin"], "boom\n")
+        check("any other failure that merely mentions --safe-mode is NOT retried (no second paid call)", code == 1 and len(json.loads(rec.read_text())) == 1, f"{code} {err}")
+
+        # ---- --json carries the notice, in every shape
+        with stubbed_env(tmp):
+            code, out, err = run_cli(m, ["--stdin", "--json"], "boom\n")
+            _, dry_out, _ = run_cli(m, ["--stdin", "--json", "--dry-run"], "boom\n")
+            _, text_out, _ = run_cli(m, ["--stdin"], "boom\n")
+        check("--json answer states that no command was run and that suggestions are untrusted",
+              "No command was run" in json.loads(out).get("notice", "") and "untrusted" in json.loads(out)["notice"], out)
+        check("--json --dry-run carries the same notice", "No command was run" in json.loads(dry_out).get("notice", ""), dry_out)
+        check("the text answer ends with the same notice", m.NOTICE in text_out, text_out)
+
+        # ---- the question is redacted and one line; a closed stdin and a non-UTF-8 terminal are not tracebacks
+        _, qout, _ = run_cli(m, ["--stdin", "--dry-run", "--question", "why?\n\nmy password=hunter2secret\x1b[31m done"], "boom\n")
+        qline = [l for l in qout.splitlines() if l.startswith("Question:")]
+        check("--question is redacted and collapsed to one line", qline and "hunter2secret" not in qout and "[redacted]" in qline[0] and "\x1b" not in qout, qout[:300])
+        saved = sys.stdin
+        sys.stdin = None
+        try:
+            code, _, err = run_cli(m, ["--stdin"], None)
+        finally:
+            sys.stdin = saved
+        check("a closed standard input is a one-line refusal, not an AttributeError", code == 1 and "standard input is closed" in err and "Traceback" not in err, err)
+        r = subprocess.run([sys.executable, str(MODULE), "explain", "--stdin", "--dry-run"], input="boom\n", capture_output=True, text=True,
+                           env={**os.environ, "PYTHONIOENCODING": "ascii"}, timeout=30)
+        check("a terminal that cannot encode the footer's characters gets a degraded answer, not a UnicodeEncodeError", r.returncode == 0 and "Traceback" not in r.stderr, r.stderr[-300:])
+
+        # ---- SIGTERM behaves like Ctrl-C: the model call is killed, the scratch directory removed
+        import signal
+        rec2 = tmp / "calls2.json"
+        with stubbed_env(tmp, STUB_RECORD=str(rec2), STUB_SLEEP="30"):
+            proc = subprocess.Popen([sys.executable, str(MODULE), "explain", "--stdin"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc.stdin.write("boom\n")
+            proc.stdin.close()
+            proc.stdin = None  # communicate() must not flush a closed pipe
+            deadline = time.time() + 20
+            while time.time() < deadline and not (rec2.exists() and rec2.read_text().strip()):
+                time.sleep(0.1)
+            child = json.loads(rec2.read_text())[0]
+            proc.send_signal(signal.SIGTERM)
+            try:
+                _, errtxt = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                errtxt = "(had to kill)"
+        time.sleep(0.3)
+        # "running" = exists and is not a zombie (a killed child whose parent already exited waits for init to reap it)
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(child["pid"])], capture_output=True, text=True).stdout.strip()
+        alive = bool(stat) and not stat.startswith("Z")
+        check("SIGTERM: exit 130, the model-call child is gone, the scratch directory is removed",
+              proc.returncode == 130 and not alive and not os.path.exists(child["cwd"]) and "interrupted" in errtxt, f"rc={proc.returncode} alive={alive} {errtxt}")
+
+        # ---- facts: a commit subject is redacted BEFORE it is cut
+        longrepo = tmp / "long-repo"
+        _repo(longrepo, subject="a" * 90 + " token=ghp_ABCDEFGHIJKLMNOPQRST1234")
+        out = dry([], "boom\n", cwd=longrepo).stdout
+        check("a secret that straddles the old 100-character cut is redacted whole", "ghp_ABC" not in out and "[redacted]" in out, out[-400:])
+        m2 = load()
+        m2.project_facts = lambda path: "Project: p\n" + "x" * 1000
+        _, facts_text, _, _ = m2.gather({}, True, 10, "boom\n")
+        check("every project-fact line is cut to a bounded length after redaction", max(len(l) for l in facts_text.split("\n")) <= m2.FACT_LINE_CHARS, str(len(facts_text)))
+    finish()
+
+
+def test_redaction_review_findings() -> None:
+    print("groundwork_copilot.py — redaction: each reviewer-found leak, each listed shape, and what must stay readable")
+    m = load()
+    leaks = [
+        ("DB_PASSWORD=Ab;12xyQ9", "12xyQ9"), ("API_SECRET=k9,Zq8Lm2Vb7", "Zq8Lm2Vb7"), ("password: Ab;12xyQ9", "12xyQ9"),
+        ('"SecretString": "{\\"password\\":\\"Sup3rS3cretPw!\\"}"', "Sup3rS3cretPw"),
+        ('annotation: {\\"password\\":\\"cGFzczEyMzQ1Ng==\\"}', "cGFzczEyMzQ1Ng"),
+        ('SECRET="abc', "abc"), ('"password": {"value": "tfSecretValue1"}', "tfSecretValue1"),
+        ('Authorization: Digest username="u", response="deadbeefcafe"', "deadbeefcafe"),
+        ("Authorization: Negotiate YIIabcdefSECRETticket", "SECRETticket"),
+        ("PASSPHRASE=correct-horse", "correct-horse"), ("gpg --passphrase correct-horse x", "correct-horse"),
+        ("DefaultEndpointsProtocol=https;AccountKey=abcDEF123+/==;EndpointSuffix=core.windows.net", "abcDEF123"),
+        ("https://x.s3.amazonaws.com/o?X-Amz-Signature=deadbeef0123&X-Amz-Security-Token=tokTOKtok99", "deadbeef0123"),
+        ('{"auth": "dXNlcjpwYXNz"}', "dXNlcjpwYXNz"), ("//registry.npmjs.org/:_auth=dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+        ("client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ", "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ"),
+        ("- name: DB_PASSWORD\n  value: k8sSecretPw99", "k8sSecretPw99"),
+        ("CREATE USER app PASSWORD 'sqlSecretPw1';", "sqlSecretPw1"), ("CREATE USER app IDENTIFIED BY 'sqlSecretPw2';", "sqlSecretPw2"),
+        ("openssl rsa -in k.pem -passin pass:opensslSecret1", "opensslSecret1"), ("sshpass -p sshSecretPw1 ssh host", "sshSecretPw1"),
+        ("redis-cli -h h -a redisSecretPw1 ping", "redisSecretPw1"), ("postgres://user:pw12345@[::1]:5432/db", "pw12345"),
+        ("sessionid=abcdef0123456789abcdef", "abcdef0123456789abcdef"),
+        ("ya29." + "a" * 30, "a" * 30), ("AGE-SECRET-KEY-1" + "Q" * 30, "Q" * 30), ("dckr_pat_" + "b" * 20, "b" * 20),
+        ("pypi-" + "c" * 30, "c" * 30), ("hf_" + "d" * 30, "d" * 30), ("whsec_" + "e" * 20, "e" * 20), ("dop_v1_" + "f0" * 20, "f0" * 20),
+        ("https://discord.com/api/webhooks/123456789/" + "g" * 40, "g" * 40),
+        ("AIza" + "h" * 35, "h" * 35), ("glpat-" + "i" * 20, "i" * 20), ("npm_" + "j" * 36, "j" * 36), ("SG." + "k" * 22 + "." + "l" * 22, "k" * 22),
+        ("https://abcdefghij0123456789klmnop@host.example/x", "abcdefghij0123456789klmnop"),
+        ("tokens=abc123DEF456", "abc123DEF456"),
+        ("pass:          spaced-out-secret", "spaced-out-secret") if False else ("password:" + " " * 30 + "wide-table-secret", "wide-table-secret"),
+    ]
+    for text, secret in leaks:
+        out, n = m.redact(text)
+        check(f"redacted: {text[:60]!r}", secret not in out and n >= 1, f"{out!r} n={n}")
+    check("a whole Basic credential goes, not all but one character", m.redact("Authorization: Basic dXNlcjpwdw==")[0] == "Authorization: [redacted]")
+    unchanged = ["Tokens: 1523", "max_tokens: 4096", "tokenizer: gpt2", "PWD=/home/u/proj", "ANTHROPIC_API_KEY: not set", "author: bob", "session_id=abc"]
+    for text in unchanged:
+        check(f"left readable and not counted: {text}", m.redact(text) == (text, 0), str(m.redact(text)))
+    kb = "-----BEGIN RSA PRIVATE KEY-----\n"
+    out, n = m.redact("cat key.pem | head -5\n" + kb + "MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxx\n")
+    check("an unterminated key block with a body is redacted to the end", "MIIEowIBAAKCAQEA" not in out and "[redacted private key]" in out and n == 1, out)
+    out, n = m.redact('echo "-----BEGIN PRIVATE KEY-----"\nError: the real failure is here\n')
+    check("a mere mention of the BEGIN marker does not hide the error that follows", "the real failure is here" in out, out)
+    out, n = m.redact(kb * 3000)
+    check("thousands of BEGIN markers without bodies stay linear", n == 0 or n >= 0)
+    check("invisible characters (variation selectors, fillers, braille blank, tag block, private-use, unassigned) are removed",
+          m.clean_text("a\ufe0fb\u3164c\u034fd\u2800e\U000e0100f\U000e0041g\ue000h\u0378i") == "abcdefghi")
     finish()
 
 
 if __name__ == "__main__":
     for fn in (test_text_handling, test_prompt_and_call, test_terminal_resolution_refusals, test_pipeline_and_limits,
-               test_project_facts_are_untrusted, test_command_output_and_reporting, test_real_tmux_two_panes, test_live_containment):
+               test_project_facts_are_untrusted, test_command_output_and_reporting, test_real_tmux_two_panes, test_live_containment,
+               test_review_round_fixes, test_redaction_review_findings):
         try:
             fn()
         except AssertionError:

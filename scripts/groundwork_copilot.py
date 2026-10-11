@@ -42,6 +42,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
@@ -53,26 +54,31 @@ MAX_LINES_CAP = 400
 MAX_CHARS = 16000
 CAPTURE_LINES = 1500       # the wider window that is redacted BEFORE it is cut down, so a secret split by the cut is still seen
 CAPTURE_CHARS = 60_000
+FACT_LINE_CHARS = 300
 STDIN_BYTES = 2_000_000    # only the tail of piped input is kept
 CLAUDE_TIMEOUT_S = 120
 BUDGET_USD = "0.25"
 TOOL_TIMEOUT_S = 5
+NOTICE = "No command was run. Any suggested command comes from untrusted terminal output: read it before you run it."
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
-_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\Z)", re.S)
+_KEY_BEGIN_LINE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_KEY_BODY = re.compile(r"\s*[A-Za-z0-9+/=]{16,}")
 _KEY_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY")
 _KEY_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
-_KEYWORDS = r"(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)"
 # A value that is plainly not a secret (an error message mentioning the word "token"), left readable.
 _BENIGN_VALUES = {"none", "null", "nil", "true", "false", "empty", "required", "missing", "invalid", "expired", "set", "unset",
-                  "undefined", "too", "}", "]", ")", ">", "...", "<redacted>", "[redacted]"}
-_VALUE = r"(?:\"[^\"]*\"|'[^']*'|[^\s\"';,]+)"
+                  "undefined", "too", "}", "]", ")", ">", "...", "<redacted>", "[redacted]", "not", "no", "n/a", "na", "unknown",
+                  "absent", "disabled", "hidden", "masked"}
+# A value: quoted (backslash escapes honoured, so JSON inside a JSON string is one value), escaped-quoted (\"x\" inside
+# such a string), unquoted up to the next blank or quote (a password may contain ; and ,), or an unterminated quote.
+_VALUE = r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"[^"\\]*\\"|\\'[^'\\]*\\'|[^\s"']+|["']\S*)"""
 _SECRET_PATTERNS = (
     # (pattern, replacement). Every quantifier before a keyword is bounded: nothing here backtracks catastrophically.
-    (re.compile(r"(?i)\b((?:proxy-)?authorization[\"']?[ \t]{0,20}[=:][ \t]{0,20})(?:\"[^\"]*\"|'[^']*'|(?:(?:bearer|basic|token|digest)[ \t]+)?[^\s\"']+)"), r"\1[redacted]"),
+    (re.compile(r"(?i)\b((?:proxy-)?authorization[\"']?[ \t]{0,20}[=:][ \t]{0,20})(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)"), r"\1[redacted]"),
     (re.compile(r"(?i)\b(bearer[ \t]{1,20})[A-Za-z0-9._~+/=-]{8,}"), r"\1[redacted]"),
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://[^\s/@:]*:)[^\s/]*?@(?=[\w.\[\]-]+(?::\d+)?(?:[/\s\"'<>]|$))"), r"\1[redacted]@"),
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://)[^\s/@:]+@(?=[\w.\[\]-]+(?::\d+)?(?:[/\s\"'<>]|$))"), r"\1[redacted]@"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://[^\s/@:]*:)[^\s/]*?@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?:[/\s\"'<>]|$))"), r"\1[redacted]@"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}://)[^\s/@:]+@(?=(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?(?:[/\s\"'<>]|$))"), r"\1[redacted]@"),
     (re.compile(r"\b(gh[pousr]_)[A-Za-z0-9]{10,}"), r"\1[redacted]"),
     (re.compile(r"\b(github_pat_)[A-Za-z0-9_]{20,}"), r"\1[redacted]"),
     (re.compile(r"\b(sk-)[A-Za-z0-9_-]{10,}"), r"\1[redacted]"),
@@ -91,9 +97,32 @@ _SECRET_PATTERNS = (
     (re.compile(r"(?i)(\bmysql\b[^\n]{0,200}?\s-p)\S+"), r"\1[redacted]"),
     (re.compile(r"(?i)([?&](?:access_token|token|key|api_key|apikey|sig|signature|secret|password|auth)=)[^&\s\"']+"), r"\1[redacted]"),
     (re.compile(r"(hooks\.slack\.com/services/)[A-Za-z0-9/]+"), r"\1[redacted]"),
+    (re.compile(r"\b(ya29\.)[A-Za-z0-9_-]{20,}"), r"\1[redacted]"),
+    (re.compile(r"\b(AGE-SECRET-KEY-1)[A-Z0-9]{20,}"), r"\1[redacted]"),
+    (re.compile(r"\b(dckr_pat_)[A-Za-z0-9_-]{10,}"), r"\1[redacted]"),
+    (re.compile(r"\b(pypi-)[A-Za-z0-9_-]{20,}"), r"\1[redacted]"),
+    (re.compile(r"\b(hf_)[A-Za-z0-9]{20,}"), r"\1[redacted]"),
+    (re.compile(r"\b(whsec_)[A-Za-z0-9]{10,}"), r"\1[redacted]"),
+    (re.compile(r"\b(dop_v1_)[a-f0-9]{20,}"), r"\1[redacted]"),
+    (re.compile(r"(discord(?:app)?\.com/api/webhooks/\d+/)[\w-]{20,}"), r"\1[redacted]"),
+    (re.compile(r"(?i)\b((?:AccountKey|SharedAccessKey|SharedAccessSignature)=)[^;\s\"']+"), r"\1[redacted]"),
+    (re.compile(r"(?i)([?&](?:x-amz-(?:signature|security-token|credential)|x-goog-signature)=)[^&\s\"']+"), r"\1[redacted]"),
+    (re.compile(r"(?i)(\b_?auth[\"']?[ \t]{0,10}[=:][ \t]{0,10})(?:\"[^\"]*\"|'[^']*'|[^\s\"',]+)"), r"\1[redacted]"),
+    (re.compile(r"\bLS0tLS1CRUdJTi[A-Za-z0-9+/=]{10,}"), "[redacted private key]"),
+    (re.compile(r"(?i)(\bclient-key-data:[ \t]{0,10})\S+"), r"\1[redacted]"),
+    (re.compile(r"(?i)(\bname:[ \t]{0,10}[\"']?[\w.-]{0,40}(?:token|secret|passw(?:or)?d|api[_-]?key|credential)[\w.-]{0,40}[\"']?[ \t]*\r?\n[ \t-]{0,20}value:[ \t]{0,10})(?:\"[^\"\n]*\"|'[^'\n]*'|\S+)"), r"\1[redacted]"),
+    (re.compile(r"(?i)(\bpassword[ \t]{1,5})'[^']*'"), r"\1'[redacted]'"),
+    (re.compile(r"(?i)(\bidentified[ \t]+by[ \t]+)(?:'[^']*'|\"[^\"]*\"|\S+)"), r"\1[redacted]"),
+    (re.compile(r"(?i)(-passin[ \t]+pass:)\S+"), r"\1[redacted]"),
+    (re.compile(r"(?i)(\bsshpass\b[^\n]{0,200}?\s-p[ =]?)\S+"), r"\1[redacted]"),
+    (re.compile(r"(?i)(\bredis-cli\b[^\n]{0,200}?\s-a[ =]?)\S+"), r"\1[redacted]"),
 )
 _REDACTED_MARK = re.compile(r"\[redacted(?: private key)?\]")
-_DROP_CATEGORIES = {"Cc", "Cf", "Zl", "Zp"}  # control, format (bidi, zero-width, tag characters), line/paragraph separators
+_DROP_CATEGORIES = {"Cc", "Cf", "Zl", "Zp", "Co", "Cn"}  # control, format (bidi, zero-width, tag), line/paragraph separators, private-use, unassigned
+# invisible or default-ignorable characters that are not in those categories (variation selectors, fillers, the
+# combining grapheme joiner, the braille blank) and could carry text a reader cannot see
+_INVISIBLE = ({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0} | set(range(0x180B, 0x1810))
+              | set(range(0xFE00, 0xFE10)) | set(range(0xE0100, 0xE01F0)))
 
 
 class CopilotError(Exception):
@@ -113,7 +142,7 @@ def printable(text: str) -> str:
     tab, before anything is printed to the user's terminal: the answer is influenced by untrusted output,
     and an escape sequence or a bidi override in it could rewrite the lines that say where the text came
     from or that nothing was run."""
-    return "".join(c for c in text if c in "\n\t" or unicodedata.category(c) not in _DROP_CATEGORIES)
+    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) not in _DROP_CATEGORIES and ord(c) not in _INVISIBLE))
 
 
 def clean_text(raw: str) -> str:
@@ -123,9 +152,13 @@ def clean_text(raw: str) -> str:
     return printable(strip_ansi(raw))
 
 
-_KW = re.compile(r"(?i)token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential")
+_KW = re.compile(r"(?i)token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|passphrase|sessionid|phpsessid|jsessionid")
 _VALUE_RE = re.compile(_VALUE)
 _NAME_CHAR = re.compile(r"[\w.-]")
+_TF_VALUE = re.compile(r'\{\s{0,20}"value"\s{0,5}:\s{0,20}')   # terraform state: "password": {"value": "x"}
+_COUNT_VALUE = re.compile(r"[\d,._]+")
+MAX_BLANKS = 40
+_TRAILING = ",;.)]}>"
 
 
 def _redact_kv(text: str):
@@ -144,16 +177,18 @@ def _redact_kv(text: str):
         while end < limit and _NAME_CHAR.match(text[end]):
             end += 1
         k = end
-        if k < n and text[k] in "\"'":
+        if k + 1 < n and text[k] == "\\" and text[k + 1] in "\"'":
+            k += 2  # the name's closing quote is escaped (JSON inside a JSON string)
+        elif k < n and text[k] in "\"'":
             k += 1
         blanks = 0
-        while k < n and text[k] in " \t" and blanks < 10:
+        while k < n and text[k] in " \t" and blanks < MAX_BLANKS:
             k += 1
             blanks += 1
         if k < n and text[k] in "=:":
             k += 1
             blanks = 0
-            while k < n and text[k] in " \t" and blanks < 10:
+            while k < n and text[k] in " \t" and blanks < MAX_BLANKS:
                 k += 1
                 blanks += 1
         elif blanks >= 1 and end == k - blanks:
@@ -165,12 +200,23 @@ def _redact_kv(text: str):
                 continue
         else:
             continue
+        if k < n and text[k] == "{":
+            tf = _TF_VALUE.match(text, k)
+            if tf:
+                k = tf.end()
         vm = _VALUE_RE.match(text, k)
         if not vm:
             continue
         pos = vm.end()
-        if vm.group(0).strip("\"'").strip().lower() in _BENIGN_VALUES:
-            continue
+        raw = vm.group(0).strip("\"'\\").strip().lower()
+        value = raw.rstrip(_TRAILING)
+        name = text[m.start():end].lower()
+        if not value or raw in _BENIGN_VALUES or value in _BENIGN_VALUES:
+            continue  # plainly not a secret: "none", "required", "}", a bare punctuation mark
+        if (name.startswith("tokens") and _COUNT_VALUE.fullmatch(value)) or name.startswith("tokenizer"):
+            continue  # `Tokens: 1523`, `max_tokens: 4096`, `tokenizer: gpt2`: counts and model names, not secrets
+        if name == "pwd" and value[:1] in ("/", "~"):
+            continue  # the shell's working-directory variable
         out.append(text[last:k])
         out.append("[redacted]")
         last = vm.end()
@@ -179,11 +225,38 @@ def _redact_kv(text: str):
     return "".join(out), count
 
 
+def _redact_keys(text: str):
+    """(text, count): every `-----BEGIN … PRIVATE KEY-----` … `-----END …-----` block replaced. A BEGIN with no END
+    anywhere after it is redacted to the end of the text only when a base64 body follows (a truncated key); a mere
+    mention of the marker, such as `echo "-----BEGIN PRIVATE KEY-----"`, is left readable. One pass: linear."""
+    out, pos, count, no_end = [], 0, 0, False
+    while True:
+        b = _KEY_BEGIN_LINE.search(text, pos)
+        if not b:
+            break
+        e = None if no_end else _KEY_END.search(text, b.end())
+        if e:
+            out.append(text[pos:b.start()])
+            out.append("[redacted private key]")
+            pos, count = e.end(), count + 1
+            continue
+        no_end = True
+        if _KEY_BODY.match(text, b.end()):
+            out.append(text[pos:b.start()])
+            out.append("[redacted private key]")
+            pos, count = len(text), count + 1
+            break
+        out.append(text[pos:b.end()])
+        pos = b.end()
+    out.append(text[pos:])
+    return "".join(out), count
+
+
 def redact(text: str):
     """(redacted_text, number_of_redactions_made). Best effort: shaped like a secret, so it is removed. A
     secret with no recognisable shape can survive — --dry-run exists so the user can see what would be sent."""
     count = 0
-    text, n = _KEY_BLOCK.subn("[redacted private key]", text)
+    text, n = _redact_keys(text)
     count += n
     end = _KEY_END.search(text)
     if end and not _KEY_BEGIN.search(text[:end.start()]):
@@ -232,7 +305,8 @@ def _bin(name: str) -> str:
     return found
 
 
-def _run(cmd, env=None, timeout=TOOL_TIMEOUT_S):
+def _run(cmd, env=None, timeout=None):
+    timeout = TOOL_TIMEOUT_S if timeout is None else timeout
     cmd = [_bin(cmd[0]), *cmd[1:]]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, env=env)
@@ -268,14 +342,17 @@ def is_ancestor(pid: int, env=None) -> bool:
 
 
 def tmux_pane_info(pane: str, env=None) -> dict:
-    r = _run(["tmux", "display-message", "-p", "-t", pane, "#{pane_tty}\t#{pane_current_path}\t#{pane_pid}"], env)
+    # the path goes LAST: a directory name may itself contain a tab, and must not shift the fields before it
+    r = _run(["tmux", "display-message", "-p", "-t", pane, "#{pane_tty}\t#{pane_pid}\t#{pane_current_path}"], env)
     if r.returncode != 0:
         raise CopilotError(f"tmux does not know pane {pane}: {r.stderr.strip() or 'no output'}")
-    tty, _, rest = r.stdout.rstrip("\n").partition("\t")
-    path, _, pid = rest.partition("\t")
-    if not tty:
+    parts = r.stdout.rstrip("\n").split("\t", 2)
+    if len(parts) != 3 or not parts[0]:
         raise CopilotError(f"tmux does not know pane {pane}")
-    return {"tty": tty, "path": path, "pid": int(pid) if pid.isdigit() else None}
+    tty, pid, path = parts
+    if not pid.isdigit():
+        raise CopilotError(f"tmux did not report a process id for pane {pane}; refusing to read it unverified")
+    return {"tty": tty, "path": path, "pid": int(pid)}
 
 
 def _safe_cwd() -> str:
@@ -306,7 +383,7 @@ def resolve_terminal(env, stdin_mode: bool):
         raise CopilotError(
             f"pane {pane} belongs to {info['tty']} but this command is running on {mine}: the TMUX_PANE value "
             "does not match this terminal (inherited from another session?). Refusing to read a different terminal.")
-    if info.get("pid") is not None and not is_ancestor(info["pid"], env):
+    if not is_ancestor(info["pid"], env):
         raise CopilotError(
             f"the process running pane {pane} is not an ancestor of this command, so this command is not running inside "
             "that pane (a different terminal namespace?). Refusing to read a different terminal.")
@@ -340,8 +417,9 @@ _GIT_SAFE = ["-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c"
 
 
 def _git(path, *args):
-    """Run git read-only: no fsmonitor/hook program from the repository's own config, no signature checks,
-    no index rewrite. None on any failure."""
+    """Run git read-only: no fsmonitor program, no pager, no signature check, no optional locks. Only commands that
+    read refs and commit objects are used (rev-parse, branch --show-current, log -1): none of them hashes working-tree
+    files, so a filter or textconv program configured in the repository is never started. None on any failure."""
     try:
         r = subprocess.run([_bin("git"), "-C", path, *_GIT_SAFE, *args], capture_output=True, text=True, errors="replace",
                            timeout=TOOL_TIMEOUT_S, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
@@ -357,11 +435,8 @@ def project_facts(path: str) -> str:
     if not top:
         return f"Working directory: {path} (not a git repository, or git could not be run)"
     branch = _git(path, "branch", "--show-current") or "(detached)"
-    status = _git(path, "status", "--porcelain")
-    changed = "unknown" if status is None else str(len([l for l in status.splitlines() if l.strip()]))
     last = _git(path, "log", "-1", "--format=%h %s") or "(no commits)"
-    return (f"Project: {os.path.basename(top)}\nWorking directory: {path}\n"
-            f"Git: branch {branch}, {changed} changed file(s), last commit: {last[:100]}")
+    return f"Project: {os.path.basename(top)}\nWorking directory: {path}\nGit: branch {branch}, last commit: {last}"
 
 
 # ----------------------------------------------------------------------------- prompt and call
@@ -383,6 +458,9 @@ CONTAINMENT_PRIMARY = ["--safe-mode"]
 CONTAINMENT_FALLBACK = ["--strict-mcp-config", "--setting-sources", "user"]
 
 
+_UNKNOWN_SAFE_MODE = re.compile(r"unknown option\W+--safe-mode")
+
+
 def _claude_cmd(containment):
     return [_bin("claude"), "-p", *containment, "--tools", "", "--no-session-persistence", "--output-format", "text",
             "--max-budget-usd", BUDGET_USD]
@@ -402,7 +480,9 @@ def call_claude(prompt: str) -> str:
 
     with tempfile.TemporaryDirectory(prefix="groundwork-copilot-") as scratch:
         r = attempt(CONTAINMENT_PRIMARY, scratch)
-        if r.returncode != 0 and "--safe-mode" in (r.stderr or "") + (r.stdout or ""):
+        if r.returncode != 0 and _UNKNOWN_SAFE_MODE.search(r.stderr or ""):
+            print("groundwork copilot: this claude does not know --safe-mode; using the weaker fallback containment "
+                  "(your user-level hooks and settings still apply to this call)", file=sys.stderr)
             r = attempt(CONTAINMENT_FALLBACK, scratch)  # an older claude that does not know --safe-mode
     if r.returncode != 0:
         first = ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[0]
@@ -432,6 +512,7 @@ def gather(env, stdin_mode, lines, stdin_text=None):
     if not text.strip():
         raise CopilotError("there is no recent output to explain in this terminal" if provider == "tmux" else "nothing was piped in")
     redactions = len(_REDACTED_MARK.findall(text)) + len(_REDACTED_MARK.findall(facts))
+    facts = "\n".join(line[:FACT_LINE_CHARS] for line in facts.split("\n"))
     return label, facts, text, redactions
 
 
@@ -442,11 +523,15 @@ def cmd_explain(args, env=None, stdin=None) -> int:
         stdin_text = None
         if args.stdin:
             fp = stdin or sys.stdin
+            if fp is None:
+                raise CopilotError("standard input is closed; pipe the output in, for example:  some_cmd 2>&1 | groundwork copilot explain --stdin")
             if getattr(fp, "isatty", lambda: False)():
                 print("groundwork copilot: reading standard input; paste or pipe the output, then press Ctrl-D", file=sys.stderr)
             stdin_text = read_tail(fp)
         label, facts, output, redactions = gather(env, args.stdin, lines, stdin_text)
-        question = clean_text(args.question or "").strip()[:500] or "What went wrong, and what should I check next?"
+        question, _ = redact(" ".join(clean_text(args.question or "").split())[:500])
+        redactions += len(_REDACTED_MARK.findall(question))
+        question = question or "What went wrong, and what should I check next?"
         boundary = secrets.token_hex(8)
         while boundary in output or boundary in facts:
             boundary = secrets.token_hex(8)
@@ -457,7 +542,7 @@ def cmd_explain(args, env=None, stdin=None) -> int:
         if args.dry_run:
             if args.json:
                 print(json.dumps({"source": label, "lines": n_lines, "chars": n_chars, "redactions": redactions,
-                                  "sent": False, "prompt": prompt}))
+                                  "sent": False, "prompt": prompt, "notice": NOTICE}))
             else:
                 print(header + "\nNothing was sent. This is the exact prompt:\n\n" + prompt)
             return 0
@@ -469,10 +554,10 @@ def cmd_explain(args, env=None, stdin=None) -> int:
         print("groundwork copilot: interrupted; nothing was run", file=sys.stderr)
         return 130
     if args.json:
-        print(json.dumps({"source": label, "lines": n_lines, "chars": n_chars, "redactions": redactions, "sent": True, "answer": answer}))
+        print(json.dumps({"source": label, "lines": n_lines, "chars": n_chars, "redactions": redactions, "sent": True,
+                          "answer": answer, "notice": NOTICE}))
     else:
-        print(answer + f"\n\n— {header}. No command was run. Any suggested command comes from untrusted terminal output: "
-                       "read it before you run it.")
+        print(answer + f"\n\n— {header}. {NOTICE}")
     return 0
 
 
@@ -491,7 +576,20 @@ def build_parser():
     return ap
 
 
+def _on_sigterm(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # a terminal that is not UTF-8 must not turn an answer into a traceback
+        except (AttributeError, ValueError, OSError):
+            pass
+    try:
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError):
+        pass  # not the main thread
     args = build_parser().parse_args(argv)
     return args.func(args)
 
