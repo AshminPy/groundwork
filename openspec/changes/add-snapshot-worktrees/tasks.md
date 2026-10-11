@@ -5,7 +5,7 @@
 
 ## 2. Verification
 - [x] 2.1 Tests against real git repositories with a bare origin (dirty, ahead, no upstream, detached, missing, locked-and-missing, unreadable and not-examined siblings, caps, exhausted and clamped budget, non-git, bare repository, `--separate-git-dir`, submodule session and submodule owner checkout, a git that rejects `worktree list -z` and one that rejects `--absolute-git-dir` (both simulated with a shim; the version that introduced either option was not verified), a non-UTF-8 path, an empty `.git` directory, a hostile path, section isolation)
-- [x] 2.2 Mutation checks: 28 mutants, each removing one safety or bounding clause of the worktree section (`tests/mutation/mutate_snapshot_worktrees.py`); all 28 caught by the tests
+- [x] 2.2 Mutation checks: 33 mutants, each removing one safety or bounding clause of the worktree section (`tests/mutation/mutate_snapshot_worktrees.py`, which mutates a copy); all 33 caught by the tests
 - [x] 2.3 Run against this repository's real worktrees (listed the two with local-only work; the six pushed ones counted)
 - [x] 2.4 Full suite and `openspec validate --all --strict` against the main baseline
 - [x] 2.5 Independent fresh-context review (3 MUST FIX: unbounded budget, failures shown as clean, submodule listing itself); all fixed

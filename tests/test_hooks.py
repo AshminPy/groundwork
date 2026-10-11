@@ -770,18 +770,15 @@ def test_snapshot_worktrees() -> None:
               elapsed < 1.3 + 0.6 and any("not examined" in l for l in lines), f"{elapsed:.2f}s " + "\n".join(lines))
         mod.HOOK_DEADLINE_SECONDS = 8.0
         mod._T0 = time.monotonic() - 100.0
-        logshim = tmp / "logshim"
-        logshim.mkdir()
-        calls_log = tmp / "gitcalls.log"
-        (logshim / "git").write_text(f'#!/bin/sh\necho "$*" >> {calls_log}\nexec {shutil.which("git")} "$@"\n')
-        (logshim / "git").chmod(0o755)
-        os.environ["PATH"] = f"{logshim}:{old_path}"
+        spawned = []
+        real_run = mod.subprocess.run
+        mod.subprocess.run = lambda *a, **k: (spawned.append(a), real_run(*a, **k))[1]
         try:
             late = mod.worktree_facts(str(repo))
         finally:
-            os.environ["PATH"] = old_path
+            mod.subprocess.run = real_run
         check("once the hook-level deadline has passed no git process is started and nothing is printed",
-              late == [] and not calls_log.exists(), f"{late} {calls_log.read_text() if calls_log.exists() else ''}")
+              late == [] and spawned == [], f"{late} {spawned}")
         mod._T0 = time.monotonic()
         mod.HOOK_DEADLINE_SECONDS = 10_000.0
 
