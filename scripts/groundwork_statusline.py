@@ -95,7 +95,7 @@ SYMBOL_SETS = {
     "emoji": {"CONNECTED": "✅", "CONFIGURED": "🟡", "AVAILABLE": "⚪"},
 }
 SEPARATORS = {"unicode": "│", "ascii": "|"}
-# Same failure mode the KEY_SCHEMA/DEFAULT_STATUSLINE_CONFIG assert above guards against: every
+# Same failure mode the KEY_SCHEMA/DEFAULT_STATUSLINE_CONFIG assert below guards against: every
 # SYMBOL_SETS preset must define exactly CONNECTED/CONFIGURED/AVAILABLE (SUMMARY_SYMBOL's keys), or
 # _fmt_integrations()'s `symbols[summary]` lookup could KeyError on a future preset added with a typo
 # or a missing entry — a render-time crash this module's whole design exists to prevent.
@@ -392,7 +392,7 @@ def _fmt_integrations(cache: dict, cfg: dict, plain: bool) -> Optional[str]:
 def render(stdin: dict, cfg: dict) -> str:
     plain = bool(cfg.get("plain_text"))
     # plain_text takes precedence over separator: plain always uses the word-friendly " | ", never
-    # consulting the symbol_set/separator presets below (see DEFAULT_STATUSLINE_CONFIG's comments).
+    # consulting the symbol_set/separator presets (see DEFAULT_STATUSLINE_CONFIG's comments).
     sep = " | " if plain else f" {_resolve_separator(cfg)} "  # ' | ' / ' │ ' (or ' | ' again for ascii)
 
     profile = _load_profile()
