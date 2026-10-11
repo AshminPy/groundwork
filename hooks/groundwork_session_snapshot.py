@@ -112,10 +112,10 @@ def strip_control_chars(text: str) -> str:
     return MULTILINE_CONTROL_CHARS.sub("", text)
 
 
-def git(cwd: str, *args: str, timeout: float = GIT_TIMEOUT, env: dict | None = None):
+def git(cwd: str, *args: str, timeout: float = GIT_TIMEOUT, env: dict | None = None, errors: str = "replace"):
     try:
         result = subprocess.run(
-            ["git", "-C", cwd, *args], capture_output=True, text=True, errors="replace", timeout=timeout, env=env
+            ["git", "-C", cwd, *args], capture_output=True, text=True, errors=errors, timeout=timeout, env=env
         )
     except Exception:
         return None
@@ -154,6 +154,13 @@ def git_facts(cwd: str) -> list[str]:
     return lines
 
 
+def _clip_path(path: str, limit: int) -> str:
+    """A path for display: undecodable bytes replaced, control characters stripped, and cut from the LEFT (the
+    distinguishing part of a path is its end)."""
+    text = clip(path.encode("utf-8", "replace").decode("utf-8", "replace"), 10_000)
+    return text if len(text) <= limit else "…" + text[-(limit - 1):]
+
+
 def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
     """Blocks of `git worktree list --porcelain`: key/value pairs, blocks separated by an empty record.
     With -z records are NUL-separated, so a newline inside a path cannot forge an entry."""
@@ -173,7 +180,7 @@ def _parse_worktrees(listing: str, nul: bool) -> list[dict]:
 def _sibling_state(path: str, run) -> tuple | None | object:
     """(modified, untracked, upstream description, work_not_on_a_remote) from ONE `git status -b` call, or None
     when git could not read the checkout, or _NO_TIME when the deadline passed first."""
-    out = run(path, "status", "--porcelain", "-b", "--untracked-files=all")
+    out = run(path, "status", "--porcelain", "-b", "--untracked-files=all", sibling=True)
     if out is _NO_TIME or out is None:
         return out
     lines = out.splitlines()
@@ -206,15 +213,19 @@ def worktree_facts(cwd: str) -> list[str]:
     deadline = min(time.monotonic() + WORKTREE_BUDGET_SECONDS, _T0 + HOOK_DEADLINE_SECONDS)
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}  # reading siblings must not rewrite their indexes
 
-    def run(path, *args):
+    def run(path, *args, sibling=False):
         left = deadline - time.monotonic()
         if left <= 0:
             return _NO_TIME
-        return git(path, *args, timeout=min(GIT_TIMEOUT, left), env=env)
+        call_env = env
+        if sibling:
+            # a directory that is not itself a checkout must not be answered for by the repository around it
+            call_env = {**env, "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(path))}
+        return git(path, *args, timeout=min(GIT_TIMEOUT, left), env=call_env, errors="surrogateescape")
 
     listing = run(cwd, "worktree", "list", "--porcelain", "-z")
     nul = True
-    if listing is None:  # git older than 2.36 has no -z
+    if listing is None:  # an older git may not accept -z
         listing, nul = run(cwd, "worktree", "list", "--porcelain"), False
     if listing is None or listing is _NO_TIME:
         return []
@@ -225,6 +236,8 @@ def worktree_facts(cwd: str) -> list[str]:
     if top is None or top is _NO_TIME:
         return []
     here = os.path.realpath(top)
+    own_git_dir = run(cwd, "rev-parse", "--absolute-git-dir")
+    own_git_dir = os.path.realpath(own_git_dir) if own_git_dir not in (None, _NO_TIME) else None
     local_only, pushed, missing, locked_missing, unreadable, unexamined = [], 0, 0, 0, 0, 0
     examined = 0
     for entry in entries:
@@ -240,23 +253,29 @@ def worktree_facts(cwd: str) -> list[str]:
         if examined >= MAX_WORKTREES_EXAMINED:
             unexamined += 1
             continue
+        state_path = path
         if not os.path.exists(os.path.join(path, ".git")):
-            # Not a checkout root: either the repository's own git directory listed as its main worktree (a
-            # submodule or --separate-git-dir session: that IS this checkout) or an orphaned directory nested
+            # Not a checkout root: either the repository's own git directory listed as its main worktree (this
+            # session's checkout when it is a submodule or uses --separate-git-dir) or an orphaned directory nested
             # inside another repository (git would silently answer for the parent).
+            if own_git_dir is not None and os.path.realpath(path) == own_git_dir:
+                continue
             if os.path.isfile(os.path.join(path, "HEAD")) and os.path.isdir(os.path.join(path, "objects")):
-                owner = run(path, "rev-parse", "--show-toplevel")
+                owner = run(path, "rev-parse", "--show-toplevel", sibling=True)
                 if owner is _NO_TIME:
                     unexamined += 1
-                elif owner is not None and os.path.realpath(owner) == here:
                     continue
-                else:
+                if owner is None:
                     unreadable += 1
+                    continue
+                if os.path.realpath(owner) == here:
+                    continue
+                state_path = owner  # another checkout of the same repository, found through its git directory
             else:
                 unreadable += 1
-            continue
+                continue
         examined += 1
-        state = _sibling_state(path, run)
+        state = _sibling_state(state_path, run)
         if state is _NO_TIME:
             unexamined += 1
         elif state is None:
@@ -267,14 +286,14 @@ def worktree_facts(cwd: str) -> list[str]:
             modified, untracked, upstream, _ = state
             branch = entry.get("branch", "").removeprefix("refs/heads/") or "detached HEAD"
             what = f"{modified} modified, {untracked} untracked" if modified or untracked else "clean"
-            local_only.append(f"  {clip(path, 90)}: {clip(branch, 40)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {what}; {upstream}")
+            local_only.append(f"  {_clip_path(state_path, 90)}: {_clip_path(branch, 40)} @ {clip(entry.get('HEAD', '')[:7], 7)}; {what}; {upstream}")
     if not (local_only or missing or locked_missing or unreadable or unexamined):
         return []
     parts = [f"{len(local_only)} with uncommitted changes, unpushed commits or no upstream", f"{pushed} clean and pushed"]
     if missing:
-        parts.append(f"{missing} with a missing directory (git worktree prune)")
+        parts.append(f"{missing} with a missing or unusable directory (git worktree prune)")
     if locked_missing:
-        parts.append(f"{locked_missing} locked with a missing directory (git worktree unlock, then prune)")
+        parts.append(f"{locked_missing} locked with a missing or unusable directory (locked on purpose; check the location before unlocking)")
     if unreadable:
         parts.append(f"{unreadable} whose state git could not read")
     if unexamined:
@@ -527,7 +546,11 @@ def build_snapshot(cwd: str) -> str:
     lines += investigation_facts(cwd)
     lines += git_lines or ["git: not a git repository"]
     lines += spec_lines
-    lines += worktree_facts(cwd) if git_lines else []
+    if git_lines:
+        try:
+            lines += worktree_facts(cwd)
+        except Exception:
+            pass  # this section must never cost the rest of the snapshot
     lines += signal_facts(cwd)
     lines += command_facts(cwd)
     lines.append(DATA_END)

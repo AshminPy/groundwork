@@ -22,10 +22,22 @@ The snapshot SHALL list each other worktree of the repository that has uncommitt
 
 #### Scenario: A submodule session
 - **WHEN** the session starts in a submodule that has a linked worktree
-- **THEN** the linked worktree is reported and the submodule's own git directory is not
+- **THEN** the linked worktree is reported and the submodule's own git directory is not, including when git cannot report its own git directory (simulated in tests by a git that rejects `--absolute-git-dir`)
+
+#### Scenario: A session in a linked worktree of a submodule
+- **WHEN** the session starts in a linked worktree of a submodule and the submodule's own checkout has uncommitted changes
+- **THEN** that checkout is examined and listed under its checkout path, not counted as unreadable
+
+#### Scenario: A separate git directory
+- **WHEN** the session starts in a checkout created with `--separate-git-dir` and its only sibling is clean and pushed
+- **THEN** nothing is printed, and when the sibling has uncommitted changes the sibling is listed and nothing is reported as unreadable
+
+#### Scenario: A directory that lost its .git
+- **WHEN** a sibling directory still exists but its `.git` was removed or replaced by an empty directory, and it sits inside another repository
+- **THEN** it is counted as unreadable or unusable and the surrounding repository's state is not reported as the sibling's
 
 ### Requirement: Bounded, data-framed and fail-open
-The section SHALL examine at most 12 worktrees, list at most 3 within a 700-character budget (counting the overflow), start every git call (the listing included) before one deadline — 3 seconds after the section starts or 8 seconds after the hook starts, whichever is earlier — with each call's timeout clamped to the time left, report worktrees it did not examine, read siblings without taking optional locks (so their indexes are not rewritten), pass every path and branch name through the snapshot's control-character stripping and length caps, read the listing NUL-separated when git supports it, sit inside the snapshot's data envelope, and print nothing when git fails or the directory is not a repository.
+The section SHALL examine at most 12 worktrees, list at most 3 within a 700-character budget (counting the overflow), start every git call (the listing included) before one deadline — 3 seconds after the section starts or 8 seconds after the hook starts, whichever is earlier — with each call's timeout clamped to the time left, report worktrees it did not examine, read siblings without taking optional locks (so their indexes are not rewritten) and without letting git search above them for a repository, decode git's output so a path that is not valid UTF-8 is examined rather than reported as missing, pass every path and branch name through the snapshot's control-character stripping and length caps (cutting a long path from the left so its distinguishing end stays visible), read the listing NUL-separated when git supports it, never let an exception in the section affect the rest of the snapshot, sit inside the snapshot's data envelope, and print nothing when git fails or the directory is not a repository.
 
 #### Scenario: More than three with unpushed work
 - **WHEN** nine other worktrees hold unpushed work
@@ -42,3 +54,11 @@ The section SHALL examine at most 12 worktrees, list at most 3 within a 700-char
 #### Scenario: Long branch name and hostile path
 - **WHEN** a sibling's branch name is 100 characters long, or its path contains newlines and text shaped like another listing entry
 - **THEN** the branch is clipped to 40 characters with an ellipsis and no forged entry appears
+
+#### Scenario: Long path and non-UTF-8 path
+- **WHEN** a sibling's path is longer than the display limit, or contains a byte that is not valid UTF-8
+- **THEN** the path is shown cut from the left (its end kept), and the non-UTF-8 sibling is examined and listed like any other
+
+#### Scenario: A failure inside the section
+- **WHEN** the worktree section raises an exception
+- **THEN** the rest of the snapshot is still produced

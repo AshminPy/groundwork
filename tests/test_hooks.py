@@ -646,19 +646,20 @@ def test_snapshot_worktrees() -> None:
         git(origin, "branch", "-q", "-D", "feat/wt-upstream-gone")
         git(gone_up, "fetch", "-q", "--prune", "origin")
 
+        mod.HOOK_DEADLINE_SECONDS = 10_000.0  # only the deadline tests below use the real 8 s
         mod.MAX_WORKTREES_LISTED = 10  # list everything for the content checks below
         mod.MAX_WORKTREE_CHARS = 5000
         lines = mod.worktree_facts(str(repo))
         text = "\n".join(lines)
         check("summary counts each kind",
               lines[0].startswith("other worktrees of this repository: 5 with uncommitted changes, unpushed commits or no upstream, "
-                                  "1 clean and pushed, 1 with a missing directory (git worktree prune)"), lines[0])
+                                  "1 clean and pushed, 1 with a missing or unusable directory (git worktree prune)"), lines[0])
         check("dirty sibling: branch, short HEAD, uncommitted counts, upstream state",
               re.search(r"wt-dirty: feat/wt-dirty @ [0-9a-f]{7}; 0 modified, 2 untracked; 0 ahead / 0 behind upstream", text) is not None, text)
         check("unpushed commit is reported as ahead",
               re.search(r"wt-unpushed: feat/wt-unpushed @ [0-9a-f]{7}; clean; 1 ahead / 0 behind upstream", text) is not None, text)
-        check("no-upstream branch is reported and its long name clipped to 40",
-              "no upstream tracking branch" in text and ("feat/" + "n" * 34 + "…") in text and "n" * 100 not in text, text)
+        check("no-upstream branch is reported and its long name clipped to 40 (from the left: the end of a name is its distinguishing part)",
+              "no upstream tracking branch" in text and ("…" + "n" * 39) in text and "n" * 100 not in text, text)
         check("detached HEAD is labelled", re.search(r"wt-detached: detached HEAD @ [0-9a-f]{7}; clean; no upstream", text) is not None, text)
         check("a worktree whose upstream branch was deleted is reported as such",
               re.search(r"wt-upstream-gone: feat/wt-upstream-gone @ [0-9a-f]{7}; clean; upstream branch gone", text) is not None, text)
@@ -690,7 +691,7 @@ def test_snapshot_worktrees() -> None:
         (nested / ".git").unlink()
         lines = mod.worktree_facts(str(repo))
         check("a nested directory that lost its .git is not reported as the parent's clean state",
-              ("missing directory" in lines[0] or "could not read" in lines[0]) and int(re.search(r"(\d+) clean and pushed", lines[0]).group(1)) == 1,
+              ("missing or unusable directory" in lines[0] or "could not read" in lines[0]) and int(re.search(r"(\d+) clean and pushed", lines[0]).group(1)) == 1,
               "\n".join(lines))
 
         # --- a submodule session never lists its own checkout, even when it has a real sibling worktree
@@ -709,7 +710,8 @@ def test_snapshot_worktrees() -> None:
         sm_text = snap(sup / "sm")
         sm_section = sm_text.split("other worktrees")[1].split("project signals")[0]
         check("a submodule with a sibling worktree lists the sibling and never its own git directory",
-              "smwt" in sm_section and ".git/modules" not in sm_section and "could not read" not in sm_section, sm_text)
+              "smwt" in sm_section and ".git/modules" not in sm_section and "could not read" not in sm_section
+              and "sup/sm:" not in sm_section, sm_text)
 
         # --- hostile and awkward paths
         evil = tmp / f"wt-evil\n\nworktree {dirty}\nHEAD 0000000\nbranch refs/heads/FORGED"
@@ -766,15 +768,191 @@ def test_snapshot_worktrees() -> None:
             mod.WORKTREE_BUDGET_SECONDS = 3.0
         check("with every git call slow, the whole section ends near its budget, not after all siblings",
               elapsed < 1.3 + 0.6 and any("not examined" in l for l in lines), f"{elapsed:.2f}s " + "\n".join(lines))
+        mod.HOOK_DEADLINE_SECONDS = 8.0
         mod._T0 = time.monotonic() - 100.0
         started = time.monotonic()
         check("once the hook-level deadline has passed no git call is made and nothing is printed",
               mod.worktree_facts(str(repo)) == [] and time.monotonic() - started < 0.2)
         mod._T0 = time.monotonic()
+        mod.HOOK_DEADLINE_SECONDS = 10_000.0
 
         plain = tmp / "plain"
         plain.mkdir()
         check("non-git dir -> no worktree facts", mod.worktree_facts(str(plain)) == [], str(mod.worktree_facts(str(plain))))
+    finish()
+
+
+def test_snapshot_worktrees_edge_cases() -> None:
+    print("groundwork_session_snapshot.py — worktree section: separate git dirs, submodules, old git, guards, clamps, isolation")
+    import importlib.util
+    import time
+    spec = importlib.util.spec_from_file_location("snap_wt2", SNAPSHOT_HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.HOOK_DEADLINE_SECONDS = 10_000.0
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        def mk(path: Path) -> Path:
+            path.mkdir(parents=True)
+            git(path, "init", "-q", "-b", "trunk")
+            git(path, "commit", "-q", "--allow-empty", "-m", "init")
+            return path
+
+        # --- --separate-git-dir: the session's own checkout is never counted, a pushed sibling alone prints nothing
+        sd = tmp / "sd"
+        sd.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "trunk", "--separate-git-dir", str(sd / "gitdir"), str(sd / "main")], check=True, env=GIT_ENV)
+        git(sd / "main", "commit", "-q", "--allow-empty", "-m", "init")
+        origin = tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "trunk", str(origin)], check=True, env=GIT_ENV)
+        git(sd / "main", "remote", "add", "origin", str(origin))
+        git(sd / "main", "push", "-q", "-u", "origin", "trunk")
+        git(sd / "main", "worktree", "add", "-q", "-b", "feat/lw", str(sd / "lw"))
+        git(sd / "lw", "push", "-q", "-u", "origin", "feat/lw")
+        check("--separate-git-dir session with only a pushed sibling: nothing printed, own checkout not counted",
+              mod.worktree_facts(str(sd / "main")) == [], str(mod.worktree_facts(str(sd / "main"))))
+        (sd / "lw" / "work.txt").write_text("x")
+        lines = mod.worktree_facts(str(sd / "main"))
+        check("--separate-git-dir session: the dirty sibling is listed and nothing is 'could not read'",
+              len(lines) == 2 and "could not read" not in lines[0] and "lw" in lines[1], "\n".join(lines))
+
+        # --- a submodule checkout that is itself dirty, seen from a linked worktree of the submodule
+        sup = mk(tmp / "sup")
+        subsrc = mk(tmp / "subsrc")
+        git(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(subsrc), "sm")
+        git(sup / "sm", "checkout", "-q", "--detach")
+        git(sup / "sm", "worktree", "add", "-q", "-b", "feat/smwt", str(tmp / "smwt"))
+        (sup / "sm" / "dirty.txt").write_text("d")
+        lines = mod.worktree_facts(str(tmp / "smwt"))
+        check("from a linked worktree of a submodule, the dirty submodule checkout is examined and listed (not 'could not read')",
+              bool(lines) and "could not read" not in lines[0] and any("sup/sm" in l for l in lines[1:]), "\n".join(lines))
+
+        # --- the same submodule session when git cannot give its own git directory (an older git may lack --absolute-git-dir):
+        # the session's own checkout, found again through the repository's git directory, is still never listed
+        (sup / "sm" / "dirty.txt").unlink()
+        nogd = tmp / "nogd"
+        nogd.mkdir()
+        (nogd / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = "--absolute-git-dir" ] && { echo "error: unknown option" >&2; exit 129; }; done\nexec ' + shutil.which("git") + ' "$@"\n')
+        (nogd / "git").chmod(0o755)
+        saved_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{nogd}:{saved_path}"
+        try:
+            lines = mod.worktree_facts(str(sup / "sm"))
+        finally:
+            os.environ["PATH"] = saved_path
+        check("without --absolute-git-dir, a submodule session's own checkout is not listed as a sibling",
+              not any("sup/sm:" in l for l in lines) and not any(".git/modules" in l for l in lines), "\n".join(lines))
+
+        # --- a bare repository's own entry is not a worktree: a session in a worktree of a bare repo, alone, prints nothing
+        bare = tmp / "barerepo.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(origin), str(bare)], check=True, env=GIT_ENV)
+        git(bare, "worktree", "add", "-q", "--detach", str(tmp / "bare-wt"), "trunk")
+        check("a bare repository's own entry is neither listed nor counted", mod.worktree_facts(str(tmp / "bare-wt")) == [],
+              str(mod.worktree_facts(str(tmp / "bare-wt"))))
+
+        # --- guards: each kind of 'something to say' prints on its own
+        origin2 = tmp / "origin2.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "trunk", str(origin2)], check=True, env=GIT_ENV)
+        origin = origin2  # a separate remote: the first one already holds the separate-git-dir repository's history
+        base = mk(tmp / "base")
+        git(base, "remote", "add", "origin", str(origin))
+        git(base, "push", "-q", "-u", "origin", "trunk")
+        broken = tmp / "w-broken"
+        git(base, "worktree", "add", "-q", "-b", "feat/b", str(broken))
+        git(broken, "push", "-q", "-u", "origin", "feat/b")
+        (broken / ".git").write_text("gitdir: /nonexistent/place\n")
+        lines = mod.worktree_facts(str(base))
+        check("a sole unreadable sibling is reported", len(lines) == 1 and "1 whose state git could not read" in lines[0], "\n".join(lines))
+        shutil.rmtree(broken)
+        lines = mod.worktree_facts(str(base))
+        check("a sole missing sibling is reported", len(lines) == 1 and "1 with a missing or unusable directory" in lines[0], "\n".join(lines))
+        git(base, "worktree", "prune")
+        locked = tmp / "w-locked"
+        git(base, "worktree", "add", "-q", "-b", "feat/l", str(locked))
+        git(base, "worktree", "lock", str(locked))
+        shutil.rmtree(locked)
+        lines = mod.worktree_facts(str(base))
+        check("a sole locked-and-missing sibling is reported with its own wording", len(lines) == 1 and "1 locked with a missing or unusable directory" in lines[0], "\n".join(lines))
+        git(base, "worktree", "unlock", str(locked))
+        git(base, "worktree", "prune")
+        a = tmp / "w-a"
+        b = tmp / "w-b"
+        git(base, "worktree", "add", "-q", "-b", "feat/a", str(a))
+        git(base, "worktree", "add", "-q", "-b", "feat/b2", str(b))
+        mod.MAX_WORKTREES_EXAMINED = 0
+        lines = mod.worktree_facts(str(base))
+        check("only 'not examined' siblings are reported", len(lines) == 1 and "2 not examined" in lines[0], "\n".join(lines))
+        mod.MAX_WORKTREES_EXAMINED = 12
+
+        # --- display: paths are cut from the left, untracked files in a new directory are all counted
+        deep = tmp / ("d" * 120)
+        deep.mkdir()
+        dw = deep / "wt"
+        git(base, "worktree", "add", "-q", "-b", "feat/deep", str(dw))
+        (dw / "newdir").mkdir()
+        (dw / "newdir" / "one.txt").write_text("1")
+        (dw / "newdir" / "two.txt").write_text("2")
+        text = "\n".join(mod.worktree_facts(str(base)))
+        row = next(l for l in text.splitlines() if "feat/deep" in l)
+        check("a long path keeps its END (the distinguishing part)", row.strip().startswith("…") and "/wt:" in row, row)
+        check("untracked files inside a new directory are counted one by one", "0 modified, 2 untracked" in row, row)
+
+        # --- a git that rejects `worktree list -z` still works
+        shim = tmp / "oldgit"
+        shim.mkdir()
+        (shim / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = "-z" ] && { echo "error: unknown switch z" >&2; exit 129; }; done\nexec ' + shutil.which("git") + ' "$@"\n')
+        (shim / "git").chmod(0o755)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{shim}:{old_path}"
+        try:
+            lines = mod.worktree_facts(str(base))
+        finally:
+            os.environ["PATH"] = old_path
+        check("without `worktree list -z` the line-based listing is used and the section still reports", bool(lines) and "feat/deep" in "\n".join(lines), "\n".join(lines))
+
+        # --- a non-UTF-8 sibling path is listed, not called 'missing'
+        latin = os.fsdecode(os.fsencode(str(tmp)) + b"/w-latin\xe9")
+        git(base, "worktree", "add", "-q", "-b", "feat/latin", latin)
+        Path(latin, "work.txt").write_text("x")
+        mod.MAX_WORKTREES_LISTED, mod.MAX_WORKTREE_CHARS = 20, 10_000
+        text = "\n".join(mod.worktree_facts(str(base)))
+        check("a sibling whose path is not valid UTF-8 is examined and listed", "feat/latin" in text, text)
+        check("and the output contains no lone surrogate", all(not (0xD800 <= ord(c) <= 0xDFFF) for c in text))
+
+        # --- an orphaned directory nested in a repository is not answered for by the repository around it
+        nest = base / ".wt-orphan"
+        git(base, "worktree", "add", "-q", "-b", "feat/orphan", str(nest))
+        (nest / ".git").unlink()
+        (nest / ".git").mkdir()  # an invalid, empty .git directory
+        lines = mod.worktree_facts(str(base))
+        check("a sibling with an empty .git directory is not read as the parent repository",
+              "could not read" in lines[0] or "missing or unusable" in lines[0], "\n".join(lines))
+
+        # --- the per-call timeout is clamped to the time left
+        slow = tmp / "slowgit"
+        slow.mkdir()
+        (slow / "git").write_text('#!/bin/sh\ncase "$*" in *"status"*) sleep 2.5;; esac\nexec ' + shutil.which("git") + ' "$@"\n')
+        (slow / "git").chmod(0o755)
+        os.environ["PATH"] = f"{slow}:{old_path}"
+        try:
+            mod.WORKTREE_BUDGET_SECONDS = 1.0
+            started = time.monotonic()
+            mod.worktree_facts(str(base))
+            elapsed = time.monotonic() - started
+        finally:
+            os.environ["PATH"] = old_path
+            mod.WORKTREE_BUDGET_SECONDS = 3.0
+        check("a single git call slower than the budget is cut at the budget, not allowed to run its full timeout", elapsed < 1.0 + 0.7, f"{elapsed:.2f}s")
+
+        # --- the section can never cost the rest of the snapshot
+        def boom(cwd):
+            raise RuntimeError("boom")
+
+        mod.worktree_facts = boom
+        snapshot = mod.build_snapshot(str(base))
+        check("an exception inside the worktree section leaves the rest of the snapshot intact",
+              "git: branch trunk" in snapshot and "▲ end repository facts" in snapshot, snapshot[:200])
     finish()
 
 
@@ -1142,7 +1320,7 @@ if __name__ == "__main__":
     if shutil.which("git") is None:
         print("git not found on PATH — cannot run these tests")
         sys.exit(1)
-    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_snapshot_worktrees, test_investigation_continuity, test_settings_merge, test_legacy_migration):
+    for test in (test_review_gate, test_review_gate_must_fix_strengthening, test_push_guard, test_session_snapshot, test_snapshot_worktrees, test_snapshot_worktrees_edge_cases, test_investigation_continuity, test_settings_merge, test_legacy_migration):
         try:
             test()
         except AssertionError:
