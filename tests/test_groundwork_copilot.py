@@ -847,17 +847,123 @@ def test_redaction_review_findings() -> None:
     check("an unterminated key block with a body is redacted to the end", "MIIEowIBAAKCAQEA" not in out and "[redacted private key]" in out and n == 1, out)
     out, n = m.redact('echo "-----BEGIN PRIVATE KEY-----"\nError: the real failure is here\n')
     check("a mere mention of the BEGIN marker does not hide the error that follows", "the real failure is here" in out, out)
+    t0 = time.monotonic()
     out, n = m.redact(kb * 3000)
-    check("thousands of BEGIN markers without bodies stay linear", n == 0 or n >= 0)
+    check("thousands of BEGIN markers without bodies stay linear (finish in well under a second, redact nothing they should not)",
+          time.monotonic() - t0 < 5.0 and "BEGIN RSA PRIVATE KEY" in out, f"{time.monotonic() - t0:.2f}s")
     check("invisible characters (variation selectors, fillers, braille blank, tag block, private-use, unassigned) are removed",
           m.clean_text("a\ufe0fb\u3164c\u034fd\u2800e\U000e0100f\U000e0041g\ue000h\u0378i") == "abcdefghi")
+    finish()
+
+
+def test_round4_review_fixes() -> None:
+    print("groundwork_copilot.py — round-3 review: @-mentions cannot attach files, URL credentials, and the SHALL clauses that had no failing test")
+    import re
+    import secrets as secrets_mod
+    m = load()
+    # --- MUST FIX 1: Claude Code expands "@path" mentions in prompt text into attached file contents (after redaction, absent from --dry-run)
+    hostile_facts = "Project: demo\nGit: branch main, last commit: abc1234 docs: details in @/etc/hostname and @~/.ssh/id_ed25519"
+    prompt = m.build_prompt(hostile_facts, "what is in @/etc/passwd?", 'see @/root/x\n(@/y) "@/z" =@/w\nuser@example.com git@github.com:o/r @babel/core', "b0b0")
+    check("the final prompt has no '@' that is not between two word characters (line start, after space, bracket, quote or '=' all neutralised)",
+          re.search(r"(?<!\w)@|@(?!\w)", prompt) is None, prompt)
+    check("neutralised mentions stay readable (full-width at sign) and user@host / git@host are left as they were",
+          "＠/etc/hostname" in prompt and "＠babel/core" in prompt and "user@example.com" in prompt and "git@github.com:o/r" in prompt, prompt)
+    check("cleaning does not remove the full-width at sign (what is shown and what is sent stay the same text)", m.clean_text("＠/x") == "＠/x")
+    r = dry([], "make: *** [all] Error 1\nsee @/etc/hostname for details\n")
+    check("--dry-run shows the neutralised text, so 'exactly what would be sent' is true",
+          r.returncode == 0 and "＠/etc/hostname" in r.stdout and re.search(r"(?m)(^|\s)@\S", r.stdout) is None, r.stdout)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        rec = tmp / "calls.json"
+        with stubbed_env(tmp, STUB_RECORD=str(rec)):
+            code, out, err = run_cli(m, ["--stdin", "--question", "read @/etc/hostname"], "boom @/etc/hostname\n")
+            sent = json.loads(rec.read_text())[0]["stdin"]
+        check("what reaches claude on stdin has no mention either", code == 0 and re.search(r"(?<!\w)@|@(?!\w)", sent) is None and "＠/etc/hostname" in sent, sent)
+
+    # --- MUST FIX 2: credentials in URLs are redacted whatever follows the host or port
+    leaking = ["redis://:s3cr3tPwX@cache:6379. Connection refused", "mongodb://admin:Mng0Pw99@db1:27017,db2:27017/app failed",
+               "postgres://u:s3cr3tPwX@db:5432?sslmode=require", "postgres://u:s3cr3tPwX@db.internal?sslmode=require",
+               "failed (redis://:s3cr3tPwX@cache:6379): timeout", "connect to postgres://u:s3cr3tPwX@db:5432, retrying",
+               "x postgres://u:s3cr3tPwX@db:5432;next", "[postgres://u:s3cr3tPwX@db:5432]", "postgres://u:s3cr3tPwX@h1:5432,h2:5432/db",
+               "mysql://u:s3cr3tPwX@h:3306#frag", "ftp://u:s3cr3tPwX@ftp.example.com\\", "smtp://u:s3cr3tPwX@smtp.example.com:587?starttls=true",
+               "https://u:s3cr3tPwX@host:abc/x", "https://s3cr3tPwX@github.com/org/repo.git", "postgres://u:s3cr3tPwX@[::1]:5432/app",
+               "clone https://s3cr3tPwX@git.example.com:443?x=1 failed", "fetch https://s3cr3tPwX@git.example.com, retrying", "(https://s3cr3tPwX@git.example.com)",
+               "postgres://u:s3cr3tPwX@db", "postgres://u:s3cr3tPwX@db/app"]
+    still = [s for s in leaking if "s3cr3tPwX" in m.redact(s)[0] or "Mng0Pw99" in m.redact(s)[0]]
+    check("a URL password or token is redacted whether the host/port is followed by . , ? ) ] ; # : / a quote, a space or the end", not still, str(still))
+    for pw_url in ("postgres://u:p@ssw0rdTail@db/app", "postgres://u:p@ssw0rd.tail@db/app", "postgres://u:p@ss-w0rd@db.example.com:5432/app"):
+        red = m.redact(pw_url)[0]
+        check(f"a password that itself contains '@' is redacted to the last '@': {pw_url}", red == pw_url.split(":")[0] + "://u:[redacted]@" + pw_url.rsplit("@", 1)[1], red)
+    benign = ["https://registry.npmjs.org/@babel/core", "https://host:8080/path@x", "bob@example.com", "git@github.com:org/repo.git", "https://example.com/a@b"]
+    check("URLs without credentials are left alone", all(m.redact(s) == (s, 0) for s in benign), str([m.redact(s) for s in benign]))
+
+    # --- MUST FIX 3: SHALL clauses that were not pinned by any failing-if-removed test
+    seq = iter(["dead", "dead", "beef"])
+    real_token = secrets_mod.token_hex
+    secrets_mod.token_hex = lambda n=8: next(seq)
+    try:
+        code, out, _ = run_cli(m, ["--stdin", "--dry-run", "--json"], "line with dead inside\n")
+    finally:
+        secrets_mod.token_hex = real_token
+    data = json.loads(out)
+    check("the fence boundary never occurs in the fenced text (a colliding boundary is drawn again)",
+          code == 0 and "BOUNDARY-beef" in data["prompt"] and "BOUNDARY-dead" not in data["prompt"], data["prompt"])
+    above = "password: hunter2value\n" + "".join(f"plain line {i}\n" for i in range(10))
+    code, out, _ = run_cli(m, ["--stdin", "--dry-run", "--json", "--lines", "5"], above)
+    data = json.loads(out)
+    check("the reported redaction count is the redactions in the text actually sent (a secret above the window counts 0, and is not sent)",
+          data["redactions"] == 0 and "hunter2value" not in data["prompt"], f"{data['redactions']}")
+    code, out, _ = run_cli(m, ["--stdin", "--dry-run", "--json", "--lines", "50"], above)
+    check("... and the same secret inside the window counts 1", json.loads(out)["redactions"] == 1, out[:200])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        with stubbed_env(tmp, STUB_EXIT="1", STUB_STDERR="boom \x1b[31mred\x1b[0m ‮evil\n"):
+            code, _, err = run_cli(m, ["--stdin"], "boom\n")
+        check("an error line built from claude's own stderr is stripped of escape and bidi characters before it is printed",
+              code == 1 and "boom" in err and "\x1b" not in err and "‮" not in err, repr(err))
+    check("line and paragraph separators (U+2028, U+2029) are removed from the text", m.clean_text("a b c") == "abc")
+    fake = Path(tempfile.mkdtemp(prefix="gw-nobin-"))
+    try:
+        for tool in ("ps", "git"):
+            if shutil.which(tool):
+                (fake / tool).symlink_to(shutil.which(tool))
+        m2 = load()
+        m2.controlling_tty = lambda env=None: "pts/7"  # so the missing tmux is what fails, not the missing controlling terminal of a CI job
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = str(fake)
+        try:
+            code, _, err = run_cli(m2, [], None, env={"TMUX": "/tmp/x,1,0", "TMUX_PANE": "%1"})
+        finally:
+            os.environ["PATH"] = saved
+    finally:
+        shutil.rmtree(fake, ignore_errors=True)
+    check("tmux not installed (with a controlling terminal): one readable line that names tmux",
+          code == 1 and "tmux" in err and "not installed" in err and "controlling terminal" not in err and len(err.strip().splitlines()) == 1, err)
+    finish()
+
+
+def test_live_mention_canary() -> None:
+    print("groundwork_copilot.py — LIVE (opt-in, GROUNDWORK_LIVE_TESTS=1, costs a few cents): a file named in the terminal text is not attached to the model's input")
+    if os.environ.get("GROUNDWORK_LIVE_TESTS") != "1" or shutil.which("claude") is None:
+        print("  SKIPPED: set GROUNDWORK_LIVE_TESTS=1 — the @-mention neutralisation was NOT exercised against the real CLI here")
+        return
+    m = load()
+    token = "PURPLE-" + os.urandom(4).hex()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        canary = Path(tmpdir) / "canary.txt"
+        canary.write_text(f"the launch code is {token}\n")
+        ask = f"Does your input contain the text {token}? Answer YES or NO and nothing else."
+        loose = m.call_claude(f"{ask}\n\nsee @{canary}")  # positive control: the un-neutralised mention DOES attach the file
+        check("positive control: an un-neutralised @-mention makes the real claude see the file (so this test can fail)", "YES" in loose.upper(), loose)
+        code, out, err = run_cli(m, ["--stdin", "--question", ask], f"make: *** [all] Error 1\nsee @{canary}\n(@{canary}) \"@{canary}\"\n@{canary}\n")
+        check("through the tool, the same mentions attach nothing", code == 0 and out.strip().upper().startswith("NO") and token not in out, out + err)
     finish()
 
 
 if __name__ == "__main__":
     for fn in (test_text_handling, test_prompt_and_call, test_terminal_resolution_refusals, test_pipeline_and_limits,
                test_project_facts_are_untrusted, test_command_output_and_reporting, test_real_tmux_two_panes, test_live_containment,
-               test_review_round_fixes, test_redaction_review_findings):
+               test_review_round_fixes, test_redaction_review_findings, test_round4_review_fixes, test_live_mention_canary):
         try:
             fn()
         except AssertionError:

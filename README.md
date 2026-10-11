@@ -190,7 +190,7 @@ harmful command, so every answer ends by saying nothing was run and that a sugge
 output. Use `--dry-run` to see exactly what would be sent. Limits: retroactive reading works only in tmux
 (other terminals pipe the output with `--stdin`; iTerm2 and Terminal.app readers are not built and not
 validated); run it as its own command (`cmd; groundwork copilot explain` on one line cuts cmd's output);
-without tools it cannot open your files, so it often ends with "UNKNOWN — show me X"; redaction is best effort
+it cannot open your files (the model has no tools, and every `@` that could be read as a Claude Code file mention is replaced by a look-alike before the prompt is sent, because Claude Code otherwise attaches a file named as `@path` in the prompt text), so it often ends with "UNKNOWN — show me X"; redaction is best effort
 (an unrecognised secret shape survives, and some benign error text mentioning "token" is left alone on
 purpose); it never executes a suggestion — authorized execution is deliberately not built.
 See [openspec/changes/add-groundwork-copilot/](openspec/changes/add-groundwork-copilot/).

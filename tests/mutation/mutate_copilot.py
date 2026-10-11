@@ -82,6 +82,18 @@ MUTANTS = [
     ('dangling END kept', 'if end and not _KEY_BEGIN.search(text[:end.start()]):', 'if False:'),
     ('invisible characters kept', ' and ord(c) not in _INVISIBLE', ''),
     ('private-use and unassigned kept', '"Zp", "Co", "Cn"}', '"Zp"}'),
+    ('mentions not neutralised', 'return neutralize_mentions(\n        "You are helping', 'return (\n        "You are helping'),
+    ('mentions neutralised at line start only', '_MENTION = re.compile(r"(?<!\\w)@|@(?!\\w)")', '_MENTION = re.compile(r"(?m)^@")'),
+    ('mentions neutralised after whitespace only', '_MENTION = re.compile(r"(?<!\\w)@|@(?!\\w)")', '_MENTION = re.compile(r"(?m)(^|(?<=\\s))@(?=\\S)")'),
+    ('every at sign neutralised', '_MENTION = re.compile(r"(?<!\\w)@|@(?!\\w)")', '_MENTION = re.compile(r"@")'),
+    ('URL password: old terminator', '[^\\s/]*?@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?![\\w@-]|\\.\\w))', '[^\\s/]*?@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?:[/\\s\\"\'<>]|$))'),
+    ('URL token: old terminator', '[^\\s/@:]+@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?![\\w@-]|\\.\\w))', '[^\\s/@:]+@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?:[/\\s\\"\'<>]|$))'),
+    ('URL password: host may end at a dot', '[^\\s/]*?@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?![\\w@-]|\\.\\w))', '[^\\s/]*?@(?=(?:[\\w.-]+|\\[[0-9A-Fa-f:.]+\\])(?::\\d+)?(?![\\w@-]))'),
+    ('fence boundary collision unchecked', 'while boundary in output or boundary in facts:', 'while False:'),
+    ('redaction count from the whole capture', 'redactions = len(_REDACTED_MARK.findall(text)) + len(_REDACTED_MARK.findall(facts))', 'redactions = len(_REDACTED_MARK.findall(text)) + len(_REDACTED_MARK.findall(facts)) + redact(clean_text(raw))[1]'),
+    ('error line not sanitised', 'print(f"groundwork copilot: {printable(str(e))}", file=sys.stderr)', 'print(f"groundwork copilot: {str(e)}", file=sys.stderr)'),
+    ('paragraph separator kept', '"Zl", "Zp", "Co"', '"Zl", "Co"'),
+    ('missing tool is a raw exception', 'raise CopilotError(f"\'{name}\' is not installed or not on PATH")', 'raise FileNotFoundError(name)'),
 ]
 
 # Mutants that cannot change behaviour, with the reason. They are not counted as caught or survived.

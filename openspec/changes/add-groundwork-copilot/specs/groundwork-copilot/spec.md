@@ -54,6 +54,10 @@ The command SHALL capture a wide window, remove ANSI sequences and every control
 - **WHEN** the output contains `token=ghp_…` and `password=hunter2`
 - **THEN** neither value appears in the prompt and the redaction count is at least 2
 
+#### Scenario: A URL credential followed by punctuation
+- **WHEN** the output contains `redis://:pw@cache:6379.`, `mongodb://u:pw@h1:27017,h2:27017/db` or `postgres://u:pw@db:5432?sslmode=require`
+- **THEN** the password does not appear in the prompt, whichever of `.` `,` `?` `)` `]` `;` `#` follows the host or port, while a password that itself contains `@` is still redacted up to the last `@`
+
 #### Scenario: A key split by the window
 - **WHEN** a private key's BEGIN line is above the line window and its body is inside it
 - **THEN** no key body reaches the prompt
@@ -69,6 +73,17 @@ The command SHALL capture a wide window, remove ANSI sequences and every control
 #### Scenario: Adversarial input is fast
 - **WHEN** 60 KB of repeated `token.` / `a.` / `authorization:` followed by spaces is redacted
 - **THEN** it completes in a few seconds at most
+
+### Requirement: No file can be attached through the prompt text
+Claude Code expands an `@path` mention found in the prompt into attached file contents even when the model is offered no tools. The command SHALL therefore replace every `@` in the final prompt (project facts, question and terminal text alike) that is not between two word characters with the full-width at sign, a character that cleaning does not remove, so that the prompt shown by `--dry-run` is the prompt that is sent and no local file is attached after redaction.
+
+#### Scenario: A file named in the terminal text or a commit subject
+- **WHEN** the terminal text contains `see @/path/to/file` and the last commit subject contains `@~/.ssh/config`
+- **THEN** the prompt contains neither mention, `--dry-run` shows the neutralised text, and a real `claude` call given a file with a unique token does not see that token (opt-in live test, with a positive control showing the un-neutralised mention does attach it)
+
+#### Scenario: Addresses stay readable
+- **WHEN** the text contains `user@example.com` or `git@github.com:org/repo.git`
+- **THEN** they are left unchanged
 
 ### Requirement: Terminal output and git facts are treated as untrusted data
 The prompt SHALL place the git facts and the output between two identical random boundary lines, SHALL state that the fenced text is untrusted data and that the model has no tools, and SHALL require the answer to quote the line it relies on and to say UNKNOWN when the output does not show the cause. The boundary SHALL not occur in the fenced text.
