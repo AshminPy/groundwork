@@ -84,7 +84,7 @@ class AccessMechanism:
     name: str  # display name, e.g. "GitHub MCP", "gh CLI"
     cli_binary: Optional[str] = None                  # presence check target for a "cli" mechanism
     mcp_server_name: Optional[str] = None              # presence-in-`claude mcp list` target for "mcp"
-    cli_auth_cmd: Optional[Tuple[str, ...]] = None      # a REAL connectivity check; only set where one is safely known
+    cli_auth_cmd: Optional[Tuple[str, ...]] = None      # a REAL connectivity check; only run when cli_success_marker is also set (a command declared without an observed marker is documentation only and is never run)
     cli_success_marker: Optional[str] = None            # substring cli_auth_cmd's output must contain for CONNECTED; REQUIRED for any CONNECTED (None => never CONNECTED); exit code 0 alone is not proof
     # (`gh auth status` was observed, live, to exit 0 while printing "Failed to log in ... token is invalid" —
     # an env-supplied GH_TOKEN it cannot validate. Exit code alone is not a trustworthy success signal for it.)
@@ -150,8 +150,8 @@ CATALOG: Tuple[IntegrationEntry, ...] = (
             AccessMechanism(
                 "cli", "acli CLI", cli_binary="acli", cli_auth_cmd=("acli", "jira", "auth", "status"),
                 # No success marker is set on purpose, which means this mechanism can report
-                # AVAILABLE (binary on PATH) but never CONNECTED: _mechanism_connected() fails closed
-                # without an observed marker. `acli` was not installed where this was written and the
+                # AVAILABLE (a binary named acli on PATH) but never CONNECTED: _mechanism_connected()
+                # fails closed without an observed marker and does not even run the command. `acli` was not installed where this was written and the
                 # Atlassian reference pages were unreachable (network egress blocked), so neither the
                 # command name below nor its success output has been observed (UNVERIFIED, 2026-10-11).
                 # To enable CONNECTED: run `acli jira auth status` on a real authenticated install,
@@ -299,13 +299,14 @@ def _mechanism_available(mech: AccessMechanism) -> bool:
 def _mechanism_connected(mech: AccessMechanism) -> bool:
     if not mech.cli_auth_cmd:
         return False  # no real check implemented for this mechanism — never guess
+    if not mech.cli_success_marker:
+        # Exit code 0 alone is not proof (gh auth status was observed to exit 0 on a failed check), and a
+        # command declared without an OBSERVED success marker can never reach CONNECTED — so do not run an
+        # unverified command at all: its result cannot change the outcome. Fail closed, no process spawned.
+        return False
     try:
         r = subprocess.run(list(mech.cli_auth_cmd), capture_output=True, text=True, timeout=CLI_AUTH_TIMEOUT_S)
         if r.returncode != 0:
-            return False
-        if mech.cli_success_marker is None:
-            # Exit code 0 alone is not proof (gh auth status was observed to exit 0 on a failed check),
-            # and nobody has observed this tool's success output yet: fail closed, never CONNECTED.
             return False
         return mech.cli_success_marker in (r.stdout or "") + (r.stderr or "")
     except Exception:
@@ -525,6 +526,9 @@ def _connected_reason(mech: AccessMechanism, connected: bool) -> str:
     if mech.cli_auth_cmd is None:
         return "no real connectivity check is implemented for this mechanism yet — never guessed"
     cmd = " ".join(mech.cli_auth_cmd)
+    if not mech.cli_success_marker:
+        return (f"no observed success marker for '{cmd}' (UNVERIFIED) — the command is not run and connected "
+                "is never inferred")
     return f"'{cmd}' {'confirmed a successful login' if connected else 'did not confirm a successful login'}"
 
 

@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-- **Jira's Atlassian CLI (`acli`) is now detected as an access mechanism**: the Integration Catalog's Jira
-  entry (`scripts/groundwork_integrations.py`) gains `acli` alongside the Atlassian MCP mechanism, so Jira
-  shows `AVAILABLE` when `acli` is on PATH. It deliberately does **not** report `CONNECTED`:
-  `acli` was not installed where this was built and the Atlassian reference pages were unreachable
-  (network egress blocked), so neither the `acli jira auth status` command nor its success output has
-  been observed (`UNVERIFIED`). Because a stub `acli` that prints "not logged in" and exits 0 was
-  reproduced as `CONNECTED` under the original exit-code-only design, the catalog now fails closed:
-  a mechanism with an auth command but no observed success marker is never `CONNECTED`. To enable it,
-  run the command on a real authenticated install, then set `cli_success_marker` to the observed
-  substring. No credential is stored or read by this change.
+- **Jira: a CLI named `acli` is now detected as an access mechanism (availability only)**: the Integration
+  Catalog's Jira entry (`scripts/groundwork_integrations.py`) gains a CLI mechanism for `acli` (believed to be
+  Atlassian's CLI; the binary's identity is `UNVERIFIED` — the check is a PATH-name check), so Jira shows
+  `AVAILABLE` when a binary named `acli` is on PATH. It deliberately does **not** report `CONNECTED`:
+  `acli` was not installed where this was built and the Atlassian reference pages were unreachable (network
+  egress blocked), so neither the `acli jira auth status` command nor its success output has been observed
+  (`UNVERIFIED`). The catalog rule is now: a mechanism with an auth command but no observed success marker is
+  never `CONNECTED`, and its command is not run (exit code 0 alone is not proof — a stub `acli` that prints
+  "not logged in" and exits 0 was shown to read as connected under an exit-code-only check). `doctor`
+  says so explicitly. To enable `CONNECTED`: run the command on a real authenticated install, confirm it
+  exists, then set `cli_success_marker` to a substring that appears only on success. No credential is stored
+  or read by this change.
 
 ## 2.3.0 — 2026-09-30
 
