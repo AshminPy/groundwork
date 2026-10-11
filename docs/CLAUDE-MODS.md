@@ -102,8 +102,59 @@ user mods there anyway).
 
 ## Not done
 
-- No runtime test of any mod (the ordering above is documented behaviour, not observed), so the milestone's acceptance ("improves readability in a real
-  session, preserves safety behaviour, can be disabled independently") is **not demonstrated**.
+- No runtime test of any **third-party** mod (the ordering above is documented behaviour, not observed), so the milestone's acceptance ("improves readability in a real
+  session, preserves safety behaviour, can be disabled independently") is **not demonstrated**. One first-party mod of ours was run: see "StatusLine as a mod" below.
 - No Groundwork code change: no integration was justified without that evidence. A future
   `groundwork doctor` warning for installed non-built-in mods is possible but would need a
   reliable way to tell a mod from an ordinary plugin; not built.
+
+
+## StatusLine as a mod (evaluated 2026-10-11)
+
+**Question**: should Groundwork's text statusLine be replaced by an optional Claude Code mod, with
+[Flightdeck](https://github.com/scasella/claude-flightdeck) as the reference?
+
+**Answer: no. Keep the statusLine.** Of the eight things asked for, six are already served, one
+(active subagents) is drawn by Claude Code itself, and the one real gap (a tool that is running *now*)
+needs a hook in the permission path, which is not worth adding for a display. A first-party proof of
+concept worked, and showed that it only repeated what Claude Code already draws. Nothing from the
+proof of concept is shipped, installed or enabled by `setup.sh`.
+
+| Asked for | Already served by (evidence) | A mod adds |
+|---|---|---|
+| Richer interface, readability | The statusLine can print several rows with ANSI colour (statusline docs, "Multiple lines", "Colors"); Groundwork's `detailed` mode prints 3 rows (observed) | Boxes and panes are possible in the API; none was built or shown to read better |
+| Context usage, session info | statusLine stdin carries `context_window`, `cost`, `rate_limits`, `session_name` (docs); Groundwork shows `ctx 42%` (observed). `$.session.usage()` gives a mod the same figures | Nothing |
+| Active agents | **Claude Code draws them itself**, observed in 2.1.296 with Groundwork's statusLine on: `◯ general-purpose  Read f1-f6 and count lines   3s · ↓ 20.7k tokens`, one row per running subagent, below the footer. statusLine stdin has `agent.name` only for `--agent` | Nothing (the proof of concept repeated it, with less detail) |
+| Git status, project profile | Groundwork's statusLine: branch, dirty marker, profile (observed); the docs add `workspace.git_worktree` and `pr` | Nothing |
+| Connected MCP / integrations | Groundwork reads the Integration Catalog cache (observed). The mod API has no list of MCP server states (`$.mcp` has only `call` and `connect`; searched the 21,539-line types file) | Would re-read `cache.json` and re-implement the staleness marker |
+| Tool execution and failures | The transcript shows each call and its failure. Groundwork 2.4.0 records success or failure per call per session in `tool_events.jsonl`, which the statusLine could read | Only a "running now" indicator, which needs `tool.call` or `PreToolUse` (the permission path); not built |
+| Minimal noise, low overhead | statusLine: a separate Python process, median 38 ms per refresh (30 runs on the test machine), run on events with a 300 ms debounce | The proof of concept added a row prefixed `⚠ groundwork-live:`; per-tick cost not measured; the module runs in a separate worker environment |
+| Keep data sources, no duplication | One implementation, in Python | A TypeScript mod cannot import it: it re-implements the logic, or spawns the script (`$.process`), which costs what the statusLine costs |
+
+**Flightdeck itself** (README at the commit already reviewed above, `f31daca`, still the remote HEAD): panels are main, ARCHITECT, GATE (permission checks), agents, loops, receipt and log, plus a status line (context, running agents, consults, denials). It lists git and MCP as not mentioned, so two of the asked-for items are outside it, and seven panels is the opposite of "minimal noise". It was **not installed or run**.
+
+### Proof of concept (first-party, isolated, read-only)
+
+`experiments/statusline-mod-poc/groundwork-live/` is about 60 lines. It hooks only `session.start` and `session.end`, calls only `$.agent.list`, `$.clock.every`, `$.clock.now` and `$.ui.status`, and shows one line: running subagents and how long each has run. It has no hook on tools, permissions, prompts or agent spawns, so it cannot deny, rewrite or delay anything.
+
+- `claude plugin validate`: passes (one warning: no author). It lists exactly the hooks and calls above.
+- `claude plugin test`: 6 of 6 pass.
+- Live, in a real interactive session (Claude Code 2.1.296, tmux, a disposable folder I trusted, `--plugin-dir` for that session only, `--setting-sources project`, Haiku, two subagents reading files; nothing installed): `/plugin` showed `1 mod active · groundwork-live`, and the screen at 6 seconds was
+
+```
+  ⚠ groundwork-live: agents 2: general-purpose 2s · general-purpose 0s     <- the mod
+  GROUNDWORK │ main✗ │ ctx 4% │ GitHub ● · !2h │ Jira ◐ · !2h │ Spacelift ○ · !2h   <- Groundwork's statusLine
+  ⏵⏵ don't ask on (shift+tab to cycle) · /tasks to see subagents · ← for agents
+  ● main
+  ◯ general-purpose  Read f1-f6 and count lines      3s · ↓ 20.7k tokens    <- Claude Code's own rows
+  ◯ general-purpose  Read f7-f12 and count lines     2s · ↓ 20.6k tokens
+```
+
+- The debug log shows 10 `$.ui.status` writes and no error, refusal or skipped hook.
+- This answers one open question in the trial procedure above for a `$.ui.status` line: it **coexists** with the statusLine on a row of its own, and the engine adds the `⚠ <plugin>:` prefix.
+
+**Not shown**: an `AbovePrompt` band or a `Pane`; the order against Groundwork's `PreToolUse` hooks (that session loaded project settings only, so Groundwork's hooks were not active); macOS or other terminals; per-tick overhead; Flightdeck. The model spend of the four short live runs was not measured.
+
+**What would change the answer**: Claude Code stops drawing running agents; the owner wants a pane or band layout as a design choice; or a "running now" indicator is wanted enough to accept a hook in the permission path, which would need its own security review. A cheaper step, if failures are wanted in the statusLine, is to read `tool_events.jsonl` there; that is a separate change.
+
+**Reproduce**: `claude plugin validate experiments/statusline-mod-poc/groundwork-live`, then `claude plugin test` on the same folder. For the live view, start `claude --plugin-dir experiments/statusline-mod-poc/groundwork-live --setting-sources project --model haiku` in tmux (choose "Yes, I trust this folder" at the trust prompt; the default is "No, exit") with a `statusLine` pointing at `groundwork_statusline.py` and `refreshInterval` 2 in `--settings`, and ask for two parallel subagents that read several files.
