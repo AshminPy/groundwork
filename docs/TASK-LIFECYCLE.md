@@ -8,6 +8,14 @@ prompt ──► intake ──► planning ──► implementing ──► veri
                                                       + review      or the native archive
 ```
 
+## Pilot scope
+
+This is a controlled pilot.
+- **Permissions.** Run it with Claude Code's normal permission modes: default, or `acceptEdits`. Do not use `bypassPermissions` or `--dangerously-skip-permissions`. The install sets neither, and Groundwork's authorization prompt is not verified under them.
+- **No unattended production or destructive operations.** Production, cloud, cluster, destructive and credential-related actions need a person to answer the permission prompt in an interactive session. Unattended runs — `claude -p`, scheduled routines, background agents — must not perform them. In a headless run nobody can answer the prompt, so such an action is denied.
+- **Guards still apply.** The protected-branch guard (`block_protected_push.py`) still blocks direct pushes to protected branches. Merges, tags and releases still need the owner's approval.
+- **Not a sandbox.** Groundwork's checks confirm intent. They do not contain programs (see Limits).
+
 ## What happens
 
 | Step | Who | What Groundwork does |
