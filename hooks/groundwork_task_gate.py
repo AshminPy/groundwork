@@ -41,7 +41,7 @@ except Exception:
         return {}
 
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-READ_TOOLS = {"Read", "NotebookRead"}
+READ_TOOLS = {"Read", "NotebookRead", "Grep"}
 COMMAND_TOOLS = {"Bash", "Monitor"}
 
 # ---------------------------------------------------------------------------------------------- shell parsing
@@ -593,13 +593,18 @@ def _shell_command_arg(args: list[str]):
     return value if kind == "c" else "" if kind == "stdin" else None
 
 
-def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
+ELEVATORS = {"sudo", "doas", "su", "pkexec"}
+
+
+def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | None = None) -> str | None:
     """A label when the command needs the user's authorization: it changes cloud, cluster, production or data
     systems, deletes outside the working tree, discards Git history or work, handles credentials, runs with elevated
     privileges, or runs commands Groundwork cannot see; else None."""
-    if argv and os.path.basename(argv[0]) in ("sudo", "doas"):
-        return f"a command run with elevated privileges ({os.path.basename(argv[0])})"
-    argv = unwrap_run(argv)
+    unwrapped = unwrap_run(argv)
+    for w in argv[:len(argv) - len(unwrapped) + 1] if argv else []:  # the wrapper chain and the command itself
+        if os.path.basename(w) in ELEVATORS:
+            return f"a command run with elevated privileges ({os.path.basename(w)})"
+    argv = unwrapped
     if not argv:
         return None
     name, args = os.path.basename(argv[0]), argv[1:]
@@ -612,9 +617,9 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     if name == "eval":
         if any("$" in a or "`" in a for a in args):
             return "eval of a variable or command output (it cannot be checked)"
-        return command_sensitive(" ".join(args), cwd, depth + 1) if depth < MAX_DEPTH else "a deeply nested eval"
+        return command_sensitive(" ".join(args), cwd, depth + 1, base) if depth < MAX_DEPTH else "a deeply nested eval"
     if name == "trap" and args and not args[0].startswith("-") and depth < MAX_DEPTH:
-        return command_sensitive(args[0], cwd, depth + 1)
+        return command_sensitive(args[0], cwd, depth + 1, base)
     if name in SHELLS:
         kind, value = _shell_invocation(args)
         if kind == "stdin" or (kind == "c" and value == ""):
@@ -622,7 +627,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         if kind == "c" and value.lstrip().startswith(("$(", "`")):
             return "a shell running downloaded or computed commands (they cannot be checked)"
         if kind == "c":
-            return command_sensitive(value, cwd, depth + 1) if depth < MAX_DEPTH else "a deeply nested shell"
+            return command_sensitive(value, cwd, depth + 1, base) if depth < MAX_DEPTH else "a deeply nested shell"
         return _script_sensitive(value, cwd, depth)
     if name in ("source", ".") and words:
         if _is_stdin_path(words[0]):
@@ -635,7 +640,12 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
             if flag in ("-exec", "-execdir", "-ok", "-okdir"):
                 rest = args[k + 1:]
                 end = next((j for j, a in enumerate(rest) if a in (";", "+")), len(rest))
-                found = segment_sensitive(rest[:end], cwd, depth + 1)
+                found = segment_sensitive(rest[:end], cwd, depth + 1, base)
+                if not found and "{}" in rest[:end]:  # `{}` is whatever find finds under its start points
+                    roots = [a for a in args[:next((j for j, a in enumerate(args) if a.startswith(("-", "(", "!"))),
+                                                  len(args))]] or ["."]
+                    found = segment_sensitive([w for w in rest[:end] if w != "{}"] + [os.path.join(r, "{}") for r in roots],
+                                              cwd, depth + 1, base)
                 if found:
                     return f"{found} (run by find {flag})"
     if "/" in argv[0] or argv[0].endswith(".sh"):
@@ -643,10 +653,11 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         if found:
             return found
     if name == "xargs":
-        rest = unwrap_run(_xargs_command(args))
+        raw = _xargs_command(args)
+        rest = unwrap_run(raw)
         if rest and os.path.basename(rest[0]) in SHELLS | {"eval"}:
             return "commands built by xargs for a shell (they cannot be checked)"
-        return segment_sensitive(rest, cwd, depth + 1) if rest and depth < MAX_DEPTH else None
+        return segment_sensitive(raw, cwd, depth + 1, base) if rest and depth < MAX_DEPTH else None
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
     if name == "kubectl" and any(w in KUBECTL_WRITE for w in words):
@@ -681,7 +692,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     if name in DB_CLIENTS:
         return f"a database client ({name})"
     if name == "rm" and any(a in ("-r", "-R", "--recursive") or re.match(r"^-[a-zA-Z]*[rR]", a) for a in args) and \
-            any(_risky_delete_target(w, cwd) for w in words):
+            any(_risky_delete_target(w, cwd, base) for w in words):
         return "a recursive delete of, or outside, the working directory"
     if name == "ssh":
         return "remote execution (ssh)"
@@ -696,14 +707,24 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     if name == "wget" and any(a.startswith(("--post-data", "--post-file", "--method", "--body-data")) for a in args):
         return "an HTTP request that sends data"
     if name == "git":
-        return _git_destructive(words, args)
+        sub_args = _git_subcommand_args(args)
+        return _git_destructive(_words(sub_args), sub_args)
     return None
 
 
 CREDENTIAL_PATH_RE = re.compile(
     r"(?:^|/)(?:\.ssh/|\.aws/(?:credentials|config)|\.config/gcloud/|\.kube/config|\.netrc|\.docker/config\.json|"
     r"\.npmrc|\.pypirc|\.git-credentials|\.gnupg/|\.vault-token)|(?:^|/)\.env(?:\.(?!example|sample|template)[\w.-]+)?$|"
-    r"(?:^|/)id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?$|\.(?:pem|p12|pfx|key)$")
+    r"(?:^|/)id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?$")
+# Key and certificate files by extension: only for a path-like word (no spaces; a `.key` file needs a directory), so
+# `grep -rn "event.key"` or a commit message mentioning `item.key` is not credential access (found by review).
+CREDENTIAL_EXT_RE = re.compile(r"^[^\s]*\.(?:pem|p12|pfx)$|^[^\s]*/[^/\s]+\.key$")
+
+
+def credential_path(word: str) -> bool:
+    return bool(CREDENTIAL_PATH_RE.search(word) or CREDENTIAL_EXT_RE.search(word))
+
+
 CREDENTIAL_COMMANDS = {  # name -> subcommand word sequences that read, print, store or change credentials
     "gh": (("auth",),), "aws": (("configure",), ("sts", "get-session-token"), ("secretsmanager", "get-secret-value"),
                                 ("ssm", "get-parameter"), ("iam", "create-access-key")),
@@ -720,10 +741,13 @@ def _credential_access(name: str, words: list[str], args: list[str]) -> str | No
     """Reading, printing, storing or changing credentials (found as a requirement: credential-related actions need
     explicit authorization)."""
     for seq in CREDENTIAL_COMMANDS.get(name, ()):
-        if words[:len(seq)] == list(seq) and (name != "aws" or seq != ("ssm", "get-parameter")
-                                               or "--with-decryption" in args):
+        n = len(seq)
+        # A one-word sequence is the subcommand; a longer one may follow global options' values
+        # (`kubectl -n ns get secret`, `aws --profile p secretsmanager ...`; found by review).
+        hit = words[:n] == list(seq) if n <= 1 else any(words[i:i + n] == list(seq) for i in range(len(words)))
+        if hit and (name != "aws" or seq != ("ssm", "get-parameter") or "--with-decryption" in args):
             return f"credential access ({' '.join([name, *seq])})"
-    if any(CREDENTIAL_PATH_RE.search(a) for a in args if not a.startswith("-")):
+    if any(credential_path(a) for a in args if not a.startswith("-")):
         return f"credential access (a credential file, via {name})"
     return None
 
@@ -731,23 +755,38 @@ def _credential_access(name: str, words: list[str], args: list[str]) -> str | No
 TEMP_DIRS = ("/tmp/", "/private/tmp/", "/var/tmp/", "/var/folders/")
 
 
-def _risky_delete_target(word: str, cwd: str) -> bool:
-    """A recursive delete target outside the current working directory (or the directory itself, or everything in
-    it): unknown ($VAR, ~), absolute, or up the tree. Temporary directories are ordinary scratch space."""
-    if "$" in word or "`" in word or word.startswith("~"):
+def _risky_delete_target(word: str, cwd: str, base: str | None = None) -> bool:
+    """A recursive delete target outside the session's working directory `base` (or that directory itself, or
+    everything in it): unknown ($VAR, ~), absolute, or up the tree. `cwd` is where the command runs (after a `cd`);
+    the boundary stays `base` (found by independent review: `cd /other && <delete> data`). base "" means a `cd`
+    Groundwork could not follow, so every target is unknown. Temporary directories are ordinary scratch space."""
+    base = cwd if base is None else base
+    if not base or "$" in word or "`" in word or word.startswith("~"):
         return True
     if word in ("*", ".*", "./*", ".", "./", "/", "..") or word.rstrip("/") in ("", ".", ".."):
         return True
     path = os.path.normpath(word if os.path.isabs(word) else os.path.join(cwd, word))
     if path.startswith(TEMP_DIRS) or (os.environ.get("TMPDIR") and path.startswith(os.environ["TMPDIR"].rstrip("/") + "/")):
         return False
-    base = os.path.normpath(cwd)
-    return not path.startswith(base.rstrip("/") + "/")
+    return not path.startswith(os.path.normpath(base).rstrip("/") + "/")
+
+
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
+                     "--super-prefix", "--list-cmds", "--attr-source"}
+
+
+def _git_subcommand_args(args: list[str]) -> list[str]:
+    """git's arguments from the subcommand on: global options (`-C dir`, `-c k=v`, `--git-dir=...`, `--no-pager`)
+    are skipped, so they cannot hide the subcommand (found by independent review)."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in GIT_VALUE_OPTIONS else 1
+    return args[i:]
 
 
 def _git_destructive(words: list[str], args: list[str]) -> str | None:
     """Git commands that discard history or uncommitted work; `git push` to a protected branch is the separate
-    block_protected_push hook."""
+    block_protected_push hook. `args` start at the subcommand."""
     sub = words[0] if words else ""
     if sub == "push" and any(a in ("-f", "--force", "--force-with-lease", "--mirror", "--delete", "-d")
                              or a.startswith(("--force", "+")) for a in args[1:]):
@@ -762,8 +801,14 @@ def _git_destructive(words: list[str], args: list[str]) -> str | None:
         return "git branch force-delete (discards unmerged commits)"
     if sub == "stash" and words[1:2] in (["drop"], ["clear"]):
         return f"git stash {words[1]} (discards stashed work)"
-    if sub in ("checkout", "restore") and ("." in words[1:] or "--" in args and words[-1:] == ["."]):
+    if sub in ("checkout", "restore") and ("." in words[1:] or "--" in args and words[-1:] == ["."]) and not (
+            sub == "restore" and any(a in ("--staged", "-S") for a in args) and
+            not any(a in ("--worktree", "-W") for a in args)):  # `restore --staged .` only unstages
         return f"git {sub} . (discards uncommitted changes)"
+    if sub in ("checkout", "switch") and any(a in ("-f", "--force", "--discard-changes") for a in args):
+        return f"git {sub} --force (discards uncommitted changes)"
+    if sub == "filter-branch" or (sub == "update-ref" and "-d" in args) or words[:2] == ["reflog", "expire"]:
+        return f"git {' '.join(words[:2]) if sub == 'reflog' else sub} (rewrites or drops history)"
     return None
 
 
@@ -830,32 +875,35 @@ def _cd_target(argv: list[str]) -> str | None:
     return "" if ("$" in target or "`" in target or target == "-") else os.path.expanduser(target)
 
 
-def checked_segments(segs: list[dict], cwd: str, depth: int = 0):
+def checked_segments(segs: list[dict], cwd: str, depth: int = 0, base: str | None = None):
     """(segment, argv as checked, label or None) for each segment: a variable command name resolved from a literal
     assignment in the same command, and scripts read in every directory a literal `cd` / `pushd` may have moved to
     (`cd scripts && ./tfa.sh`; found by independent review). Used for the typed command and for nested commands."""
     assigns = _literal_assignments(segs)
     dirs = [cwd]
+    base = cwd if base is None else base  # the delete boundary stays the starting directory
     for s in segs:
         argv = _resolve_head(s["argv"], assigns)
         label = None
         for d in dirs:
-            label = segment_sensitive(argv, d, depth)
+            label = segment_sensitive(argv, d, depth, base)
             if label:
                 break
         yield s, argv, label
         target = _cd_target(argv)
+        if target == "":
+            base = ""  # a cd Groundwork cannot follow: where a later delete lands is unknown
         if target:
             dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))
             if len(dirs) > 32:
                 dirs = [cwd] + dirs[-31:]  # keep the start and the newest directories
 
 
-def command_sensitive(cmd: str, cwd: str, depth: int = 0) -> str | None:
+def command_sensitive(cmd: str, cwd: str, depth: int = 0, base: str | None = None) -> str | None:
     segs = split_segments(cmd)
     if segs is None:
         return "a command Groundwork could not parse"
-    for _s, _argv, label in checked_segments(segs, cwd, depth):
+    for _s, _argv, label in checked_segments(segs, cwd, depth, base):
         if label:
             return label
     return embedded_sensitive(cmd, segs, cwd, depth)
@@ -957,6 +1005,10 @@ def _norm_tokens(cmd: str) -> list[str] | None:
 
 
 def verification_status(segs, verify_cmd: str) -> str | None:
+    return verification_match(segs, verify_cmd)[0]
+
+
+def verification_match(segs, verify_cmd: str) -> tuple[str | None, int | None]:
     """'counted' when the declared verification command ran exactly as declared (same words; output redirection
     allowed) and its exit status is the tool's exit status: started at the beginning, after ; or && (not after ||)
     and followed only by && (found by independent review: `cmd && echo PASS || echo FAIL` exits 0 when cmd fails,
@@ -964,7 +1016,7 @@ def verification_status(segs, verify_cmd: str) -> str | None:
     observable or it ran with extra arguments; else None."""
     toks = _norm_tokens(verify_cmd)
     if not toks:
-        return None
+        return None, None
     found = None
     for k, s in enumerate(segs):
         argv = s["argv"]
@@ -975,9 +1027,9 @@ def verification_status(segs, verify_cmd: str) -> str | None:
             continue
         later_ok = all(t["prev"] == "&&" for t in segs[k + 1:])
         if s["prev"] in (None, ";", "&&", "\n") and later_ok and s["next"] in (None, "&&", "\n"):
-            return "counted"
+            return "counted", k
         found = "masked"
-    return found
+    return found, None
 
 
 def _response_text(resp) -> str:
@@ -1084,11 +1136,11 @@ def check_file(tool: str, path: str, cwd: str) -> None:
     if tool in FILE_TOOLS and (under(path, gt.claude_dir() / "hooks") or os.path.realpath(path) in config_paths()
                                or re.search(r"(^|/)\.claude/settings(\.local)?\.json$", path)):
         ask("this edits Claude Code settings or Groundwork's hooks (it can change what is checked).")
-    if CREDENTIAL_PATH_RE.search(path):
+    if credential_path(path):
         ask(f"this {'reads' if tool in READ_TOOLS else 'changes'} a credential file ({os.path.basename(path)}).")
 
 
-PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork_task_gate", "groundwork/tasks")
+PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork/tasks")
 
 
 def check_command(cmd: str, cwd: str) -> None:
@@ -1127,19 +1179,19 @@ def _touches_protected(segs: list[dict], cmd: str) -> bool:
     `cd` into one of them, every later segment counts as naming it."""
     cdir = str(gt.claude_dir())
     markers = PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", cdir + "/groundwork", "~/.claude/settings",
-                                "~/.claude/hooks", ".claude/settings", "CLAUDE_CONFIG_DIR")
+                                "~/.claude/hooks", ".claude/settings")
     bodies = heredoc_bodies(cmd)
     inside = False
     for s in segs:
         argv = unwrap_run(s["argv"]) or s["argv"]
-        text = " ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)])
+        text = os.path.expandvars(" ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)]))
         named = inside or any(m in text for m in markers)
         if argv[:1] in (["cd"], ["pushd"]):
             target = os.path.expanduser(os.path.expandvars(_words(argv[1:])[0])) if _words(argv[1:]) else ""
             inside = inside or named or (bool(target) and under(target, Path(cdir)))
             continue
-        if named and (s["writes"] or (os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS) \
-                and not _task_cli(argv):
+        if named and (s["writes"] or ((os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS
+                                      and not _task_cli(argv))):
             return True
     return False
 
@@ -1150,7 +1202,7 @@ def on_pre(data: dict) -> None:
     cwd = data.get("cwd") or os.getcwd()
     try:
         if tool in FILE_TOOLS or tool in READ_TOOLS:
-            check_file(tool, str(ti.get("file_path") or ti.get("notebook_path") or ""), cwd)
+            check_file(tool, str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""), cwd)
         elif tool in COMMAND_TOOLS and isinstance(ti.get("command"), str):
             check_command(ti["command"], cwd)
         elif tool == "PowerShell" and isinstance(ti.get("command"), str):
@@ -1182,21 +1234,34 @@ def on_post(data: dict) -> None:
         detail = str(data.get("error") or "").splitlines()[0] if not ok and data.get("error") else ""
         # A background command has only started when this fires: never evidence of a verification result.
         evidence = tool == "Bash" and not ti.get("run_in_background")
+        # Evidence is recorded in the order the command ran it, so a verification counts only when it ran after the
+        # last sensitive operation; a sensitive command that is itself a declared verification (`psql …`, `ssh …`)
+        # is not an operation, and reading credentials changes nothing (found by independent review).
+        plans = {t["key"]: (gt.read_plan(root, t)["verify"] if evidence and t.get("change") else []) for t in tasks}
+        declared = [toks for v in {v for vs in plans.values() for v in vs} if (toks := _norm_tokens(v))]
+        events = []
         for t in tasks:
-            for v in gt.read_plan(root, t)["verify"] if evidence and t.get("change") else []:
-                status = verification_status(segs, v)
+            for v in plans[t["key"]]:
+                status, k = verification_match(segs, v)
                 if status == "counted":
-                    gt.record_verification(root, t["key"], v, ok, detail)
-                    notes.append(f"{t['key']}: verification `{v}` recorded as {'PASSED' if ok else 'FAILED'}.")
+                    events.append((k, 1, t, v))
                 elif status == "masked":
                     notes.append(f"{t['key']}: `{v}` ran with extra arguments, piped or chained, so it does not count "
                                  "as the declared verification. Run it exactly as declared, on its own.")
-        ran = [" ".join(argv) for _s, argv, label in checked_segments(segs, cwd) if label]
-        for cmd in ran[:3]:
-            for t in tasks:
-                if t.get("tier") == gt.MATERIAL:
-                    gt.record_operation(root, t["key"], cmd)
-            notes.append(f"sensitive operation recorded (`{gt.clip(cmd, 80)}`); verification counts only after it.")
+        for k, (seg, argv, label) in enumerate(checked_segments(segs, cwd)):
+            if label and not label.startswith("credential access") and seg["argv"] not in declared:
+                events.append((k, 0, None, " ".join(argv)))
+        ops = 0
+        for _k, _order, t, what in sorted(events, key=lambda e: (e[0], e[1])):
+            if t is not None:
+                gt.record_verification(root, t["key"], what, ok, detail)
+                notes.append(f"{t['key']}: verification `{what}` recorded as {'PASSED' if ok else 'FAILED'}.")
+            elif ops < 3:
+                ops += 1
+                for task in tasks:
+                    if task.get("tier") == gt.MATERIAL:
+                        gt.record_operation(root, task["key"], what)
+                notes.append(f"sensitive operation recorded (`{gt.clip(what, 80)}`); verification counts only after it.")
         if ok and "archive" in ti["command"]:
             # Native archive (openspec archive, or the /opsx:archive move into openspec/changes/archive/) completes
             # the task when its evidence is in place.

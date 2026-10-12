@@ -13,27 +13,27 @@ prompt ──► intake ──► planning ──► implementing ──► veri
 | Step | Who | What Groundwork does |
 |---|---|---|
 | Intake | the prompt hook | A ticket key (`COR-123`) or MATERIAL engineering work becomes a task. Questions, slash commands and keyless STANDARD work do not. MATERIAL when cloud, infrastructure, data, security, production or deployment words appear. MATERIAL tasks get a native OpenSpec change (`openspec new change <key>-<slug>`). Claude is told to plan and implement it the native way. |
-| Plan | Claude, with the owner | The native OpenSpec artifacts are the plan. Add a `## Verification` section (in `design.md`, `proposal.md` or `tasks.md`) listing the exact commands that prove the change, one per line in backticks. Revise any artifact at any time. Groundwork reads them fresh on every check. |
+| Plan | Claude, with the owner | The native OpenSpec artifacts are the plan. Add an un-numbered `## Verification` section (in `design.md`, `proposal.md` or `tasks.md`) with one line per command, each starting with the command in backticks (`` - `pytest -q` — unit tests ``). Revise any artifact at any time. Groundwork reads them fresh on every check. |
 | Implement | Claude | Ordinary edits, builds, tests, commits and pushes run without prompts. Sensitive actions show Claude Code's permission prompt (below). |
 | Evidence | the hook | Records each run of a declared verification command (passed or failed, on which version of the code), each foreground review's `REVIEW RESULT`, and each sensitive operation that ran. |
 | Complete | Claude runs `groundwork task complete <KEY>`, or archives natively | MATERIAL: every task in `tasks.md` is checked, each declared verification passed on the current code after the last sensitive operation, and the latest review reports `Must-fix: 0`. STANDARD: on request. A native archive (`openspec archive`, `/opsx:archive`) completes the task when this evidence is in place. Otherwise it reports what is missing. |
 
 Phase comes from the native artifacts: **planning** (no `tasks.md` yet), **implementing** (unchecked tasks), **verifying** (all checked), **archived** (moved to `openspec/changes/archive/`).
 
-Evidence follows the code, not the plan:
-- Editing the proposal, design, specs or tasks, syncing specs and archiving never make a passed verification stale.
-- Changing code does.
-- The latest run on the current code decides.
+Evidence follows the content of the code, not the plan:
+- Editing the proposal, design, specs or tasks, syncing specs, archiving, staging and committing never make a passed verification stale.
+- Changing a file does.
+- The latest run on the current code decides. In one command, a verification counts only when it ran after any sensitive operation in that command.
 
 ## What asks for authorization
 
 Groundwork returns Claude Code's native `ask` decision, which shows the usual permission prompt. It does this in every repository, task or no task, for:
 
 - cloud, cluster, Terraform and Helm changes (`gcloud … create`, `kubectl apply`, `terraform apply`, …), database clients, `ssh`, and HTTP requests that send data;
-- recursive deletes of, or outside, the working directory (`rm -rf .`, `rm -rf ~/x`, `rm -rf "$VAR"`). Deletes inside it and in temporary directories do not ask;
-- destructive Git: forced or deleting push, `reset --hard`, `clean -f`, `branch -D`, `stash drop`/`clear`, `checkout .`/`restore .`;
+- recursive deletes of, or outside, the working directory (`rm -rf .`, `rm -rf ~/x`, `rm -rf "$VAR"`, `cd /other && rm -rf data`). Deletes inside it and in temporary directories do not ask;
+- destructive Git, also behind `git -C dir` or `-c k=v`: forced or deleting push, `reset --hard`, `clean -f`, `branch -D`, `stash drop`/`clear`, `checkout .`/`restore .`, `checkout -f`/`switch -f`, `filter-branch`, `update-ref -d`, `reflog expire`;
 - credential access: `.env`, SSH keys, cloud credential files, `gh auth`, `aws configure`, `kubectl get secret`, `vault`, and similar;
-- `sudo`/`doas`, commands that cannot be checked (piped into a shell, computed, PowerShell), and edits to Claude Code settings or Groundwork's hooks.
+- `sudo`, `doas`, `su` and `pkexec` (also behind `env`, `time`, `timeout`, `xargs`), commands that cannot be checked (piped into a shell, computed, PowerShell), and changes to Claude Code settings, Groundwork's hooks or the task ledger. Running the task CLI never asks.
 
 Commands are checked inside wrappers, nested shells, scripts run directly, command substitutions and here-documents. File tools cannot write the task ledger. Pushes to protected branches are still blocked by `block_protected_push.py`.
 

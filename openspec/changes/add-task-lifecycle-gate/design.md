@@ -31,7 +31,7 @@ Non-goals:
 
 ### D1. Native OpenSpec artifacts are the plan; Groundwork only reads them
 
-DECISION: Groundwork reads the change's `tasks.md` checkboxes and one `## Verification` section, in `design.md`, `proposal.md` or `tasks.md`. The section lists the exact commands that prove the change, in backticks. Groundwork reads them fresh on every status, evidence and completion check. Phase comes from the artifacts:
+DECISION: Groundwork reads the change's `tasks.md` checkboxes and an un-numbered `## Verification` section, in `design.md`, `proposal.md` or `tasks.md`. Each line of the section that starts with a backticked command declares one command. Prose backticks and numbered task groups (`## 2. Verification` in a native `tasks.md`) are not commands. Groundwork reads them fresh on every status, evidence and completion check. Phase comes from the artifacts:
 - planning: no `tasks.md` yet, as in native OpenSpec where apply requires tasks;
 - implementing: unchecked tasks remain;
 - verifying: every task is checked;
@@ -58,12 +58,12 @@ TRADEOFFS:
 
 ### D3. Evidence is tied to the code, not to the plan
 
-DECISION: each verification or review record stores a fingerprint: a hash of `git diff --binary <base commit>`, plus untracked paths, sizes and mtimes. `openspec/` and generated caches are excluded. For each declared command, the latest run on the current fingerprint, after the last sensitive operation, decides passed or failed. Otherwise the command is stale or not run.
+DECISION: each verification or review record stores a fingerprint: the git tree id of the working tree's content (tracked and untracked, non-ignored files), excluding `openspec/` and generated caches. It is built with `git add -A` and `git write-tree` in a temporary index and object directory (the real index is copied for its stat cache; the repository's objects are read through `GIT_ALTERNATE_OBJECT_DIRECTORIES`), so the repository is never written. For each declared command, the latest run on the current fingerprint, after the last sensitive operation, decides passed or failed. Otherwise the command is stale or not run. Events in one command are recorded in the order they ran. A declared verification that is itself sensitive (`psql …`) is not recorded as an operation, and nor is reading credentials.
 
-WHY: any code change after verification makes it stale, whichever tool made it. Revising the plan, syncing specs or archiving the change never does. That is what lets the user revise plans freely.
+WHY: any content change after verification makes it stale, whichever tool made it. Revising the plan, syncing specs, archiving, staging and committing never do. That is what lets the user revise plans freely and commit before completing. The first build hashed `git diff` plus untracked files' sizes and mtimes, so `git add` made evidence stale (found by independent review).
 
 TRADEOFFS:
-- One bounded `git diff` per evidence event. Above 20 MB it falls back to `--stat` plus mtimes.
+- One `git add -A` into a temporary index per evidence event (about 20 ms on a small repository; new or changed files are hashed). It is bounded by a 15 s timeout; a fingerprint that cannot be computed never matches earlier evidence.
 - Background runs and background reviews are not evidence.
 
 ### D4. Completion

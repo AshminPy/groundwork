@@ -47,7 +47,6 @@ OPENSPEC_TIMEOUT = 30
 MAX_MISSION = 2000
 MAX_HISTORY = 60
 MAX_EVIDENCE = 30
-FINGERPRINT_DIFF_CAP = 20_000_000
 
 CHECKBOX_ANY = re.compile(r"^\s*-\s*\[[ xX]\]", re.MULTILINE)
 CHECKBOX_DONE = re.compile(r"^\s*-\s*\[[xX]\]", re.MULTILINE)
@@ -78,15 +77,6 @@ def git(cwd, *args, timeout: float = GIT_TIMEOUT):
     try:
         r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, errors="replace",
                            timeout=timeout, stdin=subprocess.DEVNULL, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
-    except Exception:
-        return None
-    return r.stdout if r.returncode == 0 else None
-
-
-def git_bytes(cwd, *args, timeout: float = GIT_TIMEOUT):
-    try:
-        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     except Exception:
         return None
     return r.stdout if r.returncode == 0 else None
@@ -502,33 +492,26 @@ def _escalate(root: str, task: dict, cls: dict, text: str) -> dict:
 
 # The one Groundwork convention in the plan: a "## Verification" section (in proposal.md, design.md or tasks.md)
 # listing the exact commands that prove the change works. Evidence is matched against them.
-SECTION_ALIASES = {"verification": ("verification", "verification commands", "verify", "how to verify")}
-HEADING = re.compile(r"^(#{2,3})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
-BACKTICK = re.compile(r"`([^`\n]+)`")
+# Only an un-numbered `## Verification` heading declares commands, and only lines that start with one backticked
+# command (optionally bulleted, optionally followed by ": …", "(…)" or " — …"): a native tasks.md group such as
+# `## 2. Verification` with prose like "- [x] 2.1 Check `config.yaml`" is not a list of commands (found by review).
+VERIFY_HEADING = re.compile(r"^#{2,3}[ \t]+(?:verification|verification commands|verify|how to verify)[ \t]*#*[ \t]*$",
+                            re.MULTILINE | re.IGNORECASE)
+ANY_HEADING = re.compile(r"^#{1,3}[ \t]", re.MULTILINE)
+COMMAND_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?`([^`\n]+)`(?:[ \t]*$|[ \t]*[:(][^\n]*$|"
+                          r"[ \t]+[\u2014\u2013-][ \t][^\n]*$)", re.MULTILINE)
 # `<name>` / `{zone}` placeholders: a command containing one can never be run as written, so evidence could never
 # match it (found in the live acceptance run).
 PLACEHOLDER = re.compile(r"<[A-Za-z_][^<>\s]*>|\{[A-Za-z_][^{}\s]*\}")
 SHELL_OPERATOR_CHARS = "();<>|&"
 
 
-def _canonical(heading: str) -> str | None:
-    h = re.sub(r"^[\d.\s]+", "", heading.strip().lower())
-    h = " ".join(re.sub(r"[^a-z ]+", " ", h).split())
-    for canon, names in SECTION_ALIASES.items():
-        if h in names:
-            return canon
-    return None
-
-
-def plan_sections(text: str) -> dict:
-    found = {}
-    heads = list(HEADING.finditer(text))
-    for i, m in enumerate(heads):
-        canon = _canonical(m.group(2))
-        if not canon:
-            continue
-        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
-        found[canon] = (found.get(canon, "") + "\n" + text[m.end():end].strip()).strip()
+def verification_entries(text: str) -> list[str]:
+    """The commands listed under `## Verification` headings in one artifact."""
+    found = []
+    for m in VERIFY_HEADING.finditer(text):
+        nxt = ANY_HEADING.search(text, m.end())
+        found += COMMAND_LINE.findall(text[m.end():nxt.start() if nxt else len(text)])
     return found
 
 
@@ -575,19 +558,22 @@ def read_plan(root: str, task: dict) -> dict:
     read fresh every time, so the plan can be revised whenever the user wants."""
     d = change_dir(root, task)
     tasks_text = _md(d / "tasks.md")
-    sections = plan_sections(_md(d / "proposal.md") + "\n" + _md(d / "design.md") + "\n" + tasks_text)
-    verify, problems = [], []
-    for cmd in BACKTICK.findall(sections.get("verification", "")):
-        cmd = " ".join(cmd.split())
-        if PLACEHOLDER.search(cmd):
-            problems.append(f"verification `{cmd}` contains a placeholder; write the exact command that will be run")
-        elif not _simple_command(cmd):
-            problems.append(f"verification `{cmd}` must be one simple command (no &&, ||, ;, |, redirection or "
-                            "command substitution); list each command as its own entry")
-        elif len(cmd) >= 3 and cmd not in verify:
-            verify.append(cmd)
+    verify, problems, sources = [], [], {}
+    for name in ("proposal.md", "design.md", "tasks.md"):
+        for cmd in verification_entries(tasks_text if name == "tasks.md" else _md(d / name)):
+            cmd = " ".join(cmd.split())
+            if PLACEHOLDER.search(cmd):
+                problems.append(f"verification `{cmd}` ({name}) contains a placeholder; write the exact command "
+                                "that will be run")
+            elif not _simple_command(cmd):
+                problems.append(f"verification `{cmd}` ({name}) must be one simple command (no &&, ||, ;, |, "
+                                "redirection or command substitution); list each command on its own line")
+            elif len(cmd) >= 3 and cmd not in verify:
+                verify.append(cmd)
+                sources[cmd] = name
     return {"exists": bool(task.get("change")) and d.is_dir(), "verify": verify, "problems": problems,
-            "tasks_total": len(CHECKBOX_ANY.findall(tasks_text)), "tasks_done": len(CHECKBOX_DONE.findall(tasks_text))}
+            "sources": sources, "tasks_total": len(CHECKBOX_ANY.findall(tasks_text)),
+            "tasks_done": len(CHECKBOX_DONE.findall(tasks_text))}
 
 
 def phase(root: str, task: dict, plan: dict | None = None) -> str:
@@ -608,33 +594,44 @@ def phase(root: str, task: dict, plan: dict | None = None) -> str:
 
 # Generated caches that running the verification itself creates; never part of the fingerprint.
 GENERATED_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+FINGERPRINT_TIMEOUT = 15
 
 
-def _generated(rel: str) -> bool:
-    return any(part in GENERATED_CACHE_DIRS for part in rel.split("/")[:-1])
+def _git_in(root: str, env: dict, *args) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, errors="replace",
+                           timeout=FINGERPRINT_TIMEOUT, stdin=subprocess.DEVNULL,
+                           env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", **env})
+    except Exception:
+        return None
+    return r.stdout if r.returncode == 0 else None
 
 
 def fingerprint(root: str, task: dict) -> str:
-    """Hash of the code's changes since intake. openspec/ is excluded: revising the plan, syncing specs or archiving
-    the change never makes verification evidence stale; any other change does, whichever tool made it."""
-    base = task.get("base_commit") or EMPTY_TREE
-    excl = ":(exclude)openspec"
-    diff = git_bytes(root, "diff", "--binary", "--no-renames", base, "--", ".", excl, timeout=15)
-    if diff is None:
-        diff = git_bytes(root, "diff", "--binary", "--no-renames", "HEAD", "--", ".", excl, timeout=15)
-    if diff is None:
+    """Content hash (a git tree id) of every tracked and untracked, non-ignored file, except openspec/ and generated
+    caches. Revising the plan, syncing specs, archiving, staging or committing never change it; changing a file does,
+    whichever tool made the change (staging made evidence stale in the first build; found by independent review).
+    Built in a temporary index and object directory, so the repository itself is never written."""
+    def path(name: str) -> str | None:
+        rel = (git(root, "rev-parse", "--git-path", name) or "").strip()
+        return os.path.join(root, rel) if rel else None
+    index, objects = path("index"), path("objects")
+    if not objects:
         return "unavailable-" + os.urandom(8).hex()  # never a constant: an unreadable tree must not match old evidence
-    elif len(diff) > FINGERPRINT_DIFF_CAP:
-        diff = (git_bytes(root, "diff", "--stat", base, "--", ".", excl) or b"") + b"<large>"
-    h = hashlib.sha256(diff + b"\0")
-    untracked = (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0")
-    for rel in sorted(p for p in untracked if p and not _generated(p) and not p.startswith("openspec/")):
-        try:
-            st = os.lstat(os.path.join(root, rel))
-            h.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
-        except OSError:
-            h.update(f"{rel}\0gone\0".encode())
-    return h.hexdigest()[:16]
+    with tempfile.TemporaryDirectory(prefix="gw-fp-") as tmp:
+        tmp_index = os.path.join(tmp, "index")
+        if index and os.path.isfile(index):
+            shutil.copyfile(index, tmp_index)  # keeps git's stat cache, so only changed files are hashed
+        os.mkdir(os.path.join(tmp, "objects"))
+        env = {"GIT_INDEX_FILE": tmp_index, "GIT_OBJECT_DIRECTORY": os.path.join(tmp, "objects"),
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES": os.path.abspath(objects)}
+        caches = [f":(exclude,glob)**/{d}/**" for d in sorted(GENERATED_CACHE_DIRS)]
+        tree = None
+        if _git_in(root, env, "add", "-A", "--", ".", ":(exclude)openspec", *caches) is not None and \
+                _git_in(root, env, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", "openspec",
+                        *[f":(glob)**/{d}/**" for d in sorted(GENERATED_CACHE_DIRS)]) is not None:
+            tree = (_git_in(root, env, "write-tree") or "").strip()
+    return tree[:16] if tree else "unavailable-" + os.urandom(8).hex()
 
 
 def record_verification(root: str, key: str, cmd: str, ok: bool, detail: str = "") -> None:
@@ -705,14 +702,15 @@ def completion_problems(root: str, task: dict) -> list[str]:
         problems.append(f"tasks.md: {plan['tasks_done']}/{plan['tasks_total']} tasks checked")
     problems += plan["problems"]
     if plan["exists"] and not plan["verify"] and not plan["problems"]:
-        problems.append("no verification declared: add a `## Verification` section with the exact commands that "
-                        "prove the change (design.md, proposal.md or tasks.md)")
+        problems.append("no verification declared: add a `## Verification` section (design.md, proposal.md or "
+                        "tasks.md) listing each command that proves the change on its own line, in backticks")
     state = evidence_state(root, task, plan)
     for cmd, seen in state["verify"].items():
         if seen != "passed":
             why = {"not run": "never run", "failed": "last run failed",
                    "stale": "not re-run since the code or an operation changed"}[seen]
-            problems.append(f"verification `{cmd}` has no passing run on the current code ({why})")
+            problems.append(f"verification `{cmd}` ({plan['sources'].get(cmd, 'plan')}) has no passing run on the "
+                            f"current code ({why})")
     if state["review"] is None:
         problems.append("no independent review of the current code (a foreground review subagent whose response ends "
                         "with a REVIEW RESULT block: Verdict / Must-fix)")
