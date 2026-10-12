@@ -92,12 +92,39 @@ RUN_WRAPPER_POSITIONALS = {"chrt": 1, "taskset": 1}  # chrt PRIORITY cmd …, ta
 DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqlsh", "sqlcmd", "sqlite3"}
 
 
+def _protect_semicolons(cmd: str) -> str | None:
+    """Replace each unquoted `\\;` and each whole-word `';'` / `";"` with a placeholder; everything else is kept
+    verbatim, so a real separator next to quoted text (`echo "x";"terraform" apply`) or after an escaped backslash
+    (`echo \\\\; terraform apply`) stays a separator (found by independent review). None on an unbalanced quote."""
+    out, i, n = [], 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "\\":
+            out.append(" \x00SEMI\x00 " if cmd[i + 1:i + 2] == ";" else cmd[i:i + 2])
+            i += 2
+        elif c in "'\"":
+            j = i + 1
+            while j < n and cmd[j] != c:
+                j += 2 if c == '"' and cmd[j] == "\\" else 1
+            if j >= n:
+                return None
+            standalone = (i == 0 or cmd[i - 1] in " \t") and (j + 1 == n or cmd[j + 1] in " \t\n")
+            out.append(" \x00SEMI\x00 " if cmd[i + 1:j] == ";" and standalone else cmd[i:j + 1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def split_segments(cmd: str):
     """[{argv, writes, prev, next}] for each simple command, or None when the command cannot be parsed.
     `writes`: an output redirection to a real file. prev/next: the operator before/after the segment."""
     # An escaped or quoted semicolon (find … -exec … \;) is an argument, not a separator; shlex returns both as ";",
     # so it is protected first (found by independent review: a second -exec clause escaped the check).
-    protected = re.sub(r"\\;|';'|\";\"", " \x00SEMI\x00 ", cmd)
+    protected = _protect_semicolons(cmd)
+    if protected is None:
+        return None
     try:
         lex = shlex.shlex(protected, posix=True, punctuation_chars="();<>|&\n")
         lex.whitespace = " \t\r"
@@ -280,9 +307,18 @@ def unwrap_run(argv: list[str]) -> list[str]:
         i = 1
         while i < len(argv) and argv[i].startswith("-"):
             flag = argv[i]
-            # a value flag alone (-n 5) or ending a short cluster (-dn 5)
-            takes_value = flag in value_flags or (not flag.startswith("--") and len(flag) > 2 and f"-{flag[-1]}" in value_flags)
-            i += 2 if takes_value else 1
+            i += 1
+            if flag == "--":
+                break
+            if flag.startswith("--"):
+                i += 1 if flag in value_flags else 0
+                continue
+            # a short cluster, left to right: the first value letter takes the rest of the cluster (-uroot) or, when
+            # it is last, the next argument (-dn 5); found by independent review (-uroot hid `terraform apply`)
+            for pos, letter in enumerate(flag[1:], 1):
+                if f"-{letter}" in value_flags:
+                    i += 1 if pos == len(flag) - 1 else 0
+                    break
         i += RUN_WRAPPER_POSITIONALS.get(name, 0)
         argv, _ = strip_wrappers(argv[i:])
     return argv
@@ -291,19 +327,24 @@ def unwrap_run(argv: list[str]) -> list[str]:
 def _shell_command_arg(args: list[str]):
     """The command string of `sh -c CMD` (also -lc, -ec, `-o pipefail -c`); "" when the shell reads its commands
     from stdin (no script and no -c); None when it runs a script file."""
-    i = 0
+    i, has_c = 0, False
     while i < len(args):
         a = args[i]
-        if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a):
-            return args[i + 1] if i + 1 < len(args) else ""
-        # -o NAME, also inside a cluster such as -euo pipefail (found by independent review), and long options
-        # that take a value.
-        if re.match(r"^[-+][a-zA-Z]*[oO]$", a) or a in ("--rcfile", "--init-file"):
-            i += 2
+        if a == "--" or a == "-":
+            i += 1
+            break
+        if a.startswith("--"):
+            i += 2 if a in ("--rcfile", "--init-file") else 1
             continue
-        if not a.startswith(("-", "+")):
-            return None
-        i += 1
+        if re.match(r"^[-+][a-zA-Z]+$", a):
+            # each o/O in a cluster takes the next argument as its option name: -euo pipefail, -oc pipefail,
+            # -c -o pipefail (found by independent review); -c makes the first operand the command string
+            has_c = has_c or (a[0] == "-" and "c" in a)
+            i += 1 + sum(ch in "oO" for ch in a[1:])
+            continue
+        break
+    if i < len(args):
+        return args[i] if has_c else None
     return ""
 
 
@@ -693,10 +734,11 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
                 r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
             deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")
         cdir = str(gt.claude_dir())
-        # Any non-read-only command that names the config directory at all (also `cd ~/.claude && … settings.json`;
-        # found by independent review) is denied while a task is gated.
-        markers = PROTECTED_MARKERS + (cdir, ".claude", "CLAUDE_CONFIG_DIR")
-        if any(m in cmd for m in markers) and not command_read_only(cmd):
+        # Any non-read-only command that names the config directory (also `cd ~/.claude && … settings.json`; found by
+        # independent review) is denied while a task is gated. A project's own .claude/ files (rules, agents) are not.
+        markers = PROTECTED_MARKERS + (cdir, "~/.claude", "$HOME/.claude", "${HOME}/.claude", "CLAUDE_CONFIG_DIR")
+        config_words = ".claude" in cmd and re.search(r"settings|hooks|groundwork", cmd)
+        if (any(m in cmd for m in markers) or config_words) and not command_read_only(cmd):
             deny(f"Groundwork: Groundwork's hooks, settings and task ledger cannot be changed while {keys} is gated.")
         return
     if tool.startswith("mcp__"):

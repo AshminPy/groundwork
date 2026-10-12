@@ -11,7 +11,7 @@ Groundwork SHALL classify every submitted prompt in a git repository without a m
 For a MATERIAL task it SHALL create the OpenSpec change.
 
 The ticket a prompt is for SHALL be:
-- the first key not yet in the ledger, which is registered even when the prompt also names known keys in any order;
+- the first key not yet in the ledger that is the prompt's first key or heads a clause (`KEY:` or `KEY - …`). It is registered even when the prompt also names known keys, in any order. A new key elsewhere, such as a dependency (`depends on COR-122`), is context and is not registered;
 - otherwise the first open key, which receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals and an action verb;
 - otherwise a completed or cancelled key, which starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory.
 
@@ -32,6 +32,10 @@ A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be t
 #### Scenario: Follow-up work on a closed ticket
 - **WHEN** COR-123 is complete and the prompt `COR-124: follow-up to COR-123 - deploy a replica VM in GCP` arrives
 - **THEN** COR-124 is registered as a MATERIAL task and the repository is gated
+
+#### Scenario: A dependency ticket is cited
+- **WHEN** COR-126 is open and the prompt `COR-126: create it in us-central1-a. This depends on the network from COR-122, which is merged` arrives
+- **THEN** COR-122 is not registered and Claude receives COR-126's state
 
 #### Scenario: The owner answers a waiting task's questions
 - **WHEN** COR-123 awaits approval and the owner sends a keyless reply describing the VM's zone and disk

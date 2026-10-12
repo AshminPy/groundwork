@@ -300,6 +300,12 @@ def find_keys(text: str) -> list[str]:
     return keys
 
 
+def work_key(text: str, key: str, keys: list[str]) -> bool:
+    """True when `key` names the work: it is the prompt's first key, or it heads a clause (`KEY:` or `KEY - …`)."""
+    return key == keys[0] or bool(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(key) + r"\s*(?:[:–—]|-(?=\s))",
+                                            text or ""))
+
+
 def classify(text: str) -> dict | None:
     """Deterministic intake classification. None: not engineering work (or not intake-eligible input)."""
     raw = (text or "").strip()
@@ -418,13 +424,15 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
     # The prompt's LEADING key decides; other keys are context (found by independent review: "COR-124: follow-up to
     # COR-123 …" never registered COR-124). Known and open -> its state (escalated when the prompt is now MATERIAL);
     # known and closed -> a fresh task only when the prompt asks for work (an action verb); unknown -> a new task.
-    # Which key the work is for: the first key not yet in the ledger (follow-up tickets name the old ticket too, in
-    # any order — found by independent review); else the first open key; else the first closed key.
+    # Which key the work is for: the first new key that leads the prompt or heads a clause (follow-up tickets name the
+    # old ticket too, in any order — found by independent review); else the first open key; else the first closed
+    # key. A new key elsewhere ("depends on COR-122, which is merged") is context, not a new task.
     primary = None
     if is_task and cls["keys"]:
         known = {k: load_task(root, k) for k in cls["keys"]}
-        primary = next((k for k in cls["keys"] if known[k] is None), None) or \
-            next((k for k in cls["keys"] if known[k].get("state") not in (COMPLETE, CANCELLED)), None) or cls["keys"][0]
+        primary = next((k for k in cls["keys"] if known[k] is None and work_key(text, k, cls["keys"])), None) or \
+            next((k for k in cls["keys"] if known[k] and known[k].get("state") not in (COMPLETE, CANCELLED)), None) \
+            or cls["keys"][0]
     current = load_task(root, primary) if primary else None
     if is_task and current and current.get("state") == OPEN and cls["tier"] == MATERIAL and cls.get("action"):
         return _escalate(root, current, cls, text)

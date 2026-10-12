@@ -263,6 +263,9 @@ def test_shell_classifier() -> None:
 
     def sens(cmd):
         return gate.command_sensitive(cmd, "/tmp")
+
+    def split_argv(cmd):
+        return [seg["argv"] for seg in gate.split_segments(cmd)]
     check("gcloud delete is sensitive", sens("gcloud compute instances delete vm-1") is not None)
     check("gcloud list is not sensitive", sens("gcloud compute instances list") is None)
     check("rm -rf is sensitive, rm file is not", sens("rm -rf build") is not None and sens("rm build.log") is None)
@@ -319,6 +322,15 @@ def test_shell_classifier() -> None:
           sens("find . -name x -exec echo {} \\; -exec rm -rf {} \\;") is not None
           and sens("find . -name x -exec echo {} ';' -exec rm -rf {} ';'") is not None
           and sens("watch -dn 5 kubectl delete ns x") is not None)
+    check("review 3: a real separator next to quoted text or an escaped backslash still splits",
+          sens('echo \\\\; terraform apply -auto-approve') is not None and sens('echo "x";"terraform" apply') is not None
+          and sens("echo 'x';'terraform' apply") is not None and split_argv("awk -F';' '{print $1}' f") == [["awk", "-F;", "{print $1}", "f"]])
+    check("review 3: `sudo -uroot` takes its value from the cluster, so the command after it is checked",
+          sens("sudo -uroot terraform apply") is not None and sens("sudo -ugcp kubectl delete ns x") is not None
+          and sens("sudo -Eu root kubectl delete ns x") is not None)
+    check("review 3: `bash -c -o pipefail CMD`, `-ceo`, `-oc` run CMD, which is checked",
+          sens("bash -c -o pipefail 'terraform apply -auto-approve'") is not None and sens("bash -ceo pipefail 'terraform apply'") is not None
+          and sens("bash -oc pipefail 'terraform apply'") is not None and sens("bash -c 'ls'") is None)
     check("the installed task CLI is recognised through ~", ro("python3 " + str(TASKS).replace(os.path.expanduser("~"), "~", 1) + " list")
           if str(TASKS).startswith(os.path.expanduser("~")) else True)
     check("re-review: watch -d, chrt, taskset, `bash -o pipefail -c`, `… | bash`, find -exec rm -rf are sensitive",
@@ -479,6 +491,10 @@ def test_full_lifecycle() -> None:
         check("re-review: `cd <config dir> && … settings.json` is denied",
               denied(e.pre(repo, "Bash", {"command": f"cd {e.cfg} && echo '{{}}' > settings.json"})) != ""
               and denied(e.pre(repo, "Bash", {"command": "cd ~/.claude && sed -i s/a/b/ settings.json"})) != "")
+        check("review 3: a project's own .claude/ files (rules, agents) are not mistaken for Groundwork's",
+              denied(e.pre(repo, "Bash", {"command": "git add .claude/rules/x.md"})) == ""
+              and denied(e.pre(repo, "Bash", {"command": "git commit -m 'docs: mention .claude/rules in the readme'"})) == ""
+              and denied(e.pre(repo, "Bash", {"command": "cd .claude && sed -i s/a/b/ settings.local.json"})) != "")
         check("approved: Monitor running an unapproved sensitive command is denied",
               "not an Approved Operation" in denied(e.pre(repo, "Monitor", {"command": "gcloud compute instances delete vm-1", "description": "x"})))
         check("approved: project settings protected (disableAllHooks)", denied(e.pre(repo, "Write", {"file_path": str(repo / ".claude/settings.json"), "content": "{}"})) != "")
@@ -634,6 +650,9 @@ def test_separation_and_failure_modes() -> None:
         check("re-review 2 MUST FIX: a trailing new key is registered and gates the repository",
               e.task(a, "COR-126") is not None and denied(e.pre(a, "Write", {"file_path": str(a / "x.py"), "content": "x"})) != "",
               context(out)[:200])
+        out = e.prompt(a, "COR-126: create it in us-central1-a. This depends on the GCP production network from COR-122, which is merged")
+        check("review 3: a new key cited as a dependency is context, not a new task",
+              e.task(a, "COR-122") is None and "COR-126" in context(out), context(out)[:200])
         out = e.prompt(a, "The VM zone is us-central1-a and the disk is 500GB pd-ssd")
         check("re-review 2: a keyless reply without an action verb still gets the waiting task's state",
               "COR-126" in context(out) and "waiting on the owner" in context(out), context(out)[:200])
