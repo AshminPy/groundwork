@@ -734,6 +734,8 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         kind, value = _shell_invocation(args)
         if kind == "stdin" or (kind == "c" and value == ""):
             return "commands piped into a shell (they cannot be checked)"
+        if kind == "c" and value.lstrip().startswith(("$(", "`")):
+            return "a shell running downloaded or computed commands (they cannot be checked)"
         if kind == "c":
             return command_sensitive(value, cwd, depth + 1) if depth < MAX_DEPTH else "a deeply nested shell"
         return _script_sensitive(value, cwd, depth)
@@ -843,15 +845,17 @@ def _literal_assignments(segs: list[dict]) -> dict[str, str | None]:
             m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", tok, re.DOTALL)
             if not m:
                 break
-            found[m.group(1)] = None if ("$" in m.group(2) or "`" in m.group(2)) else m.group(2)
+            value = m.group(2)
+            default = re.match(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^$`{}]*)\}$", value)  # ${TF:-terraform}
+            found[m.group(1)] = default.group(1) if default else (None if ("$" in value or "`" in value) else value)
     return found
 
 
 def _resolve_head(argv: list[str], assigns: dict) -> list[str] | str:
-    """A command whose name is `$T` / `${T}`: when T is assigned a literal value in the same command, its value
-    stands in for the name (`T=terraform; $T apply` is `terraform apply`). When T is assigned a computed value the
-    command cannot be checked (a label is returned). A variable from outside the command (`"$@"`, `"$PY"`) is left
-    as is: the gate cannot know it (found by independent review: a blanket rule denied many ordinary scripts)."""
+    """A command whose name is `$T` / `${T}`: when T is assigned a literal value (or `${T:-literal}`) in the same
+    command, that value stands in for the name (`T=terraform; $T apply` is `terraform apply`). A computed value or
+    a variable from outside the command (`"$@"`, `"$PY"`) is left as is: the gate cannot know it (found by
+    independent review: stricter rules denied many ordinary scripts)."""
     lead = len(argv) - len(unwrap_run(argv))
     head = argv[lead] if lead < len(argv) else ""
     m = VAR_REF_RE.match(head)
@@ -859,7 +863,7 @@ def _resolve_head(argv: list[str], assigns: dict) -> list[str] | str:
         return argv
     value = assigns[m.group(1)]
     if value is None:
-        return "a command whose name comes from a computed variable (it cannot be checked)"
+        return argv  # computed: like a variable from outside the command (found by independent review)
     return argv[:lead] + (value.split() or [""]) + argv[lead + 1:]
 
 
@@ -868,49 +872,40 @@ def _cd_target(argv: list[str]) -> str | None:
     u = unwrap_run(argv)
     if not u or os.path.basename(u[0]) not in ("cd", "pushd"):
         return None
-    words = _words(u[1:])
+    words = [a for a in u[1:] if a not in ("-P", "-L", "-e", "-@", "--")]
     target = words[0] if words else "~"
     return "" if ("$" in target or "`" in target or target == "-") else os.path.expanduser(target)
+
+
+def checked_segments(segs: list[dict], cwd: str, depth: int = 0):
+    """(segment, argv as checked, label or None) for each segment: a variable command name resolved from a literal
+    assignment in the same command, and scripts read in every directory a literal `cd` / `pushd` may have moved to
+    (`cd scripts && ./tfa.sh`; found by independent review). Used for the typed command and for nested commands."""
+    assigns = _literal_assignments(segs)
+    dirs = [cwd]
+    for s in segs:
+        argv = _resolve_head(s["argv"], assigns)
+        label = None
+        for d in dirs:
+            label = segment_sensitive(argv, d, depth)
+            if label:
+                break
+        yield s, argv, label
+        target = _cd_target(argv)
+        if target:
+            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))
+            if len(dirs) > 32:
+                dirs = [cwd] + dirs[-31:]  # keep the start and the newest directories
 
 
 def command_sensitive(cmd: str, cwd: str, depth: int = 0) -> str | None:
     segs = split_segments(cmd)
     if segs is None:
         return "a command Groundwork could not parse"
-    assigns = _literal_assignments(segs)
-    dirs, lost = [cwd], False  # `cd scripts && ./tfa.sh` runs scripts/tfa.sh (found by independent review)
-    for s in segs:
-        argv = _resolve_head(s["argv"], assigns)
-        if isinstance(argv, str):
-            return argv
-        for d in dirs:
-            found = segment_sensitive(argv, d, depth)
-            if found:
-                return found
-        script = _script_operand(argv)
-        if lost and script and not os.path.isabs(script) and \
-                not any(os.path.isfile(os.path.join(d, script)) for d in dirs):
-            return f"a script ({script}) run after a directory change Groundwork cannot follow"
-        target = _cd_target(argv)
-        if target == "":
-            lost = True
-        elif target is not None:
-            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))[:8]
+    for _s, _argv, label in checked_segments(segs, cwd, depth):
+        if label:
+            return label
     return embedded_sensitive(cmd, segs, cwd, depth)
-
-
-def _script_operand(argv: list[str]) -> str | None:
-    """The script a segment runs: `bash X`, `source X`, `. X`, or a path-qualified program."""
-    u = unwrap_run(argv)
-    if not u:
-        return None
-    name = os.path.basename(u[0])
-    if name in SHELLS:
-        kind, value = _shell_invocation(u[1:])
-        return value if kind == "script" else None
-    if name in ("source", ".") and _words(u[1:]):
-        return _words(u[1:])[0]
-    return u[0] if "/" in u[0] else None
 
 
 # Programs that can create or replace a file other than through a shell redirect.
@@ -1290,8 +1285,7 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
         if segs is None:
             deny("Groundwork task gate: this command could not be parsed, so it cannot be checked; simplify it.")
         ops = [o for t in approved for o in t.get("plan", {}).get("operations", [])]
-        for s in segs:
-            label = segment_sensitive(s["argv"], data.get("cwd") or root)
+        for s, _argv, label in checked_segments(segs, data.get("cwd") or root):
             if label and not matches_operation(s["argv"], ops):
                 deny(f"Groundwork task gate: {label} is not an Approved Operation of {keys} "
                      f"(approved: {'; '.join(ops) or 'none'}). Sensitive operations need the owner's approval in the "
