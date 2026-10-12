@@ -157,6 +157,8 @@ groundwork routines run pr_followup  # run one routine now (same fail-closed pat
 groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
+groundwork statusline config list    # every statusLine display setting and its current value
+groundwork statusline config set show_cost true   # change one setting (`config unset KEY` reverts it)
 groundwork task list                 # open tasks in this repository (--all: every repository)
 groundwork task show COR-123         # one task: phase, progress, verification, review, history
 groundwork task complete COR-123     # complete a task (MATERIAL: only on evidence)
@@ -174,6 +176,7 @@ model. `groundwork update`/`rollback` never reimplement the installer. See
 [docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
 forwards to the existing Routines execution/scheduling engine unchanged. See
 [docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
+`groundwork statusline config` views and changes the statusLine's display settings (mode, symbols, separator, which items show).
 `groundwork task` forwards to the task ledger. See [Task tracking](#task-tracking).
 
 `groundwork copilot explain` is **read-only** help with a failure in the terminal you typed it in. In a tmux pane it reads a bounded slice of that pane's recent output (default 120 lines, at most 400 lines / 16,000 characters). It proves the pane is yours with three checks: `$TMUX_PANE`, your process's own controlling tty, and the pane's process being an ancestor of yours. There is no option to read another pane, and a spoofed pane id is refused. It removes control, bidi and zero-width characters. It redacts secret-shaped text, in the output and in the git facts it adds, before cutting to the window. Then it makes one `claude -p --safe-mode --tools ""` call, with the prompt on stdin and an empty scratch working directory.
@@ -337,6 +340,7 @@ groundwork/
 │   ├── test_groundwork_update.py      update/rollback (release validation, safe archive extraction)
 │   ├── test_groundwork_copilot.py     `groundwork copilot explain` (read-only terminal help)
 │   └── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
+├── .claude/ · .agents/                OpenSpec slash commands and skills for developing this repository itself; install.sh does not ship them
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
