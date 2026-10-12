@@ -808,7 +808,7 @@ def request_approval(root: str, key: str) -> tuple[bool, str]:
              f"  scope:     {', '.join(plan['scope'])}",
              f"  verify:    {'; '.join(plan['verify'])}"]
     if plan["operations"]:
-        lines.append(f"  approved operations: {'; '.join(plan['operations'])}")
+        lines.append(f"  approved operations (allowed only exactly as written): {'; '.join(plan['operations'])}")
     if plan["open_questions"]:
         lines.append(f"  open questions ({len(plan['open_questions'])}; approving accepts the plan's stated assumptions):")
         lines += [f"    - {clip(q, 160)}" for q in plan["open_questions"][:8]]
