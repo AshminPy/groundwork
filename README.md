@@ -347,6 +347,7 @@ groundwork/
     ├── CONTEXT-ENGINEERING.md         what enters context, classified always/selective/lazy/isolated/persisted/reconstructed
     ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
     ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
+    ├── AUTOSHIP.md                    a bounded autonomous loop from /goal + budget + review gate: recipe, hard vs soft bounds, observed runs (no new code)
     └── images/                        overview diagram and dashboard screenshot
 ```
 
