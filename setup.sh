@@ -612,7 +612,7 @@ try:
 except Exception:
     print(0); sys.exit()
 n = 0
-for ev in ("PreToolUse", "Stop", "SessionStart"):
+for ev in ("PreToolUse", "Stop", "SessionStart", "UserPromptSubmit"):
     for g in d.get("hooks", {}).get(ev, []):
         for h in g.get("hooks", []):
             if "groundwork" in h.get("command", "") or "block_protected_push" in h.get("command", "") or "require_material_review" in h.get("command", ""):
@@ -639,9 +639,9 @@ verify_install() {
   if [ "$rules" -ge 5 ]; then line "Rules" PASS "$rules rule files"; else line "Rules" FAIL "$rules of 5 rule files under rules/groundwork"; fi
   pbs="$(count_files "$CLAUDE_DIR/groundwork/playbooks" '*.md')"
   if [ "$pbs" -ge 10 ]; then line "Playbooks" PASS "$pbs playbooks"; else line "Playbooks" FAIL "$pbs of 10 playbooks"; fi
-  hooks=0; for h in block_protected_push require_material_review groundwork_session_snapshot groundwork_telemetry; do [ -f "$CLAUDE_DIR/hooks/$h.py" ] && hooks=$((hooks + 1)); done
+  hooks=0; for h in block_protected_push require_material_review groundwork_session_snapshot groundwork_telemetry groundwork_task_gate groundwork_tasks; do [ -f "$CLAUDE_DIR/hooks/$h.py" ] && hooks=$((hooks + 1)); done
   reg="$(hooks_registered)"
-  if [ "$hooks" -eq 4 ] && [ "$reg" -ge 4 ]; then line "Hooks" PASS "4 hook files, $reg registered in settings.json"; else line "Hooks" FAIL "$hooks of 4 hook files, $reg registered"; fi
+  if [ "$hooks" -eq 6 ] && [ "$reg" -ge 6 ]; then line "Hooks" PASS "6 hook files, $reg registered in settings.json"; else line "Hooks" FAIL "$hooks of 6 hook files, $reg registered"; fi
   if command -v claude >/dev/null 2>&1; then
     local ecc_list ecc_v
     ecc_list="$(claude plugin list 2>/dev/null)" || true

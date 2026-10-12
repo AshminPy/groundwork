@@ -50,8 +50,14 @@ except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook.
     def dirty_change_names(cwd: str) -> set[str]:
         return set()
+try:
+    from groundwork_tasks import open_task_lines  # task ledger (openspec/changes/add-task-lifecycle-gate/)
+except Exception:
+    def open_task_lines(cwd: str, limit: int = 700) -> list[str]:
+        return []
 
 MAX_CHARS = 2500
+MAX_TASK_CHARS = 700  # the open-task section is added ON TOP of MAX_CHARS, so a snapshot without tasks is unchanged
 GIT_TIMEOUT = 3
 MAX_RECENT_COMMITS = 5
 MAX_CHANGES = 8
@@ -566,6 +572,15 @@ def build_snapshot(cwd: str) -> str:
     # by independent review (M1/M2): a busy repo's git/OpenSpec facts alone, unrelated to the
     # investigation file's own size, could previously crowd the whole investigation section out.
     lines += investigation_facts(cwd)
+    # Open tasks next, for the same reason: the task in flight, its phase and its next step (a plan, an unchecked
+    # task, a verification, a review) must survive the prefix cut. The section bounds itself to MAX_TASK_CHARS and the cap
+    # grows by exactly its length, so it never displaces other facts and a repository without tasks is unchanged.
+    try:
+        task_lines = open_task_lines(cwd, MAX_TASK_CHARS)
+    except Exception:
+        task_lines = []
+    cap = MAX_CHARS + (len("\n".join(task_lines)) + 1 if task_lines else 0)
+    lines += task_lines
     lines += git_lines or ["git: not a git repository"]
     lines += spec_lines
     lines += signal_facts(cwd)
@@ -578,16 +593,16 @@ def build_snapshot(cwd: str) -> str:
     if git_lines:
         # The worktree rows come LAST and get only the room the other facts leave under MAX_CHARS, so they can never
         # push the verification commands or the closing instruction out of the cap (found by independent review).
-        room = MAX_CHARS - len("\n".join(lines + closing)) - 1  # the newline that joins the section to the rest
+        room = cap - len("\n".join(lines + closing)) - 1  # the newline that joins the section to the rest
         try:
             lines += worktree_facts(cwd, budget=min(MAX_WORKTREE_CHARS, max(0, room)))
         except Exception:
             pass  # this section must never cost the rest of the snapshot
     lines += closing
     text = "\n".join(lines)
-    if len(text) > MAX_CHARS:
-        marker = f"{DATA_END}\n[snapshot truncated at {MAX_CHARS} chars — run git status / openspec list for the rest]"
-        text = text[: MAX_CHARS - len(marker) - 1].rstrip() + "\n" + marker
+    if len(text) > cap:
+        marker = f"{DATA_END}\n[snapshot truncated at {cap} chars — run git status / openspec list for the rest]"
+        text = text[: cap - len(marker) - 1].rstrip() + "\n" + marker
     return text
 
 

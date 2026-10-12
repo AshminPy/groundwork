@@ -109,8 +109,9 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 
 | Mechanism | Enforced (hook) or advisory (rule text) |
 |---|---|
-| Tier classification (TRIVIAL/STANDARD/MATERIAL) | Advisory — judgment call, not machine-checked |
-| OpenSpec proposal/spec/design/tasks for MATERIAL work | Advisory — the rule says to, nothing blocks skipping it |
+| Tier classification (TRIVIAL/STANDARD/MATERIAL) | **Enforced floor** for prompts the task intake recognises (a ticket key, or MATERIAL engineering work): `hooks/groundwork_task_gate.py` records the task and sets MATERIAL when cloud, infrastructure, data, security, production or deployment signals appear — keyword-based, so it can miss or over-match ([TASK-LIFECYCLE.md](TASK-LIFECYCLE.md)). Otherwise advisory |
+| OpenSpec proposal/spec/design/tasks for MATERIAL work | **Automated, not gated**: intake creates the native OpenSpec change for a recorded MATERIAL task and points Claude to `/opsx:propose` and `/opsx:apply`. The artifacts are read as the plan (progress from `tasks.md`, commands from `## Verification`) and can be revised at any time. No approval step |
+| Authorization for sensitive actions; evidence-backed completion | **Enforced** by the task hook. Cloud, cluster and production changes, destructive Git, deletes of or outside the working directory, credential access, `sudo`, unparseable commands and settings or hook edits get Claude Code's native `ask` permission prompt in every repository; ordinary work never prompts. `groundwork task complete` (or a native archive) completes a MATERIAL task only with every task checked, each declared verification passed on the current code and a zero-MUST-FIX review. Not a sandbox against a same-user process — see [TASK-LIFECYCLE.md](TASK-LIFECYCLE.md) "Limits" |
 | Architecture-quality questions and DECISION records | Advisory |
 | Evidence labels, validation ladder, runtime-validation rule | Advisory |
 | Execution model choice (main / subagent / team) | Advisory; the platform itself gates team spawning on `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and interactivity |

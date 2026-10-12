@@ -41,6 +41,10 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     SNAPSHOT_CMD,
     OUTPUT_STYLE_VALUE,
     STATUSLINE_VALUE,
+    RETIRED_TASK_GATE_EVENTS,
+    TASK_GATE_CMD,
+    TASK_GATE_EVENTS,
+    drop_command,
     TELEMETRY_CMD,
     ownership_path,
     parse_args,
@@ -51,26 +55,8 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
 
 
 def remove_hook(hooks: dict, event: str, target_command: str, removed: list) -> None:
-    groups = hooks.get(event)
-    if not groups:
-        return
-    new_groups = []
-    found = False
-    for group in groups:
-        remaining = [h for h in group.get("hooks", []) if h.get("command") != target_command]
-        if len(remaining) != len(group.get("hooks", [])):
-            found = True
-        if remaining:
-            new_group = dict(group)
-            new_group["hooks"] = remaining
-            new_groups.append(new_group)
-        # else: this group only ever contained our hook — drop the whole group
-    if found:
+    if drop_command(hooks, event, target_command):
         removed.append(f"hooks.{event}: {target_command}")
-    if new_groups:
-        hooks[event] = new_groups
-    else:
-        hooks.pop(event, None)
 
 
 def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = False) -> list[str]:
@@ -87,6 +73,10 @@ def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = Fal
     remove_hook(hooks, "PostToolUse", TELEMETRY_CMD, removed)
     remove_hook(hooks, "PostToolUseFailure", TELEMETRY_CMD, removed)
     remove_hook(hooks, "SessionStart", SNAPSHOT_CMD, removed)
+    for event, _matcher, _timeout, _message in TASK_GATE_EVENTS:
+        remove_hook(hooks, event, TASK_GATE_CMD, removed)
+    for event in RETIRED_TASK_GATE_EVENTS:
+        remove_hook(hooks, event, TASK_GATE_CMD, removed)
     if "hooks" in data and not data["hooks"]:
         del data["hooks"]
 

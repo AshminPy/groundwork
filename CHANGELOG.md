@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
+  on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
+  [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).
+  - A prompt with a ticket key, or MATERIAL engineering work, is recorded as a task without a model call. MATERIAL
+    tasks (cloud, infrastructure, data, security, production or deployment signals) get a native OpenSpec change and
+    an intake checklist, and Claude is pointed to `/opsx:propose` and `/opsx:apply`.
+  - The OpenSpec artifacts are the plan and can be revised at any time. Groundwork reads progress from `tasks.md`
+    and verification commands from a `## Verification` section; phase (planning, implementing, verifying, archived)
+    comes from them.
+  - No approval codes and no scope gate. Sensitive actions — cloud, cluster, Terraform and Helm changes, database
+    clients, remote execution, recursive deletes of or outside the working directory, destructive Git, credential
+    access, `sudo`, commands that cannot be checked, settings and hook edits — show Claude Code's permission prompt,
+    in every repository. Shell commands are parsed the way bash does (quoting, here-documents, substitutions,
+    nested shells, scripts, `cd`).
+  - Verification runs, foreground review results and sensitive operations are recorded against a fingerprint of the
+    code (excluding `openspec/`). `groundwork task complete`, or a native archive, completes a MATERIAL task only
+    when every task is checked, every declared verification passed on the current code and the latest review
+    reports zero MUST FIX.
+  - Open tasks appear in the session snapshot as task, phase, progress, evidence and next action. The ledger lives
+    under `~/.claude/groundwork/tasks/`, per repository.
+  - New hook registrations: UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure. Off switch:
+    `GROUNDWORK_TASK_GATE=off`.
+
 ## 2.4.0 — 2026-10-11
 
 - **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on

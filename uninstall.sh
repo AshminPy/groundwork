@@ -10,10 +10,14 @@
 #   - ~/.claude/groundwork/config.json (Groundwork 2.1's own capability/Routines selection —
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
-#     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py
-#   - the hook entries (four hook scripts; groundwork_telemetry.py registers three — Stop,
-#     PostToolUse, PostToolUseFailure), the deny rules, and the env defaults this repo's
-#     install.sh added to settings.json (via scripts/unmerge_settings.py)
+#     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py,
+#     groundwork_task_gate.py, groundwork_tasks.py, and the retired owner commands
+#     ~/.claude/commands/gw-approve.md and gw-cancel.md that earlier builds installed
+#     (the task ledger under ~/.claude/groundwork/tasks/ is kept — it is your data)
+#   - the hook entries (five hook scripts; groundwork_telemetry.py registers three — Stop,
+#     PostToolUse, PostToolUseFailure — and groundwork_task_gate.py four), the deny rules,
+#     and the env defaults this repo's install.sh added to settings.json (via
+#     scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
 #   - the groundwork CLI (bin/groundwork, bin/setup.sh, groundwork/env) and the marked
 #     PATH-registration block install.sh appended to ~/.bashrc / ~/.zshrc / ~/.profile
@@ -72,7 +76,12 @@ rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/hooks/require_material_review.py" \
       "$CLAUDE_DIR/hooks/groundwork_session_snapshot.py" \
       "$CLAUDE_DIR/hooks/groundwork_telemetry.py" \
-      "$CLAUDE_DIR/hooks/groundwork_shared.py"
+      "$CLAUDE_DIR/hooks/groundwork_shared.py" \
+      "$CLAUDE_DIR/hooks/groundwork_task_gate.py" \
+      "$CLAUDE_DIR/hooks/groundwork_tasks.py" \
+      "$CLAUDE_DIR/commands/gw-approve.md" \
+      "$CLAUDE_DIR/commands/gw-cancel.md"
+rmdir "$CLAUDE_DIR/commands" 2>/dev/null || true
 # groundwork CLI PATH registration — remove exactly the marked block install.sh appended (same
 # exact-match limitation already documented elsewhere in this file: a byte-identical block a user
 # happened to add independently would also be removed). Never touches any other line in the file.
@@ -110,10 +119,12 @@ rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/require_material_review.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_session_snapshot.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_telemetry.*.pyc \
-      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc 2>/dev/null || true
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_task_gate.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_tasks.*.pyc 2>/dev/null || true
 rmdir "$CLAUDE_DIR/hooks/__pycache__" 2>/dev/null || true
-if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ]; then
-  for kept in telemetry reports investigations; do
+if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ] || [ -d "$CLAUDE_DIR/groundwork/tasks" ]; then
+  for kept in telemetry reports investigations tasks; do
     [ -d "$CLAUDE_DIR/groundwork/$kept" ] && echo "Kept $CLAUDE_DIR/groundwork/$kept/ (your data) — delete it yourself if you do not want it."
   done
 else
