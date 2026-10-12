@@ -91,6 +91,7 @@ RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "
                 "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
                 "chrt": set(), "taskset": set(), "unbuffer": set()}
 RUN_WRAPPER_POSITIONALS = {"chrt": 1, "taskset": 1}  # chrt PRIORITY cmd …, taskset MASK cmd …
+MAX_DEPTH = 6  # nested shells, scripts, substitutions and here-documents checked before failing closed
 DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqlsh", "sqlcmd", "sqlite3"}
 
 
@@ -175,28 +176,50 @@ def _scan_arithmetic(cmd: str, j: int) -> int | None:
 
 
 def _matching_paren(text: str, j: int) -> int | None:
-    """Index of the `)` closing a group whose body starts at j, honouring quotes and escapes inside it."""
-    n, depth = len(text), 1
+    """Index of the `)` closing a group whose body starts at j, honouring quotes, escapes and here-document bodies
+    inside it (found by independent review: `"$(cat <<'EOF' … don't … EOF)"`, the usual commit-message form, must
+    not read the apostrophe as a quote)."""
+    n, depth, pending = len(text), 1, []
     while j < n:
         ch = text[j]
         if ch == "\\":
             j += 2
-            continue
-        if ch in "'\"":
+        elif ch in "'\"":
             k = j + 1
             while k < n and text[k] != ch:
                 k += 2 if ch == '"' and text[k] == "\\" else 1
             if k >= n:
                 return None
             j = k + 1
-            continue
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return j
-        j += 1
+        elif text.startswith("<<", j) and not text.startswith("<<<", j):
+            strip = text.startswith("<<-", j)
+            found = _heredoc_delimiter(text, j + (3 if strip else 2))
+            if found:
+                pending.append((found[0], strip))
+                j = found[1]
+            else:
+                j += 2
+        elif ch == "\n" and pending:
+            j += 1
+            for delim, strip in pending:  # skip each body up to its terminator line
+                while True:
+                    if j >= n:
+                        return None
+                    k = text.find("\n", j)
+                    k = n if k < 0 else k
+                    line = text[j:k].rstrip("\r")
+                    j = min(k + 1, n)
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        break
+            pending = []
+        else:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return j
+            j += 1
     return None
 
 
@@ -227,6 +250,27 @@ def _expansions(text: str, subs: list[str]) -> bool:
         else:
             i += 1
     return True
+
+
+def _scan_test(cmd: str, j: int) -> int | None:
+    """Index just past the `]]` closing a `[[` test whose body starts at j (quotes and escapes honoured), or None."""
+    n = len(cmd)
+    while j < n:
+        ch = cmd[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            k = j + 1
+            while k < n and cmd[k] != ch:
+                k += 2 if ch == '"' and cmd[k] == "\\" else 1
+            if k >= n:
+                return None
+            j = k + 1
+        elif cmd.startswith("]]", j) and cmd[j - 1] in " \t" and (j + 2 == n or cmd[j + 2] in " \t\r\n;&|)"):
+            return j + 2
+        else:
+            j += 1
+    return None
 
 
 def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
@@ -272,6 +316,13 @@ def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
                 return None
             out.append(_encode(cmd[i:j]))  # arithmetic: `<<` is a shift, not a here-document
             i, boundary = j, False
+        elif c == "[" and boundary and cmd.startswith("[[", i) and cmd[i + 2:i + 3] in (" ", "\t") and \
+                _scan_test(cmd, i + 3):
+            j = _scan_test(cmd, i + 3)  # `[[ a && b ]]` is one test, not two commands (found by independent review)
+            if not _expansions(cmd[i:j], subs):
+                return None
+            out.append(_encode(cmd[i:j]))
+            i, boundary = j, False
         elif c == "$" and cmd[i + 1:i + 2] == "(":
             j = _matching_paren(cmd, i + 2)
             if j is None:
@@ -292,9 +343,9 @@ def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
             j = _matching_paren(cmd, i + 2)
             if j is None:
                 return None
-            subs.append(cmd[i + 2:j])  # process substitution; also parsed in place, as before
-            out.append(c)
-            i, boundary = i + 1, True
+            subs.append(cmd[i + 2:j])  # process substitution: its commands are checked as a substitution, and
+            out.append("/dev/fd/63")    # the word is a pipe path, so `bash <(curl …)` reads unseen input
+            i, boundary = j + 1, False
         elif c in "'\"":
             j = i + 1
             while j < n and cmd[j] != c:
@@ -671,20 +722,20 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         return None
     name, args = os.path.basename(argv[0]), argv[1:]
     words = _words(args)
-    if "$" in argv[0] or "`" in argv[0]:
-        return "a command whose name comes from a variable (it cannot be checked)"
+    if "`" in argv[0]:
+        return "a command whose name comes from a command substitution (it cannot be checked)"
     if name == "eval":
         if any("$" in a or "`" in a for a in args):
-            return "eval of a variable (it cannot be checked)"
-        return command_sensitive(" ".join(args), cwd, depth + 1) if depth < 3 else "a deeply nested eval"
-    if name == "trap" and args and not args[0].startswith("-") and depth < 3:
+            return "eval of a variable or command output (it cannot be checked)"
+        return command_sensitive(" ".join(args), cwd, depth + 1) if depth < MAX_DEPTH else "a deeply nested eval"
+    if name == "trap" and args and not args[0].startswith("-") and depth < MAX_DEPTH:
         return command_sensitive(args[0], cwd, depth + 1)
     if name in SHELLS:
         kind, value = _shell_invocation(args)
         if kind == "stdin" or (kind == "c" and value == ""):
             return "commands piped into a shell (they cannot be checked)"
         if kind == "c":
-            return command_sensitive(value, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
+            return command_sensitive(value, cwd, depth + 1) if depth < MAX_DEPTH else "a deeply nested shell"
         return _script_sensitive(value, cwd, depth)
     if name in ("source", ".") and words:
         if _is_stdin_path(words[0]):
@@ -692,7 +743,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         return _script_sensitive(words[0], cwd, depth, sourced=True)
     if name == "claude":
         return "a nested Claude Code session"
-    if name == "find" and depth < 3:
+    if name == "find" and depth < MAX_DEPTH:
         for k, flag in enumerate(args):  # every -exec clause, not only the first (found by independent review)
             if flag in ("-exec", "-execdir", "-ok", "-okdir"):
                 rest = args[k + 1:]
@@ -708,7 +759,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         rest = unwrap_run(_xargs_command(args))
         if rest and os.path.basename(rest[0]) in SHELLS | {"eval"}:
             return "commands built by xargs for a shell (they cannot be checked)"
-        return segment_sensitive(rest, cwd, depth + 1) if rest and depth < 3 else None
+        return segment_sensitive(rest, cwd, depth + 1) if rest and depth < MAX_DEPTH else None
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
     if name == "kubectl" and any(w in KUBECTL_WRITE for w in words):
@@ -764,26 +815,102 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
 def _script_sensitive(script: str, cwd: str, depth: int, sourced: bool = False) -> str | None:
     path = script if os.path.isabs(script) else os.path.join(cwd, script)
     try:
-        if depth >= 3 or not os.path.isfile(path) or os.path.getsize(path) > 200_000:
+        if not os.path.isfile(path) or os.path.getsize(path) > 200_000:
             return None
         text = Path(path).read_text(errors="replace")
     except OSError:
         return None
     if not (sourced or path.endswith(".sh") or re.match(r"#!\S*\b(?:ba|z|k|da)?sh\b|#!\S*env\s+(?:ba|z|k|da)?sh\b", text)):
         return None
+    if depth >= MAX_DEPTH:
+        return f"a deeply nested script ({script})"
     found = command_sensitive(text, cwd, depth + 1)
     return f"{found} inside {script}" if found else None
+
+
+VAR_REF_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+
+
+def _literal_assignments(segs: list[dict]) -> dict[str, str | None]:
+    """NAME -> value for assignments made in this command (`T=terraform`, `export T=…`, `local T=…`); the value is
+    None when it is computed (contains `$` or a backtick)."""
+    found = {}
+    for s in segs:
+        argv = s["argv"]
+        if argv and argv[0] in ("export", "local", "declare", "typeset", "readonly"):
+            argv = argv[1:]
+        for tok in argv:
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", tok, re.DOTALL)
+            if not m:
+                break
+            found[m.group(1)] = None if ("$" in m.group(2) or "`" in m.group(2)) else m.group(2)
+    return found
+
+
+def _resolve_head(argv: list[str], assigns: dict) -> list[str] | str:
+    """A command whose name is `$T` / `${T}`: when T is assigned a literal value in the same command, its value
+    stands in for the name (`T=terraform; $T apply` is `terraform apply`). When T is assigned a computed value the
+    command cannot be checked (a label is returned). A variable from outside the command (`"$@"`, `"$PY"`) is left
+    as is: the gate cannot know it (found by independent review: a blanket rule denied many ordinary scripts)."""
+    lead = len(argv) - len(unwrap_run(argv))
+    head = argv[lead] if lead < len(argv) else ""
+    m = VAR_REF_RE.match(head)
+    if not m or m.group(1) not in assigns:
+        return argv
+    value = assigns[m.group(1)]
+    if value is None:
+        return "a command whose name comes from a computed variable (it cannot be checked)"
+    return argv[:lead] + (value.split() or [""]) + argv[lead + 1:]
+
+
+def _cd_target(argv: list[str]) -> str | None:
+    """The literal directory of `cd DIR` / `pushd DIR`; "" for a target Groundwork cannot follow; None otherwise."""
+    u = unwrap_run(argv)
+    if not u or os.path.basename(u[0]) not in ("cd", "pushd"):
+        return None
+    words = _words(u[1:])
+    target = words[0] if words else "~"
+    return "" if ("$" in target or "`" in target or target == "-") else os.path.expanduser(target)
 
 
 def command_sensitive(cmd: str, cwd: str, depth: int = 0) -> str | None:
     segs = split_segments(cmd)
     if segs is None:
         return "a command Groundwork could not parse"
+    assigns = _literal_assignments(segs)
+    dirs, lost = [cwd], False  # `cd scripts && ./tfa.sh` runs scripts/tfa.sh (found by independent review)
     for s in segs:
-        found = segment_sensitive(s["argv"], cwd, depth)
-        if found:
-            return found
+        argv = _resolve_head(s["argv"], assigns)
+        if isinstance(argv, str):
+            return argv
+        for d in dirs:
+            found = segment_sensitive(argv, d, depth)
+            if found:
+                return found
+        script = _script_operand(argv)
+        if lost and script and not os.path.isabs(script) and \
+                not any(os.path.isfile(os.path.join(d, script)) for d in dirs):
+            return f"a script ({script}) run after a directory change Groundwork cannot follow"
+        target = _cd_target(argv)
+        if target == "":
+            lost = True
+        elif target is not None:
+            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))[:8]
     return embedded_sensitive(cmd, segs, cwd, depth)
+
+
+def _script_operand(argv: list[str]) -> str | None:
+    """The script a segment runs: `bash X`, `source X`, `. X`, or a path-qualified program."""
+    u = unwrap_run(argv)
+    if not u:
+        return None
+    name = os.path.basename(u[0])
+    if name in SHELLS:
+        kind, value = _shell_invocation(u[1:])
+        return value if kind == "script" else None
+    if name in ("source", ".") and _words(u[1:]):
+        return _words(u[1:])[0]
+    return u[0] if "/" in u[0] else None
 
 
 # Programs that can create or replace a file other than through a shell redirect.
@@ -826,7 +953,8 @@ def _written_and_run(segs: list[dict]) -> bool:
         elif name == "curl":
             everything |= any(re.match(r"^-[a-zA-Z]*[oO]", a) or a.startswith(("--output", "--remote-name"))
                               for a in args)
-        elif name in FILE_WRITERS or (name == "git" and words[:1] and words[0] in GIT_TREE_WRITERS):
+        elif name in FILE_WRITERS or (name == "git" and words[:1] and words[0] in GIT_TREE_WRITERS
+                                      and words[1:2] not in (["list"], ["show"])):
             everything = True
     return False
 
@@ -846,11 +974,11 @@ def embedded_sensitive(cmd: str, segs: list[dict], cwd: str, depth: int = 0) -> 
     if _written_and_run(segs):
         return "a script written and run in the same command (it cannot be checked before it runs; write it first, " \
                "then run it in a separate command)"
-    if depth >= 3:
-        return "deeply nested commands"
     subs = substitutions(cmd)
     if subs is None:
         return "an unclosed command substitution"
+    if depth >= MAX_DEPTH and (subs or any(s.get("heredocs") for s in segs)):
+        return "deeply nested commands"  # only when something nested is left unchecked (found by independent review)
     for body in subs:
         found = command_sensitive(body, cwd, depth + 1)
         if found:
