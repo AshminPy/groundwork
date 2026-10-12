@@ -54,7 +54,7 @@ On success it SHALL record the plan digest as the approval code and set the task
 - **THEN** the command prints the approval code and the exact `/gw-approve <KEY> <code>` line for the owner
 
 ### Requirement: Owner-only approval bound to the plan
-An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest and the plan still passes the plan check. A change to the plan after approval SHALL void the approval for execution until the owner approves the new digest.
+An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest and the plan still passes the plan check. The digest SHALL cover `proposal.md`, `design.md` and `specs/**/*.md`. A change to any of them after approval SHALL void the approval for execution until the owner approves the new digest. Ticking or annotating `tasks.md` SHALL NOT void it.
 
 Claude SHALL be denied any tool call that invokes, schedules or sends `/gw-approve` or `/gw-cancel`: the Skill tool, a command that is not read-only, a nested `claude` session, scheduled prompts, messages to other sessions, or MCP calls. It SHALL also be denied any write to the task ledger or to those command files. Text that only names the command in a file edit, a subagent prompt or a read-only command is allowed.
 
@@ -65,6 +65,10 @@ Claude SHALL be denied any tool call that invokes, schedules or sends `/gw-appro
 #### Scenario: Stale approval code
 - **WHEN** the owner types `/gw-approve COR-123 <old code>` after the plan changed
 - **THEN** the expansion is blocked with a reason naming the current state and no approval is recorded
+
+#### Scenario: Progress recorded in tasks.md
+- **WHEN** Claude ticks tasks and adds notes to `tasks.md` after approval
+- **THEN** the approval stays valid and in-scope edits stay allowed
 
 #### Scenario: Claude tries to approve
 - **WHEN** Claude calls the Skill tool for `gw-approve`, runs `claude -p '/gw-approve …'`, or schedules or sends a prompt containing it
@@ -101,7 +105,7 @@ After each tool call in a repository with an approved MATERIAL task, Groundwork 
 - each foreground review subagent's parsed `REVIEW RESULT`, with the fingerprint;
 - each approved sensitive operation's time.
 
-After each Bash, Agent or MCP call, it SHALL report to Claude every changed path outside the allowed set, compared with the intake base commit.
+After each Bash, Agent or MCP call, it SHALL report to Claude every changed path outside the allowed set, compared with the intake base commit. When the approval is void because the plan changed, the report SHALL say so instead of calling in-scope work unauthorized.
 
 #### Scenario: Out-of-scope change through Bash
 - **WHEN** a Bash command creates `notes.txt` outside the approved Scope
@@ -110,7 +114,7 @@ After each Bash, Agent or MCP call, it SHALL report to Claude every changed path
 ### Requirement: Evidence-gated completion
 `groundwork task complete <KEY>` SHALL set a MATERIAL task to complete only when all of these hold:
 - it is approved and the plan digest is unchanged;
-- every task in `tasks.md` is checked;
+- every task in `tasks.md` is checked, and it has at least as many tasks as at approval;
 - the scope audit finds nothing;
 - every declared verification command has a successful record on the current fingerprint, made after the last sensitive operation;
 - the latest review on the current fingerprint reports zero MUST FIX findings.

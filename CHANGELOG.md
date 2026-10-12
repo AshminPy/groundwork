@@ -11,7 +11,8 @@
   - Implementation is denied until `groundwork task request-approval` accepts the plan (`openspec validate --strict`
     plus Prerequisites, Risks, Missing Information, Estimate, Scope and Verification) and the owner types
     `/gw-approve <KEY> <code>`. Only that typed command, seen through Claude Code's `UserPromptExpansion` event,
-    records an approval, and the approval is bound to a digest of the plan.
+    records an approval, and the approval is bound to a digest of the proposal, design and specs. Ticking or
+    annotating `tasks.md` does not void it; removing approved tasks is refused at completion.
   - After approval, edits must stay inside the plan's Scope. Sensitive commands need an Approved Operation. A git
     audit after every Bash, agent or MCP call reports out-of-scope changes.
   - `groundwork task complete` passes only with verification and a zero-MUST-FIX review on the current working tree.

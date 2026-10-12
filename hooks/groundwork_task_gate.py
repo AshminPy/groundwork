@@ -589,7 +589,8 @@ def on_expansion(data: dict) -> None:
             f"command on its own, not piped ({'; '.join(f'`{v}`' for v in plan.get('verify', []))}); dispatch a "
             "foreground independent review subagent (subagent_type or name containing 'review') whose final response "
             "ends with a REVIEW RESULT block (Verdict: approve|changes-required, Must-fix: N); fix any MUST FIX and "
-            f"re-review; then run: {gt.task_cli()} complete {key}. Editing the plan voids this approval."))
+            f"re-review; then run: {gt.task_cli()} complete {key}. Editing proposal.md, design.md or specs voids this "
+            "approval; ticking or annotating tasks.md does not, but approved tasks cannot be removed."))
     if len(args) != 1 or not gt.KEY_SAFE.match(args[0].upper()):
         emit({"decision": "block", "reason": "Groundwork: usage /gw-cancel <TASK-KEY>"})
     ok, msg = gt.cancel(root, args[0].upper())
@@ -813,7 +814,15 @@ def on_post(data: dict) -> None:
             notes.append(f"Review by {reviewer} recorded: " + ("no REVIEW RESULT block found, so it cannot count "
                          "toward completion." if mf is None else f"{mf} MUST FIX finding(s)."))
     bad = gt.scope_violations(root, tasks)  # after every tool that can act (read and edit tools returned above)
-    if bad:
+    void = [t["key"] for t in tasks if t.get("state") == gt.APPROVED and t not in approved]
+    if bad and void:
+        # The Scope stopped applying because the plan changed, not because the change itself was out of scope.
+        notes.insert(0, "APPROVAL VOID: the plan (proposal, design or specs) of " + ", ".join(void) + " changed after "
+                     "approval, so its Scope no longer applies and " + ", ".join(bad[:10]) + (" …" if len(bad) > 10
+                     else "") + " cannot count as approved work. Restore the approved plan, or run "
+                     f"{gt.task_cli()} request-approval {void[0]} and get the owner's new approval. Ticking or "
+                     "annotating tasks.md does not void an approval.")
+    elif bad:
         notes.insert(0, "UNAUTHORIZED CHANGE: " + ", ".join(bad[:10]) + (" …" if len(bad) > 10 else "") +
                      " changed outside the approved scope of " + ", ".join(t["key"] for t in tasks) +
                      ". Revert these changes now (git checkout -- <path> for a tracked file; delete a new file). "

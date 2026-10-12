@@ -67,13 +67,17 @@ UNCERTAINTY: RUNTIME VALIDATION REQUIRED for whether a cross-session message or 
 
 ### D3. Approval is bound to a digest of the plan
 
-DECISION: the approval code is `sha256` over `proposal.md`, `design.md`, `tasks.md` (checkboxes normalised to unchecked) and `specs/**/*.md`, truncated to 10 hex characters. Execution is allowed only while the current digest equals the approved one.
+DECISION: the approval code is `sha256` over `proposal.md`, `design.md` and `specs/**/*.md`, truncated to 10 hex characters. Execution is allowed only while the current digest equals the approved one. `tasks.md` is not in the digest. The number of tasks at approval is recorded, and completion refuses if `tasks.md` has fewer.
 
-WHY: it keeps Claude inside the approved scope. Editing the plan after approval voids the approval instead of silently widening scope. Ticking tasks does not change the digest.
+WHY:
+- Scope, Verification and Approved Operations live in the proposal or design, so editing them after approval voids the approval instead of silently widening scope.
+- `tasks.md` is the progress checklist. In the live acceptance run, the model ticked and annotated it during execution. With `tasks.md` in the digest (checkboxes normalised), the annotations voided the approval, and in-scope work was reported as outside the scope.
 
-TRADEOFFS: any wording fix to the plan needs re-approval.
+TRADEOFFS:
+- Any wording fix to the proposal, design or specs needs re-approval.
+- Task wording can change after approval without re-approval. This grants no authority: the gate reads Scope and Approved Operations from the proposal or design only. Removing approved tasks is refused at completion.
 
-VALIDATION METHOD: unit tests for an unchanged digest when only checkboxes are ticked, and for a changed digest on a scope edit.
+VALIDATION METHOD: unit tests that ticking and annotating `tasks.md` keeps the approval valid, that removing a task is refused at completion, and that a scope edit voids the approval.
 
 ### D4. Two layers of execution gating: `PreToolUse` per call, plus a git audit after every call
 
@@ -94,7 +98,7 @@ DECISION: each verification and review record stores a fingerprint of the workin
 - a successful run of every declared verification command, after the last approved sensitive operation;
 - a review reporting zero MUST FIX findings.
 
-WHY: it is exact. Any change after verification makes the evidence stale, whichever tool made it, and ticking `tasks.md` does not. A review only counts when it came from a foreground subagent with a parsed `REVIEW RESULT` block. This is stricter than the Stop gate's presence-only fallback, because completion is the claim that matters.
+WHY: it is exact. Any change after verification makes the evidence stale, whichever tool made it, and editing `tasks.md` does not. A review only counts when it came from a foreground subagent with a parsed `REVIEW RESULT` block. This is stricter than the Stop gate's presence-only fallback, because completion is the claim that matters.
 
 TRADEOFFS:
 - A large diff costs one bounded `git diff` per verification or review event. Above 20 MB the fingerprint falls back to `--stat` plus mtimes.

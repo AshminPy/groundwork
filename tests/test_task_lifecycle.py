@@ -491,6 +491,15 @@ def test_full_lifecycle() -> None:
         # ---- implementation + evidence
         (repo / "infra" / "goldengate").mkdir(parents=True)
         (repo / "infra" / "goldengate" / "vm.json").write_text('{"name": "gg-vm-1"}\n')
+        (d / "design.md").write_text("## Context\n\nreworded after approval\n")
+        out = e.post(repo, "Bash", {"command": "echo hi"}, tool_response={"stdout": "hi"})
+        check("plan edited after approval: the audit says the approval is void, not that in-scope work is unauthorized",
+              "APPROVAL VOID" in context(out) and "UNAUTHORIZED" not in context(out), context(out))
+        r = e.cli(repo, "complete", key)
+        check("plan edited after approval: completion names only the void approval and the re-request",
+              r.returncode == 1 and "changed after approval" in r.stderr and "request-approval" in r.stderr
+              and "outside the approved scope" not in r.stderr, r.stderr)
+        (d / "design.md").unlink()
         r = e.cli(repo, "complete", key)
         check("completion refused before any evidence; lists each gap",
               r.returncode == 1 and "tasks.md: 0/2" in r.stderr and "never run" in r.stderr and "no independent review" in r.stderr, r.stderr)
@@ -519,6 +528,16 @@ def test_full_lifecycle() -> None:
         (repo / "notes.txt").unlink()
         out = e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer", "prompt": "review"}, tool_response=review(REVIEW_BAD))
         check("review with MUST FIX recorded", "1 MUST FIX" in context(out), context(out))
+        (d / "tasks.md").write_text(PLAN_TASKS.replace("- [ ]", "- [x]").replace("vm.json\n", "vm.json (done: 100 GB disk)\n")
+                                    + "\nNotes: deployed with the approved command.\n")
+        check("live run L4: ticking and annotating tasks.md keeps the approval valid",
+              denied(e.pre(repo, "Write", {"file_path": str(repo / "infra/goldengate/vm.json"), "content": "{}"})) == ""
+              and "APPROVAL VOID" not in context(e.post(repo, "Bash", {"command": "echo hi"}, tool_response={"stdout": "hi"}))
+              and "changed after approval" not in e.cli(repo, "complete", key).stderr)
+        (d / "tasks.md").write_text("## 1. Implementation\n- [x] 1.1 Write infra/goldengate/vm.json\n")
+        r = e.cli(repo, "complete", key)
+        check("removing an approved task from tasks.md is refused at completion",
+              r.returncode == 1 and "approved tasks cannot be removed" in r.stderr, r.stderr)
         (d / "tasks.md").write_text(PLAN_TASKS.replace("- [ ]", "- [x]"))
         r = e.cli(repo, "complete", key)
         check("completion refused: latest review reported MUST FIX", r.returncode == 1 and "MUST FIX" in r.stderr, r.stderr)

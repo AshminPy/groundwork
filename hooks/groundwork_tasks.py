@@ -57,7 +57,6 @@ CODE_LEN = 10
 
 CHECKBOX_ANY = re.compile(r"^\s*-\s*\[[ xX]\]", re.MULTILINE)
 CHECKBOX_DONE = re.compile(r"^\s*-\s*\[[xX]\]", re.MULTILINE)
-CHECKBOX_NORMALISE = re.compile(r"^(\s*-\s*\[)[xX ](\])", re.MULTILINE)
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏  ‪-‮⁦-⁩﻿]")
 
 # ---------------------------------------------------------------------------------------------- paths
@@ -629,11 +628,13 @@ def read_plan(root: str, task: dict) -> dict:
 
 
 def plan_digest(root: str, task: dict) -> str | None:
-    """sha256 over proposal.md, design.md, tasks.md (checkboxes normalised) and specs/**/*.md (design D3)."""
+    """sha256 over proposal.md, design.md and specs/**/*.md — where Scope, Verification and Approved Operations live
+    (design D3). tasks.md is the progress checklist and is excluded: ticking or annotating it during execution voided
+    the approval in the live acceptance run. Removing approved tasks is refused at completion instead."""
     d = change_dir(root, task)
     if not task.get("change") or not d.is_dir():
         return None
-    files = [d / n for n in ("proposal.md", "design.md", "tasks.md") if (d / n).is_file()]
+    files = [d / n for n in ("proposal.md", "design.md") if (d / n).is_file()]
     if (d / "specs").is_dir():
         files += sorted(p for p in (d / "specs").rglob("*.md") if p.is_file())
     h = hashlib.sha256()
@@ -642,8 +643,6 @@ def plan_digest(root: str, task: dict) -> str | None:
             content = p.read_bytes().replace(b"\r\n", b"\n")
         except Exception:
             content = b"<unreadable>"
-        if p == d / "tasks.md":
-            content = CHECKBOX_NORMALISE.sub(r"\1 \2", content.decode("utf-8", "replace")).encode()
         h.update(p.relative_to(d).as_posix().encode() + b"\0" + content + b"\0")
     return h.hexdigest()[:CODE_LEN]
 
@@ -803,7 +802,7 @@ def request_approval(root: str, key: str) -> tuple[bool, str]:
     lines += ["", f"OWNER ACTION: review the plan, then type   /gw-approve {key} {code}",
               f"              or cancel the task with     /gw-cancel {key}",
               "Claude cannot approve. Until the owner approves, Groundwork allows only read-only work and plan edits;"
-              " any plan edit changes the code and needs a new request."]
+              " an edit to proposal.md, design.md or specs changes the code and needs a new request."]
     return True, "\n".join(lines)
 
 
@@ -820,13 +819,16 @@ def approve(root: str, key: str, code: str, session_id: str = "") -> tuple[bool,
                        "Ask Claude to run request-approval again and approve the new code.")
     if (code or "").strip().lower() != requested:
         return False, f"Groundwork: approval code does not match {key}'s current plan code; nothing was approved."
-    problems = read_plan(root, task)["problems"]  # the plan rules may be stricter than when approval was requested
+    plan = read_plan(root, task)
+    problems = plan["problems"]  # the plan rules may be stricter than when approval was requested
     if problems:
         return False, (f"Groundwork: {key}'s plan no longer passes the plan check, so nothing was approved: "
                        + "; ".join(problems[:3]) + ". Ask Claude to fix the plan and request approval again.")
 
     def apply(t):
         t["state"] = APPROVED
+        # tasks.md is outside the digest, so the task count the owner saw is taken now (completion_problems).
+        t.setdefault("plan", {})["tasks_total"] = plan["tasks_total"]
         t["approval"].update({"approved_code": requested, "approved_at": now(), "approved_session": session_id,
                               "via": "/gw-approve (UserPromptExpansion)"})
         add_history(t, "approved", f"owner approved plan code {requested}")
@@ -853,12 +855,18 @@ def completion_problems(root: str, task: dict) -> list[str]:
         return []
     if task.get("state") != APPROVED:
         return [f"{task['key']} is '{task.get('state')}'; only an approved task can complete"]
-    problems = []
     if not approval_valid(root, task):
-        problems.append("the plan changed after approval; request approval again")
+        # Everything else follows from this (the approved Scope no longer applies), so it is the only problem shown.
+        return ["the plan (proposal, design or specs) changed after approval, so the approval and its Scope no longer "
+                f"apply: run {task_cli()} request-approval {task['key']} and get the owner's new approval"]
+    problems = []
     plan = read_plan(root, task)
     if plan["tasks_total"] == 0 or plan["tasks_done"] < plan["tasks_total"]:
         problems.append(f"tasks.md: {plan['tasks_done']}/{plan['tasks_total']} tasks checked")
+    approved_total = int((task.get("plan") or {}).get("tasks_total") or 0)
+    if plan["tasks_total"] < approved_total:
+        problems.append(f"tasks.md has {plan['tasks_total']} tasks but the approved plan had {approved_total}; "
+                        "approved tasks cannot be removed")
     bad = scope_violations(root)
     if bad:
         problems.append("changes outside the approved scope: " + ", ".join(bad[:10]))
