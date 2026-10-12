@@ -89,7 +89,7 @@ DECISION:
 
 WHY: shell parsing cannot see every write (`python -c`, generated scripts, subagents' shells). The git audit is path-agnostic and catches any in-repository change however it was made. The allowlist before approval is fail-closed: an unknown command is denied, not trusted.
 
-TRADEOFFS: before approval, some harmless commands are denied, such as `sed`, `awk` and running tests. Claude has the Read and Grep tools and can ask. Side effects outside the repository are only covered by the sensitive-command list. The shell parser follows bash for quoting, comments, line continuations, here-documents, compound-command keywords and operator runs, and denies what it cannot parse; programs such as Python are not inspected. The working directory is not part of an Approved Operation's match.
+TRADEOFFS: before approval, some harmless commands are denied, such as `sed`, `awk` and running tests. Claude has the Read and Grep tools and can ask. Side effects outside the repository are only covered by the sensitive-command list. The shell parser follows bash for quoting, comments, line continuations, here-strings, here-documents, arithmetic, compound-command keywords and operator runs, and denies what it cannot parse. A script written and run in the same command is denied, because the gate reads a script only when it runs; programs such as Python are not inspected. The working directory is not part of an Approved Operation's match.
 
 VALIDATION METHOD: tests for each class, plus a live test where an out-of-scope edit is denied.
 
