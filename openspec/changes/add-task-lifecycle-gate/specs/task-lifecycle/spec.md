@@ -92,7 +92,7 @@ While a MATERIAL task in the repository is in planning or awaiting approval:
 
 While approved (the digest unchanged):
 - edits SHALL be allowed only within the approved Scope or the plan directory;
-- sensitive commands SHALL be allowed only when their words equal an Approved Operation exactly (no extra arguments), and mutating MCP tools only when named there;
+- sensitive commands SHALL be allowed only when their words equal an Approved Operation exactly (no extra arguments) and the same command does not also set, export or source environment, and mutating MCP tools only when named there;
 - non-read-only commands touching Groundwork's hooks, settings or ledger SHALL be denied.
 
 A gate error while such a task is active SHALL deny the call.

@@ -83,13 +83,13 @@ VALIDATION METHOD: unit tests that ticking and annotating `tasks.md` keeps the a
 
 DECISION:
 - `PreToolUse` gates edit tools by path, Bash with a read-only allowlist before approval and a sensitive-command list after it, and MCP tools by verb.
-- After approval, a sensitive command runs only when its words equal an Approved Operation exactly. In the live acceptance run, a prefix match let the model add flags the owner had not seen; a different `--project` would have passed the same way.
+- After approval, a sensitive command runs only when its words equal an Approved Operation exactly, and not in the same command as `export`, an assignment or `source`. In the live acceptance run, a prefix match let the model add flags the owner had not seen; a different `--project` would have passed the same way.
 - After every Bash, Agent or MCP call, `PostToolUse`/`PostToolUseFailure` diff the working tree against the base commit recorded at intake. Paths that were dirty at intake are excluded. The audit reports out-of-scope paths to Claude.
 - `complete` re-runs the audit and refuses on any violation.
 
 WHY: shell parsing cannot see every write (`python -c`, generated scripts, subagents' shells). The git audit is path-agnostic and catches any in-repository change however it was made. The allowlist before approval is fail-closed: an unknown command is denied, not trusted.
 
-TRADEOFFS: before approval, some harmless commands are denied, such as `sed`, `awk` and running tests. Claude has the Read and Grep tools and can ask. Side effects outside the repository are only covered by the sensitive-command list.
+TRADEOFFS: before approval, some harmless commands are denied, such as `sed`, `awk` and running tests. Claude has the Read and Grep tools and can ask. Side effects outside the repository are only covered by the sensitive-command list. The shell parser follows bash for quoting, comments, line continuations, here-documents, compound-command keywords and operator runs, and denies what it cannot parse; programs such as Python are not inspected. The working directory is not part of an Approved Operation's match.
 
 VALIDATION METHOD: tests for each class, plus a live test where an out-of-scope edit is denied.
 

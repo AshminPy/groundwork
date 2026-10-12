@@ -346,6 +346,32 @@ def test_shell_classifier() -> None:
     check("review 4: comments are dropped (an apostrophe in one still parses); `$#`, `${#x}` and quoted # are not comments",
           ro("ls # don't") and split_argv("echo $# ${#x} 'a # b'") == [["echo", "$#", "${#x}", "a # b"]]
           and split_argv("ls \\\n  -la") == [["ls", "-la"]])
+    check("review 5 MUST FIX: a redirect with no command still writes (`> f`, `ls; > f`, `<> f`, `(> f)`)",
+          not ro("> infra.txt") and not ro("ls; > infra.txt") and not ro("git status\n>infra.txt")
+          and not ro("<> infra.txt") and not ro("(> infra.txt)"))
+    check("review 5 MUST FIX: shell keywords do not hide the command after them",
+          all(sens(c) is not None for c in ("if true; then terraform destroy; fi", "for p in a b; do kubectl delete pod $p; done",
+                                            "while true; do terraform apply; done", "{ terraform apply; }", "! terraform apply",
+                                            "function f { terraform apply; }; f"))
+          and ro("if git status; then ls; fi"))
+    check("review 5 MUST FIX: xargs option values do not hide the command it runs",
+          sens("echo a | xargs -I {} kubectl delete pod {}") is not None and sens("echo a | xargs -n 1 kubectl delete pod") is not None
+          and sens("echo a | xargs -P 4 -n 1 kubectl delete pod") is not None and ro("git ls-files | xargs -n 1 wc -l"))
+    check("review 5 MUST FIX: `a ||⏎verification` does not count (the verification may not have run)",
+          vs("true ||\npython3 -m pytest tests -q") != "counted" and vs("cd sub &&\npython3 -m pytest tests -q") == "counted")
+    check("review 5: quoted operators are arguments (`rm '&&' -rf dir` is a recursive delete; `grep '||'` is read-only)",
+          sens("rm '&&' -rf dir") is not None and sens("rm '>' -rf dir") is not None
+          and ro("grep -n '||' f") and ro("cut -d '|' -f1 f") and ro("sort -t '|' -k1 f"))
+    check("review 5: here-document bodies are not commands; an unterminated one fails closed",
+          split_argv("cat > f <<'EOF'\nIt's fine; rm -rf /\nEOF") == [["cat"]]
+          and split_argv("cat <<-EOF\n\tbody\n\tEOF\nterraform apply") == [["cat"], ["terraform", "apply"]]
+          and gate.split_segments("cat <<EOF\nls '\nEOF\ntouch f\n'") is None and gate.split_segments("cat <<EOF\nno end") is None)
+    check("review 5: `#` after an escaped blank, inside ${…} or after a continuation is not a comment",
+          not ro("echo a\\ #x; touch f") and not ro("echo ${x:- #}; touch f") and not ro("echo a\\\n# x; touch f")
+          and sens('"terra\\\nform" apply') is not None)
+    check("review 5: /usr/bin/env, command -p and sudo -R are looked through",
+          sens("/usr/bin/env terraform apply") is not None and sens("command -p terraform apply") is not None
+          and sens("sudo -R /x terraform apply") is not None)
     check("review 4: `$'…'` quoting cannot be checked, so it fails closed; sudo --user VALUE is unwrapped",
           gate.split_segments("$'terraform' apply") is None and sens("$'terraform' apply") is not None
           and sens("sudo --user root terraform apply") is not None)
@@ -507,6 +533,9 @@ def test_full_lifecycle() -> None:
         r = denied(e.pre(repo, "Bash", {"command": "gcloud compute instances create gg-vm-1 --zone=us-central1-a --project=prod"}))
         check("live run: the approved operation with an extra flag is denied, with how to change it",
               "not an Approved Operation" in r and "exactly as written" in r, r)
+        r = denied(e.pre(repo, "Bash", {"command": "export CLOUDSDK_CORE_PROJECT=prod; gcloud compute instances create gg-vm-1 --zone=us-central1-a"}))
+        check("review 5: an approved operation in the same command as `export` is denied (it could change the project)",
+              "on its own" in r, r)
         r = denied(e.pre(repo, "Bash", {"command": "gcloud compute instances delete gg-vm-1"}))
         check("approved: unapproved sensitive operation denied", "not an Approved Operation" in r, r)
         check("approved: recursive delete denied", denied(e.pre(repo, "Bash", {"command": "rm -rf infra"})) != "")

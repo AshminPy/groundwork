@@ -85,8 +85,8 @@ SENSITIVE_HEADS = ("gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsuti
                    "rsync", "curl", "wget", "psql", "mysql", "sqlplus", "mongosh", "redis-cli", "docker", "rm", "claude")
 # Prefixes that run the command after them; unwrapped before the sensitivity check (found by independent review:
 # `sudo gcloud … delete`, `watch kubectl delete …`, `setsid terraform destroy` were not classified as sensitive).
-RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-T", "--user", "--group",
-                         "--close-from", "--host", "--prompt", "--other-user", "--role", "--type", "--chdir",
+RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-T", "-R", "--user", "--group",
+                         "--close-from", "--host", "--prompt", "--other-user", "--role", "--type", "--chdir", "--chroot",
                          "--command-timeout"},
                 "doas": {"-u", "-C"},
                 "watch": {"-n", "--interval"}, "setsid": set(),
@@ -101,39 +101,118 @@ DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqls
 OPERATORS = ("&>>", "<<<", "<<-", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<", ";", "|", "&",
              "(", ")", "<", ">", "\n")
 OPERATOR_CHARS = "();<>|&\n"
-COMMENT_AFTER = " \t\n;&|()"  # a `#` after one of these (or at the start) begins a comment
+COMMENT_AFTER = " \t\r\n;&|()<>"  # a `#` that starts a word (at the start or after one of these) begins a comment
+# Quoted or escaped operator characters (and blanks inside ${…}) are literal text. They are encoded as private-use
+# characters before lexing and decoded in the argv, so `grep '||'`, `cut -d '|'` and `find … \;` keep them as
+# arguments and `rm '&&' -rf dir` is not split into `rm` and `-rf dir` (found by independent review).
+_ENCODED = {c: chr(0xE000 + k) for k, c in enumerate(OPERATOR_CHARS + " \t")}
+_DECODE = str.maketrans({v: k for k, v in _ENCODED.items()})
+
+
+def _encode(text: str) -> str:
+    return "".join(_ENCODED.get(ch, ch) for ch in text)
+
+
+def _heredoc_delimiter(cmd: str, j: int):
+    """(delimiter, index after it) for the word after `<<`/`<<-` at j, or None when it is not a here-document
+    delimiter this parser accepts (it must start with a letter, `_`, a quote or a backslash; `1<<2` is arithmetic)."""
+    n = len(cmd)
+    while j < n and cmd[j] in " \t":
+        j += 1
+    if j >= n or not (cmd[j].isalpha() or cmd[j] in "_'\"\\"):
+        return None
+    word = []
+    while j < n and cmd[j] not in " \t\r" and cmd[j] not in OPERATOR_CHARS:
+        if cmd[j] in "'\"":
+            k = cmd.find(cmd[j], j + 1)
+            if k < 0:
+                return None
+            word.append(cmd[j + 1:k])
+            j = k + 1
+        elif cmd[j] == "\\":
+            word.append(cmd[j + 1:j + 2])
+            j += 2
+        else:
+            word.append(cmd[j])
+            j += 1
+    return ("".join(word), j) if word else None
 
 
 def _prepare_command(cmd: str) -> str | None:
-    """Pre-lexer pass, quote-aware. Replaces each unquoted `\\;` and each whole-word `';'` / `";"` with a placeholder
-    (an argument, as in find … -exec … \\;), drops `# comments` up to (not including) their newline, and drops
-    backslash-newline continuations. Everything else is kept verbatim, so a real separator next to quoted text or after
-    an escaped backslash stays a separator (found by independent review). None on an unbalanced quote or on `$'…'` /
-    `$"…"` quoting, which shlex does not decode."""
-    out, i, n = [], 0, len(cmd)
+    """Quote-aware pass before shlex, matching bash where it matters to the gate:
+    - quoted or escaped operator characters are literal (encoded, see _ENCODED); `\⏎` is a line continuation;
+    - a `#` that starts a word begins a comment, removed up to (not including) the newline; elsewhere (`a#b`,
+      `a\ #b`, `${x#y}`, `$#`) it is literal;
+    - `${…}` is one word; here-document bodies are removed, so their text is never read as commands.
+    None when the command cannot be checked: an unbalanced quote or `${`, a here-document without its terminator,
+    `$'…'` / `$"…"` quoting (shlex does not decode it), or a private-use character used by the encoding."""
+    if any(ch in _DECODE for ch in map(ord, cmd)):
+        return None
+    out, i, n, boundary, heredocs = [], 0, len(cmd), True, []
     while i < n:
         c = cmd[i]
         if c == "\\":
             nxt = cmd[i + 1:i + 2]
-            out.append(" \x00SEMI\x00 " if nxt == ";" else "" if nxt == "\n" else cmd[i:i + 2])
-            i += 2
-        elif c == "#" and (i == 0 or cmd[i - 1] in COMMENT_AFTER):
+            if nxt == "\n":
+                i += 2  # continuation: the word goes on, `boundary` unchanged
+                continue
+            out.append(_ENCODED[nxt] if nxt in OPERATOR_CHARS else cmd[i:i + 2])
+            i, boundary = i + 2, False
+        elif c == "#" and boundary:
             j = cmd.find("\n", i)
             i = n if j < 0 else j
         elif c == "$" and cmd[i + 1:i + 2] in ("'", '"'):
             return None
+        elif c == "$" and cmd[i + 1:i + 2] == "{":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += {"{": 1, "}": -1}.get(cmd[j], 0)
+                j += 1
+            if depth:
+                return None
+            out.append("${" + _encode(cmd[i + 2:j]))
+            i, boundary = j, False
         elif c in "'\"":
             j = i + 1
             while j < n and cmd[j] != c:
                 j += 2 if c == '"' and cmd[j] == "\\" else 1
             if j >= n:
                 return None
-            standalone = (i == 0 or cmd[i - 1] in " \t") and (j + 1 == n or cmd[j + 1] in " \t\n")
-            out.append(" \x00SEMI\x00 " if cmd[i + 1:j] == ";" and standalone else cmd[i:j + 1])
-            i = j + 1
+            body = cmd[i + 1:j]
+            if c == '"':
+                body = body.replace("\\\n", "")
+            out.append(c + _encode(body) + c)
+            i, boundary = j + 1, False
+        elif c == "<" and cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            strip = cmd.startswith("<<-", i)
+            j = i + (3 if strip else 2)
+            found = _heredoc_delimiter(cmd, j)
+            if found:
+                heredocs.append((found[0], strip))
+                out.append("<< " + _encode(found[0]) + " ")  # the body is removed below, so `-` no longer matters
+                i, boundary = found[1], False
+            else:
+                out.append(cmd[i:j])
+                i, boundary = j, True
+        elif c == "\n":
+            out.append(c)
+            i, boundary = i + 1, True
+            for delim, strip in heredocs:  # the bodies start after this newline, one after another
+                while True:
+                    if i >= n:
+                        return None
+                    j = cmd.find("\n", i)
+                    j = n if j < 0 else j
+                    line = cmd[i:j].rstrip("\r")
+                    i = min(j + 1, n)
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        break
+            heredocs = []
         else:
             out.append(c)
-            i += 1
+            i, boundary = i + 1, c in COMMENT_AFTER
+    if heredocs:
+        return None
     return "".join(out)
 
 
@@ -150,7 +229,8 @@ def _split_operators(tok: str) -> list[str]:
 
 def split_segments(cmd: str):
     """[{argv, writes, prev, next}] for each simple command, or None when the command cannot be parsed.
-    `writes`: an output redirection to a real file. prev/next: the operator before/after the segment."""
+    `writes`: an output redirection to a real file (also with no command, `> f`). prev/next: the operator
+    before/after the segment; a newline after an operator (`a ||⏎b`) does not replace it."""
     prepared = _prepare_command(cmd)
     if prepared is None:
         return None
@@ -167,23 +247,31 @@ def split_segments(cmd: str):
     while i < len(tokens):
         tok = tokens[i]
         if tok in SEPARATORS:
-            if cur:
+            if cur or writes:
                 segments.append({"argv": cur, "writes": writes, "prev": prev, "next": tok})
-            cur, writes, prev = [], False, tok
+                prev = tok
+            elif tok != "\n" or prev is None:
+                prev = tok
+            cur, writes = [], False
         elif REDIRECT_RE.match(tok):
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
             if (tok.startswith((">", "&>")) or tok == "<>") and not (tok == ">&" and target.isdigit()) \
-                    and target not in DEV_SINKS:
+                    and target.translate(_DECODE) not in DEV_SINKS:
                 writes = True
             i += 1  # skip the redirection target / heredoc delimiter
         elif tok.isdigit() and i + 1 < len(tokens) and REDIRECT_RE.match(tokens[i + 1]):
             pass  # the "2" in "2>&1"
         else:
-            cur.append(tok.replace("\x00SEMI\x00", ";"))
+            cur.append(tok.translate(_DECODE))
         i += 1
-    if cur:
+    if cur or writes:
         segments.append({"argv": cur, "writes": writes, "prev": prev, "next": None})
     return segments
+
+
+# Words that open or continue a compound command; the command after them is what runs (found by independent
+# review: `if …; then terraform destroy; fi`, `do kubectl delete …`, `{ terraform apply; }`, `! terraform apply`).
+RESERVED_WORDS = {"!", "{", "}", "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "coproc"}
 
 
 def strip_wrappers(argv: list[str]):
@@ -191,26 +279,33 @@ def strip_wrappers(argv: list[str]):
     i, assigns = 0, False
     while i < len(argv):
         t = argv[i]
+        name = os.path.basename(t)
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
             assigns, i = True, i + 1
-        elif t in ("command", "builtin", "nohup", "time", "exec"):
+        elif t in RESERVED_WORDS:
             i += 1
-        elif t == "env":
+        elif t == "function":
+            i += 2  # function NAME { … }: the body follows
+        elif name in ("command", "builtin", "nohup", "time", "exec"):
+            i += 1
+            while i < len(argv) and argv[i].startswith("-") and name != "nohup":
+                i += 1
+        elif name == "env":
             i += 1
             while i < len(argv) and argv[i].startswith("-"):
                 i += 2 if argv[i] in ("-u", "--unset", "-C", "--chdir") else 1
-        elif t == "nice":
+        elif name == "nice":
             i += 1
             if i < len(argv) and argv[i] == "-n":
                 i += 2
             elif i < len(argv) and argv[i].startswith("-"):
                 i += 1
-        elif t == "timeout":
+        elif name == "timeout":
             i += 1
             while i < len(argv) and argv[i].startswith("-"):
                 i += 2 if argv[i] in ("-s", "--signal", "-k", "--kill-after") else 1
             i += 1  # the duration
-        elif t == "stdbuf":
+        elif name == "stdbuf":
             i += 1
             while i < len(argv) and argv[i].startswith("-"):
                 i += 1
@@ -259,6 +354,16 @@ def installed_task_cli() -> str:
     return os.path.realpath(gt.__file__)
 
 
+def _xargs_command(args: list[str]) -> list[str]:
+    """The command xargs runs: after its options, skipping the values of -I, -n, -P, … (found by independent review:
+    `xargs -n 1 kubectl delete pod` was read as the command `1`)."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in ("-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
+                              "--max-lines", "--delimiter", "--arg-file", "--replace") else 1
+    return args[i:]
+
+
 def segment_read_only(argv: list[str], depth: int = 0) -> bool:
     argv, assigns = strip_wrappers(argv)
     if assigns:
@@ -277,10 +382,8 @@ def segment_read_only(argv: list[str], depth: int = 0) -> bool:
             return command_read_only(args[args.index("-c") + 1], depth + 1)
         return False
     if name == "xargs":
-        i = 0
-        while i < len(args) and args[i].startswith("-"):
-            i += 2 if args[i] in ("-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a") else 1
-        return i < len(args) and depth < 3 and segment_read_only(args[i:], depth + 1)
+        rest = _xargs_command(args)
+        return bool(rest) and depth < 3 and segment_read_only(rest, depth + 1)
     if name in ALWAYS_RO:
         if name == "sort" and any(a.startswith(("-o", "--output")) for a in args):
             return False
@@ -355,9 +458,9 @@ def unwrap_run(argv: list[str]) -> list[str]:
     return argv
 
 
-def _shell_command_arg(args: list[str]):
-    """The command string of `sh -c CMD` (also -lc, -ec, `-o pipefail -c`, `-c -o pipefail CMD`); "" when the shell
-    reads its commands from stdin (-s, or no script and no -c); None when it runs a script file."""
+def _shell_invocation(args: list[str]) -> tuple[str, str | None]:
+    """How `sh ARGS` gets its commands: ("c", CMD) for -c (also -lc, -ec, `-o pipefail -c`, `-c -o pipefail CMD`);
+    ("stdin", None) for -s or no operand; ("script", PATH) for a script file."""
     i, has_c, has_s = 0, False, False
     while i < len(args):
         a = args[i]
@@ -376,10 +479,16 @@ def _shell_command_arg(args: list[str]):
             continue
         break
     if has_c:
-        return args[i] if i < len(args) else ""
+        return "c", args[i] if i < len(args) else ""
     if has_s or i >= len(args):
-        return ""  # -s: commands come from stdin and operands are positional parameters (found by independent review)
-    return None
+        return "stdin", None  # -s: commands come from stdin, operands are positional parameters (independent review)
+    return "script", args[i]
+
+
+def _shell_command_arg(args: list[str]):
+    """The command string of `sh -c CMD`; "" when the shell reads its commands from stdin; None for a script file."""
+    kind, value = _shell_invocation(args)
+    return value if kind == "c" else "" if kind == "stdin" else None
 
 
 def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
@@ -393,12 +502,14 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     if name == "eval" and depth < 3:
         return command_sensitive(" ".join(args), cwd, depth + 1)
     if name in SHELLS:
-        inner = _shell_command_arg(args)
-        if inner == "":
+        kind, value = _shell_invocation(args)
+        if kind == "stdin" or (kind == "c" and value == ""):
             return "commands piped into a shell (they cannot be checked)"
-        if inner is not None:
-            return command_sensitive(inner, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
-        return _script_sensitive(words[0], cwd, depth) if words else None
+        if kind == "c":
+            return command_sensitive(value, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
+        return _script_sensitive(value, cwd, depth)
+    if name in ("source", ".") and words:
+        return _script_sensitive(words[0], cwd, depth, sourced=True)
     if name == "claude":
         return "a nested Claude Code session"
     if name == "find" and depth < 3:
@@ -414,7 +525,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         if found:
             return found
     if name == "xargs":
-        rest = [a for a in args if not a.startswith("-")]
+        rest = _xargs_command(args)
         return segment_sensitive(rest, cwd, depth + 1) if rest and depth < 3 else None
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
@@ -468,7 +579,7 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     return None
 
 
-def _script_sensitive(script: str, cwd: str, depth: int) -> str | None:
+def _script_sensitive(script: str, cwd: str, depth: int, sourced: bool = False) -> str | None:
     path = script if os.path.isabs(script) else os.path.join(cwd, script)
     try:
         if depth >= 3 or not os.path.isfile(path) or os.path.getsize(path) > 200_000:
@@ -476,7 +587,7 @@ def _script_sensitive(script: str, cwd: str, depth: int) -> str | None:
         text = Path(path).read_text(errors="replace")
     except OSError:
         return None
-    if not (path.endswith(".sh") or re.match(r"#!\S*\b(?:ba|z|k|da)?sh\b|#!\S*env\s+(?:ba|z|k|da)?sh\b", text)):
+    if not (sourced or path.endswith(".sh") or re.match(r"#!\S*\b(?:ba|z|k|da)?sh\b|#!\S*env\s+(?:ba|z|k|da)?sh\b", text)):
         return None
     found = command_sensitive(text, cwd, depth + 1)
     return f"{found} inside {script}" if found else None
@@ -498,6 +609,16 @@ def _norm_tokens(cmd: str) -> list[str] | None:
         return shlex.split(cmd)
     except ValueError:
         return None
+
+
+ENV_BUILTINS = {"export", "unset", "set", "source", ".", "declare", "typeset", "local", "readonly", "alias", "shopt"}
+
+
+def _changes_environment(argv: list[str]) -> bool:
+    """A segment that changes the shell environment for the commands after it: `export X=…`, `X=…` alone, `source f`
+    (found by independent review: `export CLOUDSDK_CORE_PROJECT=prod; <approved gcloud command>`)."""
+    rest, assigns = strip_wrappers(argv)
+    return (assigns and not rest) or bool(rest and os.path.basename(rest[0]) in ENV_BUILTINS)
 
 
 def matches_operation(argv: list[str], operations: list[str]) -> bool:
@@ -763,6 +884,10 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
                      f"(approved: {'; '.join(ops) or 'none'}). Sensitive operations need the owner's approval in the "
                      "plan and run exactly as written, with no extra arguments; to change one, edit the plan and "
                      "request approval again.")
+        if any(matches_operation(s["argv"], ops) for s in segs) and any(_changes_environment(s["argv"]) for s in segs):
+            deny("Groundwork task gate: run the Approved Operation on its own. This command also sets or exports "
+                 "environment variables or sources a file, which can change what the approved command acts on "
+                 "(for example its project).")
         if any(u in cmd for u in UNSAFE_SUBSTRINGS) and re.search(
                 r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
             deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")
