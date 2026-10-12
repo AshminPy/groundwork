@@ -14,7 +14,9 @@
     records an approval, and the approval is bound to a digest of the proposal, design and specs. Ticking or
     annotating `tasks.md` does not void it; removing approved tasks is refused at completion.
   - After approval, edits must stay inside the plan's Scope. Sensitive commands must equal an Approved Operation exactly. A git
-    audit after every Bash, agent or MCP call reports out-of-scope changes.
+    audit after every Bash, agent or MCP call reports out-of-scope changes. Shell commands are parsed the way bash
+    does (quoting, comments, here-documents, command substitutions, `cd`, compound commands); what cannot be
+    checked is denied.
   - `groundwork task complete` passes only with verification and a zero-MUST-FIX review on the current working tree.
   - Open tasks appear in the session snapshot. The ledger lives under `~/.claude/groundwork/tasks/`, per
     repository.
