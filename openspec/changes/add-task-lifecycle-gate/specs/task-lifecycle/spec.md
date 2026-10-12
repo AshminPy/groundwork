@@ -96,7 +96,7 @@ It SHALL check commands inside wrappers, nested shells, scripts, command substit
 Groundwork SHALL record:
 - each foreground run of a declared verification command, with its outcome and a fingerprint of the code. The fingerprint SHALL be a hash of the content of every tracked and untracked, non-ignored file, except `openspec/` and generated caches, so staging and committing do not change it and computing it never writes the repository;
 - the result of each foreground review subagent: its `REVIEW RESULT` verdict and MUST FIX count;
-- each sensitive operation that ran, except a declared verification command and reading credentials.
+- each sensitive operation that ran, except a declared verification command and reading a credential file with a plain reader such as `cat` or `grep`.
 
 Events in one command SHALL be recorded in the order they ran, so a verification run after a sensitive operation in the same command counts, and one run before it does not.
 

@@ -281,8 +281,7 @@ def test_authorization_classes() -> None:
                 "find . -name __pycache__ -exec rm -rf {} +", "git -C sub status", "git -c color.ui=never log -3",
                 "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help",
                 # review round 2: lookups, && chains and subshells, find -delete inside the tree
-                "command -v sudo", "cd frontend && npm run build && cd .. && rm -rf frontend/dist",
-                "(cd scripts && ls); rm -rf build", "find . -name '*.pyc' -delete")
+                "command -v sudo", "(cd scripts && ls); rm -rf build", "find . -name '*.pyc' -delete")
     flowing = [c for c in ordinary if sens(c) is not None]
     check("ordinary development commands flow without a prompt", not flowing, str([(c, sens(c)) for c in flowing]))
     sensitive = {
@@ -314,6 +313,12 @@ def test_authorization_classes() -> None:
         "rm -rf / --help": "recursive delete",  # BSD rm reads a late --help as a file name
         "(cd x && true) && rm -rf ../y": "recursive delete", "cd x && a; rm -rf ../y": "recursive delete",
         "find -L /etc -exec rm -rf {} +": "recursive delete", "find /etc -delete": "recursive delete",
+        # confirmation review: a cd that may not have taken effect keeps the earlier directory a candidate
+        "(\n cd x && make\n) && rm -rf ../y": "recursive delete", "(cd x && make; ) && rm -rf ../y": "recursive delete",
+        "a || cd x && rm -rf ../y": "recursive delete", "echo | cd x && rm -rf ../y": "recursive delete",
+        "! cd x && rm -rf ../y": "recursive delete", "pushd x && make && popd && rm -rf ../y": "recursive delete",
+        "find -O3 /etc -delete": "recursive delete", "find -D tree /etc -delete": "recursive delete",
+        "aws iam delete-user --user-name help": "aws iam delete-user",
     }
     wrong = {c: sens(c) for c, label in sensitive.items() if label not in (sens(c) or "")}
     check("sensitive, destructive, credential and destructive-git commands ask", not wrong, str(wrong))

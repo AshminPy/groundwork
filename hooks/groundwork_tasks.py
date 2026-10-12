@@ -594,7 +594,7 @@ def phase(root: str, task: dict, plan: dict | None = None) -> str:
 
 # Generated caches that running the verification itself creates; never part of the fingerprint.
 GENERATED_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-FINGERPRINT_TIMEOUT = 8  # below the hooks' own timeouts (10 s and more), so a slow tree never stalls a hook
+FINGERPRINT_TIMEOUT = 8  # per git call; keeps a slow tree from stalling a hook in most cases
 LARGE_UNTRACKED = 5_000_000  # untracked files above this are fingerprinted by size and mtime, not hashed
 
 

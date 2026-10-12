@@ -640,7 +640,9 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
     if name == "claude":
         return "a nested Claude Code session"
     if name == "find" and depth < MAX_DEPTH:
-        k0 = next((j for j, a in enumerate(args) if a not in ("-H", "-L", "-P")), len(args))
+        k0 = 0
+        while k0 < len(args) and (args[k0] in ("-H", "-L", "-P") or re.match(r"^-O\d$", args[k0]) or args[k0] == "-D"):
+            k0 += 2 if args[k0] == "-D" else 1  # options before find's start points
         roots = args[k0:next((j for j in range(k0, len(args)) if args[j].startswith(("-", "(", "!"))), len(args))] \
             or ["."]  # find's start points: what it finds, and deletes, is under them
         if "-delete" in args and any(_risky_delete_target(os.path.join(r, "x"), cwd, base) for r in roots):
@@ -666,7 +668,8 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
             return "commands built by xargs for a shell (they cannot be checked)"
         return segment_sensitive(raw, cwd, depth + 1, base) if rest and depth < MAX_DEPTH else None
     if name in HELP_CLIS and (any(a in ("--help", "-help") for a in args) or words[:1] == ["help"]
-                              or (name == "aws" and words[-1:] == ["help"])):
+                              or (name == "aws" and args[-1:] == ["help"] and not args[-2:-1][0].startswith("-")
+                                  if len(args) >= 2 else name == "aws" and args == ["help"])):
         return None  # these CLIs print help and change nothing (`gcloud compute instances create --help`; live run)
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
@@ -890,13 +893,9 @@ def checked_segments(segs: list[dict], cwd: str, depth: int = 0, base: str | Non
     assignment in the same command, and scripts read in every directory a literal `cd` / `pushd` may have moved to
     (`cd scripts && ./tfa.sh`; found by independent review). Used for the typed command and for nested commands."""
     assigns = _literal_assignments(segs)
-    dirs, alt, stack = [cwd], [], []
+    dirs = [cwd]
     base = cwd if base is None else base  # the delete boundary stays the starting directory
     for s in segs:
-        if s["prev"] == "(":
-            stack.append(list(dirs))
-        if s["prev"] != "&&" and alt:  # runs even when a `cd` earlier in the && chain failed
-            dirs, alt = list(dict.fromkeys(dirs + alt)), []
         argv = _resolve_head(s["argv"], assigns)
         label = None
         for d in dirs:
@@ -908,15 +907,12 @@ def checked_segments(segs: list[dict], cwd: str, depth: int = 0, base: str | Non
         if target == "":
             base = ""  # a cd Groundwork cannot follow: where a later delete lands is unknown
         if target:
-            moved = [os.path.normpath(os.path.join(d, target)) for d in dirs]
-            if s["next"] == "&&":  # what follows in the chain runs only after the cd succeeded
-                alt, dirs = list(dict.fromkeys(alt + dirs)), moved
-            else:
-                dirs = list(dict.fromkeys(dirs + moved))
+            # Every directory the command may now be in: a cd can fail, be skipped (`a || cd x`), run in a pipeline
+            # or subshell, or be undone by popd, so the earlier directories stay candidates. Precise tracking missed
+            # real shell forms (found by independent review); the cost is a rare extra prompt.
+            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))
             if len(dirs) > 32:
                 dirs = [cwd] + dirs[-31:]  # keep the start and the newest directories
-        if s["next"] == ")" and stack:  # a subshell's cd does not outlive it
-            dirs, alt = list(dict.fromkeys(stack.pop() + dirs + alt)), []
 
 
 def command_sensitive(cmd: str, cwd: str, depth: int = 0, base: str | None = None) -> str | None:
