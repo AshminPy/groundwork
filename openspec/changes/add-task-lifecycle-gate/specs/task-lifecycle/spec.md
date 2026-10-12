@@ -8,7 +8,14 @@ Groundwork SHALL classify every submitted prompt in a git repository without a m
 - the risk categories and a per-category checklist of prerequisites and open questions;
 - the base commit and the paths already dirty at intake.
 
-For a MATERIAL task it SHALL create the OpenSpec change. A prompt that names a key already in the ledger SHALL receive that task's state instead of creating a new task.
+For a MATERIAL task it SHALL create the OpenSpec change.
+
+The prompt's leading key SHALL decide:
+- A known open key receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals.
+- A known completed or cancelled key starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory.
+- An unknown key is registered even when the prompt also names known keys.
+
+A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be treated as input to that task, not as a new task. STANDARD work without a ticket key SHALL NOT be recorded.
 
 #### Scenario: Jira-style infrastructure request
 - **WHEN** the prompt `COR-123: Deploy a GoldenGate VM in GCP.` is submitted in a repository
@@ -19,8 +26,16 @@ For a MATERIAL task it SHALL create the OpenSpec change. A prompt that names a k
 - **THEN** no task is created and no context is added
 
 #### Scenario: A known task is resumed
-- **WHEN** a prompt mentions `COR-123` after it was recorded
+- **WHEN** a prompt mentions `COR-123` while it is open
 - **THEN** no second task is created and Claude receives COR-123's state and next action
+
+#### Scenario: Follow-up work on a closed ticket
+- **WHEN** COR-123 is complete and the prompt `COR-124: follow-up to COR-123 - deploy a replica VM in GCP` arrives
+- **THEN** COR-124 is registered as a MATERIAL task and the repository is gated
+
+#### Scenario: The owner answers a waiting task's questions
+- **WHEN** COR-123 awaits approval and the owner sends a keyless reply describing the VM's zone and disk
+- **THEN** no new task is created and Claude receives COR-123's state
 
 ### Requirement: Plan gate before approval can be requested
 `groundwork task request-approval <KEY>` SHALL refuse unless:
@@ -39,7 +54,9 @@ On success it SHALL record the plan digest as the approval code and set the task
 - **THEN** the command prints the approval code and the exact `/gw-approve <KEY> <code>` line for the owner
 
 ### Requirement: Owner-only approval bound to the plan
-An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest. A change to the plan after approval SHALL void the approval for execution until the owner approves the new digest. Claude SHALL be denied any tool call that invokes, schedules or sends `/gw-approve` or `/gw-cancel`, and any write to the task ledger or to those command files.
+An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest and the plan still passes the plan check. A change to the plan after approval SHALL void the approval for execution until the owner approves the new digest.
+
+Claude SHALL be denied any tool call that invokes, schedules or sends `/gw-approve` or `/gw-cancel`: the Skill tool, a command that is not read-only, a nested `claude` session, scheduled prompts, messages to other sessions, or MCP calls. It SHALL also be denied any write to the task ledger or to those command files. Text that only names the command in a file edit, a subagent prompt or a read-only command is allowed.
 
 #### Scenario: Approval text through an ordinary prompt
 - **WHEN** a `UserPromptSubmit` prompt contains `approve COR-123 <code>`
@@ -50,7 +67,7 @@ An approval SHALL be recorded only from a `UserPromptExpansion` event for the ty
 - **THEN** the expansion is blocked with a reason naming the current state and no approval is recorded
 
 #### Scenario: Claude tries to approve
-- **WHEN** Claude calls the Skill tool for `gw-approve`, or runs a Bash command containing `gw-approve`
+- **WHEN** Claude calls the Skill tool for `gw-approve`, runs `claude -p '/gw-approve …'`, or schedules or sends a prompt containing it
 - **THEN** the call is denied
 
 ### Requirement: Execution gate
@@ -80,7 +97,7 @@ A gate error while such a task is active SHALL deny the call.
 
 ### Requirement: Evidence capture and scope audit
 After each tool call in a repository with an approved MATERIAL task, Groundwork SHALL record:
-- each run of a declared verification command, with success or failure and the working-tree fingerprint;
+- each run of a declared verification command, with success or failure and the working-tree fingerprint. A run counts only when it ran exactly as declared and its exit status is the tool's: no extra arguments, not piped, and followed only by `&&`. Each declared entry must be one simple command;
 - each foreground review subagent's parsed `REVIEW RESULT`, with the fingerprint;
 - each approved sensitive operation's time.
 

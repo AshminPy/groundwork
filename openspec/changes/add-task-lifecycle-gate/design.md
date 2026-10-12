@@ -50,7 +50,11 @@ EVIDENCE: the hooks documentation quoted under Context, plus the runtime probe.
 
 WHY: `UserPromptSubmit` is also fed by scheduled tasks, background subagents and cross-session messages, so a phrase in a prompt is not proof a person typed it. A CLI `approve` command can be run by Claude through Bash.
 
-Defence in depth, because the event's behaviour for scheduled or cross-session text that starts with `/gw-approve` was not tested: `PreToolUse` denies any `Skill` call for these commands. It also denies any tool input other than plain file reads and edits that contains `gw-approve` or `gw-cancel` (Bash, cron, triggers, messages, MCP).
+Defence in depth, because the event's behaviour for scheduled or cross-session text that starts with `/gw-approve` was not tested:
+- `PreToolUse` denies any `Skill` call for these commands.
+- It denies tool input containing `gw-approve` or `gw-cancel` in any command that is not read-only, scheduled prompts, messages to other sessions and MCP calls.
+- File edits, subagent prompts and read-only commands such as `grep` may contain the text; they cannot deliver it as typed input.
+- A nested `claude` session is a sensitive command. It needs an Approved Operation after approval, and is not read-only before it.
 
 TRADEOFFS: the owner must be in a Claude Code session to approve. There is no terminal or CLI approval.
 

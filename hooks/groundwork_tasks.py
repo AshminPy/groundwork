@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -415,12 +416,15 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         return None
     existing = [t for t in (load_task(root, k) for k in find_keys(text or "")) if t]
     is_task = bool(cls) and cls["kind"] == "task"
-    reopen = is_task and bool(existing) and existing[0]["key"] == cls["keys"][0] and \
-        existing[0].get("state") in (COMPLETE, CANCELLED)
-    if existing and not reopen:
-        return {"action": "existing", "tasks": existing, "root": root}
-    if not is_task:
-        return None
+    # The prompt's LEADING key decides; other keys are context (found by independent review: "COR-124: follow-up to
+    # COR-123 …" never registered COR-124). Known and open -> its state (escalated when the prompt is now MATERIAL);
+    # known and closed -> a fresh task only when the prompt asks for work (an action verb); unknown -> a new task.
+    primary = cls["keys"][0] if is_task and cls["keys"] else None
+    current = load_task(root, primary) if primary else None
+    if is_task and current and current.get("state") in (OPEN,) and cls["tier"] == MATERIAL:
+        return _escalate(root, current, cls, text)
+    if not is_task or (current and (current.get("state") not in (COMPLETE, CANCELLED) or not cls.get("action"))):
+        return {"action": "existing", "tasks": existing, "root": root} if existing else None
     if cls["tier"] == STANDARD and not cls["keys"]:
         return None  # untracked STANDARD work stays lightweight; a ticket key is what asks for tracking
     if not cls["keys"]:
@@ -450,10 +454,7 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         }
         status = None
         if cls["tier"] == MATERIAL:
-            name, n = change_name(key, title), 1
-            while (Path(root) / "openspec" / "changes" / (name if n == 1 else f"{name}-{n}")).exists():
-                n += 1  # never adopt a directory an earlier (closed) task or another change already owns
-            task["change"] = name if n == 1 else f"{name}-{n}"
+            task["change"] = _new_change_name(root, key, title)
             status = ensure_openspec_change(root, task["change"])
             task["openspec_intake"] = status
         head = (git(root, "rev-parse", "HEAD") or "").strip()
@@ -466,6 +467,32 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         add_history(task, "intake", f"{task['tier']} task registered from a prompt")
         save_task(root, task)
     return {"action": "created", "tasks": [task], "root": root, "openspec": status}
+
+
+def _new_change_name(root: str, key: str, title: str) -> str:
+    name, n = change_name(key, title), 1
+    while (Path(root) / "openspec" / "changes" / (name if n == 1 else f"{name}-{n}")).exists():
+        n += 1  # never adopt a directory an earlier (closed) task or another change already owns
+    return name if n == 1 else f"{name}-{n}"
+
+
+def _escalate(root: str, task: dict, cls: dict, text: str) -> dict:
+    """An open STANDARD task whose key returns with MATERIAL signals becomes a gated MATERIAL task (found by
+    independent review: 'COR-55: now deploy this to production' stayed ungated)."""
+    with locked(root):
+        t = load_task(root, task["key"])
+        if not t or t.get("tier") != STANDARD or t.get("state") != OPEN:
+            return {"action": "existing", "tasks": [t] if t else [], "root": root}
+        t.update({"tier": MATERIAL, "state": PLANNING,
+                  "risk": {"level": cls["level"], "categories": cls["categories"], "signals": cls["signals"]},
+                  "checklist": [i for i in t.get("checklist", []) if i not in cls["checklist"]] + cls["checklist"]})
+        t["mission"] = clip(t.get("mission", "") + "\n" + text, MAX_MISSION)
+        t["change"] = _new_change_name(root, t["key"], t.get("title", ""))
+        status = ensure_openspec_change(root, t["change"])
+        t["openspec_intake"] = status
+        add_history(t, "escalated", "STANDARD -> MATERIAL: the prompt named infrastructure, data, security, production or deployment work")
+        save_task(root, t)
+    return {"action": "created", "tasks": [t], "root": root, "openspec": status, "escalated": True}
 
 
 # ---------------------------------------------------------------------------------------------- plan
@@ -527,6 +554,13 @@ def _bad_scope(pattern: str) -> str | None:
     return None
 
 
+def _tokens_ok(cmd: str) -> bool:
+    try:
+        return bool(shlex.split(cmd))
+    except ValueError:
+        return False
+
+
 def _md(path: Path) -> str:
     return path.read_text(errors="replace") if path.is_file() and not path.is_symlink() else ""
 
@@ -561,9 +595,10 @@ def read_plan(root: str, task: dict) -> dict:
             if PLACEHOLDER.search(cmd):
                 problems.append(f"'## {section.title()}' command `{cmd}` contains a placeholder; write the exact "
                                 "command that will be run (evidence is matched against it)")
-            elif COMPOUND.search(cmd):
+            elif COMPOUND.search(cmd) or cmd.endswith("&") or re.search(r"(^|\s)#", cmd) or not _tokens_ok(cmd):
                 problems.append(f"'## {section.title()}' entry `{cmd}` must be one simple command (no &&, ||, ;, |, "
-                                "redirection or command substitution); list each command as its own entry")
+                                "&, redirection, command substitution, comment or unbalanced quote); list each "
+                                "command as its own entry")
             elif len(cmd) >= 3 and cmd not in found:
                 found.append(cmd)
     if sections.get("verification") and not verify and not any("Verification" in p for p in problems):

@@ -86,8 +86,9 @@ SENSITIVE_HEADS = ("gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsuti
 # Prefixes that run the command after them; unwrapped before the sensitivity check (found by independent review:
 # `sudo gcloud … delete`, `watch kubectl delete …`, `setsid terraform destroy` were not classified as sensitive).
 RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D"}, "doas": {"-u", "-C"},
-                "watch": {"-n", "--interval", "-d"}, "setsid": set(), "ionice": {"-c", "-n", "-p"},
+                "watch": {"-n", "--interval"}, "setsid": set(), "ionice": {"-c", "-n", "-p"},
                 "chrt": set(), "taskset": set(), "unbuffer": set()}
+RUN_WRAPPER_POSITIONALS = {"chrt": 1, "taskset": 1}  # chrt PRIORITY cmd …, taskset MASK cmd …
 DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqlsh", "sqlcmd", "sqlite3"}
 
 
@@ -270,22 +271,31 @@ def unwrap_run(argv: list[str]) -> list[str]:
     """strip_wrappers() plus the prefixes in RUN_WRAPPERS (sudo, watch, setsid, …), repeatedly."""
     argv, _ = strip_wrappers(argv)
     while argv and os.path.basename(argv[0]) in RUN_WRAPPERS:
-        value_flags = RUN_WRAPPERS[os.path.basename(argv[0])]
+        name = os.path.basename(argv[0])
+        value_flags = RUN_WRAPPERS[name]
         i = 1
         while i < len(argv) and argv[i].startswith("-"):
             i += 2 if argv[i] in value_flags else 1
+        i += RUN_WRAPPER_POSITIONALS.get(name, 0)
         argv, _ = strip_wrappers(argv[i:])
     return argv
 
 
-def _shell_command_arg(args: list[str]) -> str | None:
-    """The command string of `sh -c CMD`, also for combined flags such as -lc, -ec, -xc."""
-    for i, a in enumerate(args):
-        if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a) and i + 1 < len(args):
-            return args[i + 1]
-        if not a.startswith("-"):
+def _shell_command_arg(args: list[str]):
+    """The command string of `sh -c CMD` (also -lc, -ec, `-o pipefail -c`); "" when the shell reads its commands
+    from stdin (no script and no -c); None when it runs a script file."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a):
+            return args[i + 1] if i + 1 < len(args) else ""
+        if a in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+            continue
+        if not a.startswith(("-", "+")):
             return None
-    return None
+        i += 1
+    return ""
 
 
 def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
@@ -300,11 +310,21 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         return command_sensitive(" ".join(args), cwd, depth + 1)
     if name in SHELLS:
         inner = _shell_command_arg(args)
+        if inner == "":
+            return "commands piped into a shell (they cannot be checked)"
         if inner is not None:
             return command_sensitive(inner, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
         return _script_sensitive(words[0], cwd, depth) if words else None
     if name == "claude":
         return "a nested Claude Code session"
+    if name == "find":
+        for flag in ("-exec", "-execdir", "-ok", "-okdir"):
+            if flag in args:
+                rest = args[args.index(flag) + 1:]
+                end = next((k for k, a in enumerate(rest) if a in (";", "+")), len(rest))
+                found = segment_sensitive(rest[:end], cwd, depth + 1) if depth < 3 else None
+                if found:
+                    return f"{found} (run by find {flag})"
     if "/" in argv[0] or argv[0].endswith(".sh"):
         found = _script_sensitive(argv[0], cwd, depth)
         if found:
@@ -499,8 +519,9 @@ def on_prompt(data: dict) -> None:
         status = res.get("openspec") or "?"
         plan = gt.plan_rel(t)
         create = "" if status in ("created", "exists") else f" Create it first: openspec new change {t['change']}."
+        how = "was escalated from STANDARD to" if res.get("escalated") else "is registered as"
         text = (
-            f"[Groundwork task intake] {t['key']} is registered as a MATERIAL engineering task: risk {risk.get('level')} "
+            f"[Groundwork task intake] {t['key']} {how} a MATERIAL engineering task: risk {risk.get('level')} "
             f"({', '.join(risk.get('categories', []))}). Its plan is the OpenSpec change {plan}/ ({status}).{create}\n"
             "Groundwork enforces this lifecycle with hooks. Until the owner approves, edits are allowed only inside the "
             "plan directory, and Bash only for read-only commands. Implementation, deployment and other changes are denied.\n"
@@ -654,7 +675,9 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
                 r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
             deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")
         cdir = str(gt.claude_dir())
-        markers = PROTECTED_MARKERS + (f"{cdir}/settings", f"{cdir}/hooks", f"{cdir}/commands/gw-")
+        # Any non-read-only command that names the config directory at all (also `cd ~/.claude && … settings.json`;
+        # found by independent review) is denied while a task is gated.
+        markers = PROTECTED_MARKERS + (cdir, "~/.claude", "$HOME/.claude", "${HOME}/.claude", "CLAUDE_CONFIG_DIR")
         if any(m in cmd for m in markers) and not command_read_only(cmd):
             deny(f"Groundwork: Groundwork's hooks, settings and task ledger cannot be changed while {keys} is gated.")
         return
@@ -668,21 +691,26 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
 
 MCP_READ_FIRST = {"get", "list", "search", "read", "query", "fetch", "describe", "show", "view", "find", "lookup",
                   "check", "validate", "count", "whoami", "status", "download", "retrieve", "inspect", "preview",
-                  "browse", "explain", "diff"}
+                  "browse", "explain", "diff", "resolve"}
 MCP_READ_LAST = {"read", "get", "list", "search", "query", "view", "status", "info", "details", "fetch"}
 MCP_WRITE_WORDS = {"create", "update", "set", "delete", "remove", "add", "put", "post", "send", "run", "execute",
                    "write", "patch", "merge", "close", "assign", "move", "upload", "publish", "trigger", "cancel",
                    "approve", "start", "stop", "restart", "enable", "disable", "push", "apply", "deploy", "edit",
-                   "insert", "drop", "archive", "resolve", "invite", "share", "spawn", "fork", "rename", "label",
+                   "insert", "drop", "archive", "invite", "share", "spawn", "fork", "rename", "label",
                    "mark", "trash", "submit", "subscribe", "unsubscribe", "reply", "comment"}
+RESOLVE_TARGETS = {"thread", "review", "comment", "conversation", "issue", "incident", "alert", "ticket"}
 
 
 def mcp_read_only(tool: str) -> bool:
     """Read-only by its verb: leading read verb, or a trailing read word with no write verb anywhere in the name
-    (found by independent review: `update_status` and `run_query` were read as read-only)."""
+    (found by independent review: `update_status` and `run_query` were read as read-only). `resolve` is a write only
+    for a thread/issue-like object (resolve_review_thread), not for a lookup (resolve-library-id)."""
     parts = tool.split("__")
     server = parts[1].lower() if len(parts) > 2 else ""
-    words = [w for w in re.split(r"[^a-z0-9]+", parts[-1].lower()) if w]
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", parts[-1])  # getJiraIssue -> get_Jira_Issue
+    words = [w for w in re.split(r"[^a-z0-9]+", name.lower()) if w]
+    if "resolve" in words and RESOLVE_TARGETS & set(words):
+        return False
     if words and words[0] in re.split(r"[^a-z0-9]+", server):
         words = words[1:]
     if not words:

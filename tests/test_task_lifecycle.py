@@ -307,6 +307,12 @@ def test_shell_classifier() -> None:
     check("review: MCP update_status / run_query are not read-only; resolve_review_thread is not read-only",
           not gate.mcp_read_only("mcp__x__update_status") and not gate.mcp_read_only("mcp__x__run_query")
           and not gate.mcp_read_only("mcp__github__resolve_review_thread"))
+    check("re-review: resolve-library-id and camelCase getJiraIssue are read-only",
+          gate.mcp_read_only("mcp__Context7__resolve-library-id") and gate.mcp_read_only("mcp__atlassian__getJiraIssue"))
+    check("re-review: watch -d, chrt, taskset, `bash -o pipefail -c`, `… | bash`, find -exec rm -rf are sensitive",
+          all(sens(c) for c in ("watch -d gcloud compute instances delete vm-1", "chrt -f 99 terraform destroy",
+                                "taskset 0x1 kubectl delete ns x", "bash -o pipefail -c 'gcloud compute instances delete x'",
+                                "echo 'gcloud compute instances delete x' | bash", "find . -name build -exec rm -rf {} +")))
     check("MCP read verbs", gate.mcp_read_only("mcp__github__get_me") and gate.mcp_read_only("mcp__github__pull_request_read")
           and gate.mcp_read_only("mcp__Notion__notion-search") and gate.mcp_read_only("mcp__Notion__notion-get-comments"))
     check("MCP write verbs", not gate.mcp_read_only("mcp__github__push_files") and not gate.mcp_read_only("mcp__github__create_or_update_file")
@@ -383,6 +389,11 @@ def test_full_lifecycle() -> None:
         r = e.cli(repo, "request-approval", key)
         check("review MUST FIX 5: a compound verification entry is refused (it could never be recorded)",
               r.returncode == 1 and "one simple command" in r.stderr, r.stderr[:300])
+        refused = []
+        for bad in ("python3 -m pytest tests -q &", "python3 -c 'unbalanced", "python3 -m pytest tests -q # all"):
+            (d / "proposal.md").write_text(PLAN_PROPOSAL.replace("`python3 -m pytest tests -q`", f"`{bad}`"))
+            refused.append("one simple command" in e.cli(repo, "request-approval", key).stderr)
+        check("re-review: trailing &, unbalanced quote and # comment entries are refused", all(refused), str(refused))
         write_plan(repo, change)
         r = e.cli(repo, "request-approval", key)
         check("plan gate: complete plan accepted, prints the owner's /gw-approve line", r.returncode == 0 and "/gw-approve COR-123 " in r.stdout, r.stdout + r.stderr)
@@ -448,6 +459,9 @@ def test_full_lifecycle() -> None:
               and denied(e.pre(repo, "Bash", {"command": f"sed -i s/a/b/ {e.cfg}/settings.json"})) != "")
         check("approved: an unrelated settings.json (e.g. .vscode) is not mistaken for Groundwork's",
               denied(e.pre(repo, "Bash", {"command": "git add .vscode/settings.json"})) == "")
+        check("re-review: `cd <config dir> && … settings.json` is denied",
+              denied(e.pre(repo, "Bash", {"command": f"cd {e.cfg} && echo '{{}}' > settings.json"})) != ""
+              and denied(e.pre(repo, "Bash", {"command": "cd ~/.claude && sed -i s/a/b/ settings.json"})) != "")
         check("approved: Monitor running an unapproved sensitive command is denied",
               "not an Approved Operation" in denied(e.pre(repo, "Monitor", {"command": "gcloud compute instances delete vm-1", "description": "x"})))
         check("approved: project settings protected (disableAllHooks)", denied(e.pre(repo, "Write", {"file_path": str(repo / ".claude/settings.json"), "content": "{}"})) != "")
@@ -567,11 +581,26 @@ def test_separation_and_failure_modes() -> None:
               and denied(e.pre(a, "Write", {"file_path": str(a / "x.py"), "content": "x"})) != "", context(out)[:200])
         check("the fresh task gets its own plan directory", t["change"] != "cor-1-deploy-payments-service-production", t["change"])
         e.expand(a, "gw-cancel", "COR-1")
+        out = e.prompt(a, "COR-1 merged and live in prod, thanks")
+        check("re-review: a closed key mentioned without an action verb is not reopened",
+              e.task(a, "COR-1")["state"] == "cancelled" and "[Groundwork task ledger]" in context(out), context(out)[:200])
+        out = e.prompt(a, "COR-124: follow-up to COR-1 - deploy a replica VM in GCP production")
+        check("re-review MUST FIX: a new leading key is registered even when the prompt also names a known key",
+              e.task(a, "COR-124") is not None and e.task(a, "COR-124")["tier"] == "MATERIAL"
+              and e.task(a, "COR-1")["state"] == "cancelled"
+              and denied(e.pre(a, "Bash", {"command": "terraform apply -auto-approve"})) != "", context(out)[:200])
+        e.expand(a, "gw-cancel", "COR-124")
         check("untracked STANDARD work (no ticket key) records no task", e.prompt(a, "fix the typo in the README") is None
               and not list((e.cfg / "groundwork" / "tasks").rglob("GW-*.json")))
         out = e.prompt(a, "COR-77: fix the typo in the README")
         check("ticketed STANDARD task tracked without a gate", "COR-77 is tracked as a STANDARD" in context(out)
               and denied(e.pre(a, "Write", {"file_path": str(a / "README.md"), "content": "x"})) == "", context(out)[:200])
+        out = e.prompt(a, "COR-77: now deploy this to production on GCP with terraform")
+        check("re-review: an open STANDARD task re-prompted with MATERIAL work is escalated and gated",
+              "escalated from STANDARD" in context(out) and e.task(a, "COR-77")["tier"] == "MATERIAL"
+              and e.task(a, "COR-77")["state"] == "planning"
+              and denied(e.pre(a, "Write", {"file_path": str(a / "README.md"), "content": "x"})) != "", context(out)[:200])
+        e.expand(a, "gw-cancel", "COR-77")
         for n in range(5):
             e.prompt(a, f"COR-9{n}: fix the typo number {n} in the README")
         out = e.prompt(a, "Provision a new GKE node pool for the batch cluster")
