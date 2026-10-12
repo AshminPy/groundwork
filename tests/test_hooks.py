@@ -77,7 +77,11 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t.com",
 
 
 def git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True,
+    # errors="replace": two fixtures below (worktree paths holding a raw non-UTF-8 byte) make git's own
+    # stdout echo that byte back; without this, decoding it here crashes the test itself before the
+    # assertion runs — the production hook's own git() (groundwork_session_snapshot.py) already defaults
+    # to "replace" for the same reason. Found on macOS (Apple Git 2.50.1); did not reproduce on Linux.
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, errors="replace",
                           check=True, env=GIT_ENV).stdout
 
 
@@ -720,12 +724,29 @@ def test_snapshot_worktrees() -> None:
             git(repo, "worktree", "add", "-q", "-b", "feat/evil", str(evil))
             evil_text = "\n".join(mod.worktree_facts(str(repo)))
             check("a newline in a worktree path cannot forge another entry (NUL-separated listing)",
-                  "FORGED @" not in evil_text and "wt-evil" in evil_text, evil_text)
+                  "FORGED @" not in evil_text, evil_text)
+            # Material security guarantee above holds regardless. This second, cosmetic check (the real
+            # name stays readable) depends on the 90-char path-display clip (_clip_path in the hook): when
+            # the host's own absolute temp path is long enough to push the collapsed string past 90 chars,
+            # the clip keeps only the tail, which can hide "wt-evil" itself — observed on macOS, whose
+            # temp paths run much longer than Linux's. Skip there rather than assert a display outcome
+            # the hook was never meant to guarantee for over-length paths.
+            collapsed_len = len(" ".join(mod.CONTROL_CHARS.sub("", str(evil)).split()))
+            if collapsed_len <= 90:
+                check("the real worktree name is still visible, not just the forged suffix", "wt-evil" in evil_text, evil_text)
+            else:
+                print(f"  skip (path is {collapsed_len} chars collapsed; over the 90-char display clip, only the tail shows)")
         else:
             print("  skip (git without worktree list -z)")
+        # APFS refuses a directory name that is not valid UTF-8 ("Illegal byte sequence"); ext4 does not,
+        # so this path can be created on Linux but not on macOS — skip there rather than fail the fixture.
         latin = os.fsdecode(os.fsencode(str(tmp)) + b"/wt-latin\xe9")
-        git(repo, "worktree", "add", "-q", "-b", "feat/latin", latin)
-        check("a non-UTF-8 path does not make the whole section vanish", "other worktrees of this repository" in "\n".join(mod.worktree_facts(str(repo))))
+        latin_add = subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feat/latin", latin],
+                                    capture_output=True, text=True, errors="replace", env=GIT_ENV)
+        if latin_add.returncode == 0:
+            check("a non-UTF-8 path does not make the whole section vanish", "other worktrees of this repository" in "\n".join(mod.worktree_facts(str(repo))))
+        else:
+            print(f"  skip (filesystem refuses a non-UTF-8 path: {latin_add.stderr.strip()})")
 
         # --- reading siblings must not rewrite their indexes (the mutant that drops GIT_OPTIONAL_LOCKS is only visible when the
         # caller's environment does not already carry it)
@@ -925,13 +946,19 @@ def test_snapshot_worktrees_edge_cases() -> None:
         check("without `worktree list -z` the line-based listing is used and the section still reports", bool(lines) and "feat/deep" in "\n".join(lines), "\n".join(lines))
 
         # --- a non-UTF-8 sibling path is listed, not called 'missing'
+        # Same macOS/APFS-vs-Linux/ext4 filename-encoding difference as above — skip where the
+        # filesystem itself refuses to create the path.
         latin = os.fsdecode(os.fsencode(str(tmp)) + b"/w-latin\xe9")
-        git(base, "worktree", "add", "-q", "-b", "feat/latin", latin)
-        Path(latin, "work.txt").write_text("x")
-        mod.MAX_WORKTREES_LISTED, mod.MAX_WORKTREE_CHARS = 20, 10_000
-        text = "\n".join(mod.worktree_facts(str(base)))
-        check("a sibling whose path is not valid UTF-8 is examined and listed", "feat/latin" in text, text)
-        check("and the output contains no lone surrogate", all(not (0xD800 <= ord(c) <= 0xDFFF) for c in text))
+        latin_add = subprocess.run(["git", "-C", str(base), "worktree", "add", "-q", "-b", "feat/latin", latin],
+                                    capture_output=True, text=True, errors="replace", env=GIT_ENV)
+        if latin_add.returncode == 0:
+            Path(latin, "work.txt").write_text("x")
+            mod.MAX_WORKTREES_LISTED, mod.MAX_WORKTREE_CHARS = 20, 10_000
+            text = "\n".join(mod.worktree_facts(str(base)))
+            check("a sibling whose path is not valid UTF-8 is examined and listed", "feat/latin" in text, text)
+            check("and the output contains no lone surrogate", all(not (0xD800 <= ord(c) <= 0xDFFF) for c in text))
+        else:
+            print(f"  skip (filesystem refuses a non-UTF-8 path: {latin_add.stderr.strip()})")
 
         # --- an orphaned directory nested in a repository is not answered for by the repository around it
         nest = base / ".wt-orphan"
