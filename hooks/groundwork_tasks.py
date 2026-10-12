@@ -299,6 +299,15 @@ def find_keys(text: str) -> list[str]:
     return keys
 
 
+HOUSEKEEPING_RE = re.compile(r"\b(?:archiv\w*|sync\w*)\b", re.IGNORECASE)
+OPENSPEC_WORD_RE = re.compile(r"\b(?:openspec|opsx|change|specs?)\b", re.IGNORECASE)
+
+
+def housekeeping(text: str) -> bool:
+    """Native OpenSpec housekeeping on a task's change (archive it, sync its specs), not new work."""
+    return bool(HOUSEKEEPING_RE.search(text or "") and OPENSPEC_WORD_RE.search(text or ""))
+
+
 def work_key(text: str, key: str) -> bool:
     """True when `key` names the work: it starts the prompt (`COR-1 …`, `[COR-1] …`) or heads a clause (`COR-1:`,
     `COR-1 - …`). A key elsewhere ("after COR-1 is merged", "depends on COR-2") is a reference."""
@@ -418,7 +427,11 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
     if is_task and current and is_open(current) and current.get("tier") == STANDARD and cls["tier"] == MATERIAL \
             and cls.get("action"):
         return _escalate(root, current, cls, text)
-    if not is_task or (current and (is_open(current) or not cls.get("action"))):
+    # A closed ticket opens a fresh task only when the prompt names it as the work and asks for work that is not
+    # native OpenSpec housekeeping ("archive the COR-1 change" is about the finished task, found in the live run).
+    reopen = bool(current) and not is_open(current) and bool(cls and cls.get("action")) and \
+        work_key(text, primary) and not housekeeping(text)
+    if not is_task or (current and not reopen):
         return {"action": "existing", "tasks": existing, "root": root} if existing else None
     if cls["tier"] == STANDARD and not cls["keys"]:
         return None  # untracked STANDARD work stays lightweight; a ticket key is what asks for tracking
@@ -435,7 +448,7 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
             os.replace(task_file(root, key), ledger_dir(root) / f"{key}.closed-{int(now())}.json")
         elif current:  # created concurrently
             return {"action": "existing", "tasks": [current], "root": root}
-        title = title_of(text, [key])
+        title = (current or {}).get("title") or title_of(text, [key])  # a follow-up keeps the ticket's title
         task = {
             "schema": SCHEMA, "key": key, "title": title, "mission": clip(text, MAX_MISSION),
             "tier": cls["tier"], "risk": {"level": cls["level"], "categories": cls["categories"],
@@ -457,8 +470,12 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
 
 
 def _new_change_name(root: str, key: str, title: str) -> str:
+    changes = Path(root) / "openspec" / "changes"
+
+    def taken(candidate: str) -> bool:  # live, or archived by an earlier task (change_dir would resolve to it)
+        return (changes / candidate).exists() or any((changes / "archive").glob(f"????-??-??-{candidate}"))
     name, n = change_name(key, title), 1
-    while (Path(root) / "openspec" / "changes" / (name if n == 1 else f"{name}-{n}")).exists():
+    while taken(name if n == 1 else f"{name}-{n}"):
         n += 1  # never adopt a directory an earlier (closed) task or another change already owns
     return name if n == 1 else f"{name}-{n}"
 

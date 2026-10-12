@@ -1101,11 +1101,47 @@ def check_command(cmd: str, cwd: str) -> None:
     label = embedded_sensitive(cmd, segs, cwd)
     if label:
         ask(f"{label}.")
-    cdir = str(gt.claude_dir())
-    if any(m in cmd for m in PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", "~/.claude/settings",
-                                                "~/.claude/hooks", ".claude/settings")) and \
-            any(s["writes"] or s["argv"][:1] not in (["cat"], ["ls"], ["grep"], ["head"], ["tail"], ["jq"]) for s in segs):
+    if _touches_protected(segs, cmd):
         ask("this command touches Claude Code settings, Groundwork's hooks or the task ledger.")
+
+
+PROTECTED_READERS = {"cat", "ls", "grep", "rg", "head", "tail", "jq", "less", "wc", "diff", "stat", "file", "echo",
+                     "printf", "test", "[", "realpath", "readlink", "dirname", "basename"}
+
+
+def _task_cli(argv: list[str]) -> bool:
+    """Groundwork's own task CLI (`groundwork task …`, or python3 running the installed groundwork_tasks.py): it
+    writes the ledger only through its own checks, so running it never asks (found in the live run)."""
+    if argv[:2] == ["groundwork", "task"]:
+        return True
+    if len(argv) >= 2 and os.path.basename(argv[0]).startswith("python"):
+        script = os.path.realpath(os.path.expanduser(os.path.expandvars(argv[1])))
+        return script in {os.path.realpath(str(gt.claude_dir() / "hooks" / "groundwork_tasks.py")),
+                          os.path.realpath(gt.__file__)}
+    return False
+
+
+def _touches_protected(segs: list[dict], cmd: str) -> bool:
+    """A command that may change Claude Code settings, Groundwork's hooks or the task ledger: a segment that names
+    one of them (in its words, redirect targets or here-document) and is not a plain reader or the task CLI. After
+    `cd` into one of them, every later segment counts as naming it."""
+    cdir = str(gt.claude_dir())
+    markers = PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", cdir + "/groundwork", "~/.claude/settings",
+                                "~/.claude/hooks", ".claude/settings", "CLAUDE_CONFIG_DIR")
+    bodies = heredoc_bodies(cmd)
+    inside = False
+    for s in segs:
+        argv = unwrap_run(s["argv"]) or s["argv"]
+        text = " ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)])
+        named = inside or any(m in text for m in markers)
+        if argv[:1] in (["cd"], ["pushd"]):
+            target = os.path.expanduser(os.path.expandvars(_words(argv[1:])[0])) if _words(argv[1:]) else ""
+            inside = inside or named or (bool(target) and under(target, Path(cdir)))
+            continue
+        if named and (s["writes"] or (os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS) \
+                and not _task_cli(argv):
+            return True
+    return False
 
 
 def on_pre(data: dict) -> None:

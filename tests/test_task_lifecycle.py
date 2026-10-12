@@ -598,6 +598,14 @@ def test_archive_completes_and_recovery() -> None:
         ctx = context(e.ran(repo, cmd))
         check("the native /opsx:archive move completes a task whose evidence is in place",
               "COR-125: change archived; COR-125 is complete." in ctx and e.task(repo, "COR-125")["state"] == "complete", ctx)
+        ctx = context(e.prompt(repo, "Archive the COR-125 OpenSpec change the native way."))
+        check("live run: housekeeping on a finished task does not reopen it",
+              e.task(repo, "COR-125")["state"] == "complete" and not e.ledgers("COR-125.closed-*.json"), ctx[:200])
+        ctx = context(e.prompt(repo, "COR-125: change of plan, deploy a second GoldenGate VM in europe-west1"))
+        t = e.task(repo, "COR-125")
+        check("live run: a follow-up on a closed ticket keeps its title and gets a change name unused by the archive",
+              t["state"] == "open" and t["title"] == "Deploy a GoldenGate VM in GCP." and t["change"] == f"{change2}-2"
+              and (repo / "openspec" / "changes" / f"{change2}-2").is_dir() or not HAS_OPENSPEC, str(t))
         if HAS_OPENSPEC:
             e.prompt(repo, "COR-126: Deploy a Memorystore cache in GCP production")
             change3 = e.task(repo, "COR-126")["change"]
@@ -683,6 +691,14 @@ def test_tracking_and_boundaries() -> None:
               and asked(e.bash(a, "sed -i 's/x/y/' .claude/settings.json")) != ""
               and asked(e.bash(a, "export GROUNDWORK_TASK_GATE=off")) != "")
         check("reading settings is fine", e.bash(a, f"cat {e.cfg}/settings.json") is None)
+        installed = e.cfg / "hooks" / "groundwork_tasks.py"
+        check("live run: running the task CLI never asks (installed path, repository copy, wrapper, chained)",
+              all(e.bash(a, c) is None for c in (f"python3 {installed} complete COR-201", f"python3 {TASKS} show COR-201",
+                                                 "groundwork task list", 'python3 "$CLAUDE_CONFIG_DIR/hooks/groundwork_tasks.py" list',
+                                                 f"python3 - <<'EOF'\nprint(1)\nEOF\npython3 {installed} complete COR-201 2>&1 | head -20")))
+        check("a cd into the config directory followed by an edit asks",
+              asked(e.bash(a, f"cd {e.cfg} && sed -i s/a/b/ settings.json")) != ""
+              and asked(e.bash(a, f"python3 - <<'EOF'\nopen('{e.cfg}/settings.json','w').write('x')\nEOF")) != "")
         check("reading or changing a credential file asks; an example env file does not",
               "reads a credential file" in asked(e.pre(a, "Read", {"file_path": str(a / ".env")}))
               and asked(e.pre(a, "Write", {"file_path": str(a / "deploy.pem"), "content": "x"})) != ""
