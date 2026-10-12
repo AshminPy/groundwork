@@ -33,7 +33,7 @@ Groundwork returns Claude Code's native `ask` decision, which shows the usual pe
 - recursive deletes of, or outside, the working directory (`rm -rf .`, `rm -rf ~/x`, `rm -rf "$VAR"`, `cd /other && rm -rf data`). Deletes inside it and in temporary directories do not ask;
 - destructive Git, also behind `git -C dir` or `-c k=v`: forced or deleting push, `reset --hard`, `clean -f`, `branch -D`, `stash drop`/`clear`, `checkout .`/`restore .`, `checkout -f`/`switch -f`, `filter-branch`, `update-ref -d`, `reflog expire`;
 - credential access: `.env`, SSH keys, cloud credential files, `gh auth`, `aws configure`, `kubectl get secret`, `vault`, and similar;
-- `sudo`, `doas`, `su` and `pkexec` (also behind `env`, `time`, `timeout`, `xargs`), commands that cannot be checked (piped into a shell, computed, PowerShell), and changes to Claude Code settings, Groundwork's hooks or the task ledger. Running the task CLI never asks.
+- `sudo`, `doas`, `su` and `pkexec` (also behind `env`, `time`, `timeout`, `xargs`), commands that cannot be checked (piped into a shell, computed, PowerShell), and changes to Claude Code settings, Groundwork's hooks or the task ledger. Running the task CLI never asks, unless its output is redirected into one of those files.
 
 Commands are checked inside wrappers, nested shells, scripts run directly, command substitutions and here-documents. File tools cannot write the task ledger. Pushes to protected branches are still blocked by `block_protected_push.py`.
 
@@ -68,4 +68,5 @@ Set `"GROUNDWORK_TASK_GATE": "off"` in the `env` of `~/.claude/settings.json`. E
 - **Intake is keyword-based.** It can miss MATERIAL work or flag harmless work. Use `groundwork task intake` or `groundwork task cancel`.
 - **Shell checking is conservative.** What cannot be parsed asks. This includes `xargs … sh -c '…'`, `sh -c "$(…)"`, `eval "$(…)"` and a script written and run in the same command. A command name taken from a computed variable (`TF=$(command -v terraform); $TF apply`) is not resolved.
 - **Reviews must run in the foreground** and end with a `REVIEW RESULT` block. Background reviews and background verification runs are not evidence.
+- **Evidence fingerprint.** Untracked files larger than 5 MB count by size and modification time, not content. A change inside a git submodule's working tree is not seen until the submodule's commit changes.
 - **Not verified:** how the `ask` decision behaves under `bypassPermissions` mode.

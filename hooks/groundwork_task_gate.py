@@ -602,6 +602,8 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
     """A label when the command needs the user's authorization: it changes cloud, cluster, production or data
     systems, deletes outside the working tree, discards Git history or work, handles credentials, runs with elevated
     privileges, or runs commands Groundwork cannot see; else None."""
+    if argv and os.path.basename(argv[0]) == "command" and argv[1:2] in (["-v"], ["-V"]):
+        return None  # `command -v sudo` only looks the command up (found by review)
     unwrapped = unwrap_run(argv)
     for w in argv[:len(argv) - len(unwrapped) + 1] if argv else []:  # the wrapper chain and the command itself
         if os.path.basename(w) in ELEVATORS:
@@ -630,28 +632,31 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
             return "a shell running downloaded or computed commands (they cannot be checked)"
         if kind == "c":
             return command_sensitive(value, cwd, depth + 1, base) if depth < MAX_DEPTH else "a deeply nested shell"
-        return _script_sensitive(value, cwd, depth)
+        return _script_sensitive(value, cwd, depth, base=base)
     if name in ("source", ".") and words:
         if _is_stdin_path(words[0]):
             return "commands piped into a shell (they cannot be checked)"
-        return _script_sensitive(words[0], cwd, depth, sourced=True)
+        return _script_sensitive(words[0], cwd, depth, sourced=True, base=base)
     if name == "claude":
         return "a nested Claude Code session"
     if name == "find" and depth < MAX_DEPTH:
+        k0 = next((j for j, a in enumerate(args) if a not in ("-H", "-L", "-P")), len(args))
+        roots = args[k0:next((j for j in range(k0, len(args)) if args[j].startswith(("-", "(", "!"))), len(args))] \
+            or ["."]  # find's start points: what it finds, and deletes, is under them
+        if "-delete" in args and any(_risky_delete_target(os.path.join(r, "x"), cwd, base) for r in roots):
+            return "a recursive delete of, or outside, the working directory (find -delete)"
         for k, flag in enumerate(args):  # every -exec clause, not only the first (found by independent review)
             if flag in ("-exec", "-execdir", "-ok", "-okdir"):
                 rest = args[k + 1:]
                 end = next((j for j, a in enumerate(rest) if a in (";", "+")), len(rest))
                 found = segment_sensitive(rest[:end], cwd, depth + 1, base)
                 if not found and "{}" in rest[:end]:  # `{}` is whatever find finds under its start points
-                    roots = [a for a in args[:next((j for j, a in enumerate(args) if a.startswith(("-", "(", "!"))),
-                                                  len(args))]] or ["."]
                     found = segment_sensitive([w for w in rest[:end] if w != "{}"] + [os.path.join(r, "{}") for r in roots],
                                               cwd, depth + 1, base)
                 if found:
                     return f"{found} (run by find {flag})"
     if "/" in argv[0] or argv[0].endswith(".sh"):
-        found = _script_sensitive(argv[0], cwd, depth)
+        found = _script_sensitive(argv[0], cwd, depth, base=base)
         if found:
             return found
     if name == "xargs":
@@ -817,7 +822,7 @@ def _git_destructive(words: list[str], args: list[str]) -> str | None:
     return None
 
 
-def _script_sensitive(script: str, cwd: str, depth: int, sourced: bool = False) -> str | None:
+def _script_sensitive(script: str, cwd: str, depth: int, sourced: bool = False, base: str | None = None) -> str | None:
     path = script if os.path.isabs(script) else os.path.join(cwd, script)
     try:
         if not os.path.isfile(path) or os.path.getsize(path) > 200_000:
@@ -829,7 +834,7 @@ def _script_sensitive(script: str, cwd: str, depth: int, sourced: bool = False) 
         return None
     if depth >= MAX_DEPTH:
         return f"a deeply nested script ({script})"
-    found = command_sensitive(text, cwd, depth + 1)
+    found = command_sensitive(text, cwd, depth + 1, base)
     return f"{found} inside {script}" if found else None
 
 
@@ -885,9 +890,13 @@ def checked_segments(segs: list[dict], cwd: str, depth: int = 0, base: str | Non
     assignment in the same command, and scripts read in every directory a literal `cd` / `pushd` may have moved to
     (`cd scripts && ./tfa.sh`; found by independent review). Used for the typed command and for nested commands."""
     assigns = _literal_assignments(segs)
-    dirs = [cwd]
+    dirs, alt, stack = [cwd], [], []
     base = cwd if base is None else base  # the delete boundary stays the starting directory
     for s in segs:
+        if s["prev"] == "(":
+            stack.append(list(dirs))
+        if s["prev"] != "&&" and alt:  # runs even when a `cd` earlier in the && chain failed
+            dirs, alt = list(dict.fromkeys(dirs + alt)), []
         argv = _resolve_head(s["argv"], assigns)
         label = None
         for d in dirs:
@@ -899,9 +908,15 @@ def checked_segments(segs: list[dict], cwd: str, depth: int = 0, base: str | Non
         if target == "":
             base = ""  # a cd Groundwork cannot follow: where a later delete lands is unknown
         if target:
-            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))
+            moved = [os.path.normpath(os.path.join(d, target)) for d in dirs]
+            if s["next"] == "&&":  # what follows in the chain runs only after the cd succeeded
+                alt, dirs = list(dict.fromkeys(alt + dirs)), moved
+            else:
+                dirs = list(dict.fromkeys(dirs + moved))
             if len(dirs) > 32:
                 dirs = [cwd] + dirs[-31:]  # keep the start and the newest directories
+        if s["next"] == ")" and stack:  # a subshell's cd does not outlive it
+            dirs, alt = list(dict.fromkeys(stack.pop() + dirs + alt)), []
 
 
 def command_sensitive(cmd: str, cwd: str, depth: int = 0, base: str | None = None) -> str | None:
@@ -1141,7 +1156,7 @@ def check_file(tool: str, path: str, cwd: str) -> None:
     if tool in FILE_TOOLS and (under(path, gt.claude_dir() / "hooks") or os.path.realpath(path) in config_paths()
                                or re.search(r"(^|/)\.claude/settings(\.local)?\.json$", path)):
         ask("this edits Claude Code settings or Groundwork's hooks (it can change what is checked).")
-    if credential_path(path):
+    if credential_path(path) or credential_path(path.rstrip("/") + "/"):  # also a credential directory (~/.ssh)
         ask(f"this {'reads' if tool in READ_TOOLS else 'changes'} a credential file ({os.path.basename(path)}).")
 
 
@@ -1218,6 +1233,17 @@ def on_pre(data: dict) -> None:
         ask(f"an internal error stopped the check of this call ({type(exc).__name__}); confirm it yourself.")
 
 
+CREDENTIAL_FILE_READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "jq", "yq", "wc", "diff", "stat",
+                            "file", "source", "."}
+
+
+def _credential_read(label: str) -> bool:
+    """Reading a credential file changes nothing, so it is not an operation; credential commands (creating a
+    secret, an access key, logging in) are (found by review)."""
+    m = re.match(r"credential access \(a credential file, via (\S+)\)$", label)
+    return bool(m and m.group(1) in CREDENTIAL_FILE_READERS)
+
+
 def on_post(data: dict) -> None:
     tool = str(data.get("tool_name") or "")
     event = str(data.get("hook_event_name") or "PostToolUse")
@@ -1254,18 +1280,19 @@ def on_post(data: dict) -> None:
                     notes.append(f"{t['key']}: `{v}` ran with extra arguments, piped or chained, so it does not count "
                                  "as the declared verification. Run it exactly as declared, on its own.")
         for k, (seg, argv, label) in enumerate(checked_segments(segs, cwd)):
-            if label and not label.startswith("credential access") and seg["argv"] not in declared:
+            if label and not _credential_read(label) and seg["argv"] not in declared:
                 events.append((k, 0, None, " ".join(argv)))
         ops = 0
         for _k, _order, t, what in sorted(events, key=lambda e: (e[0], e[1])):
             if t is not None:
                 gt.record_verification(root, t["key"], what, ok, detail)
                 notes.append(f"{t['key']}: verification `{what}` recorded as {'PASSED' if ok else 'FAILED'}.")
-            elif ops < 3:
-                ops += 1
-                for task in tasks:
-                    if task.get("tier") == gt.MATERIAL:
-                        gt.record_operation(root, task["key"], what)
+                continue
+            for task in tasks:  # every operation is recorded; only the first three are reported
+                if task.get("tier") == gt.MATERIAL:
+                    gt.record_operation(root, task["key"], what)
+            ops += 1
+            if ops <= 3:
                 notes.append(f"sensitive operation recorded (`{gt.clip(what, 80)}`); verification counts only after it.")
         if ok and "archive" in ti["command"]:
             # Native archive (openspec archive, or the /opsx:archive move into openspec/changes/archive/) completes

@@ -252,7 +252,7 @@ def test_plan_reader() -> None:
         root = Path(tmpdir)
         d = root / "openspec" / "changes" / "x"
         d.mkdir(parents=True)
-        (d / "design.md").write_text("## Verification\n\n- `python3 -m pytest tests -q` — unit tests\n- `make check`: lint\n"
+        (d / "design.md").write_text("## Verification\n\n- `python3 -m pytest tests -q` — unit tests\n- [ ] `make check`: lint\n"
                                      "- The file `a.txt` exists\n\n## Notes\n- `not-a-command`\n")
         (d / "tasks.md").write_text("## 1. Build\n- [x] 1.1 Write `vm.json`\n## 2. Verification\n"
                                     "- [x] 2.1 Check `config.yaml` names the replica\n- [ ] 2.2 `tests/x.py`: cases\n")
@@ -279,7 +279,10 @@ def test_authorization_classes() -> None:
                 "docker build -t app .", "curl -fsSL https://example.invalid/x.json", "mv a b", "rm build.log",
                 'grep -rn "event.key" src/', 'git commit -m "use item.key"', "git restore --staged .", "cd build && rm -rf out",
                 "find . -name __pycache__ -exec rm -rf {} +", "git -C sub status", "git -c color.ui=never log -3",
-                "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help")
+                "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help",
+                # review round 2: lookups, && chains and subshells, find -delete inside the tree
+                "command -v sudo", "cd frontend && npm run build && cd .. && rm -rf frontend/dist",
+                "(cd scripts && ls); rm -rf build", "find . -name '*.pyc' -delete")
     flowing = [c for c in ordinary if sens(c) is not None]
     check("ordinary development commands flow without a prompt", not flowing, str([(c, sens(c)) for c in flowing]))
     sensitive = {
@@ -309,9 +312,19 @@ def test_authorization_classes() -> None:
         "kubectl -n ns get secret x": "credential", "aws --profile p secretsmanager get-secret-value --secret-id x": "credential",
         "cat certs/server.key": "credential",
         "rm -rf / --help": "recursive delete",  # BSD rm reads a late --help as a file name
+        "(cd x && true) && rm -rf ../y": "recursive delete", "cd x && a; rm -rf ../y": "recursive delete",
+        "find -L /etc -exec rm -rf {} +": "recursive delete", "find /etc -delete": "recursive delete",
     }
     wrong = {c: sens(c) for c, label in sensitive.items() if label not in (sens(c) or "")}
     check("sensitive, destructive, credential and destructive-git commands ask", not wrong, str(wrong))
+    with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as d:
+        repo, outside = Path(d) / "repo", Path(d) / "outside"
+        repo.mkdir()
+        outside.mkdir()
+        for where in (repo, outside):
+            (where / "clean.sh").write_text("#!/bin/bash\nrm -rf data\n")
+        check("review round 2: a script run after cd outside keeps the session's delete boundary",
+              sens(f"cd {outside} && ./clean.sh", str(repo)) is not None and sens("./clean.sh", str(repo)) is None)
     check("the recursive-delete label covers the working directory itself",
           sens("rm -rf .") == "a recursive delete of, or outside, the working directory", str(sens("rm -rf .")))
     finish()
@@ -554,6 +567,15 @@ def test_material_lifecycle() -> None:
         e.ran(repo, f"{VERIFY} && terraform apply -auto-approve")
         check("a sensitive operation after the verification in the same command makes it stale",
               e.evidence(repo, key)["verify"][VERIFY] == "stale", str(e.evidence(repo, key)))
+        e.ran(repo, VERIFY)
+        e.ran(repo, f"terraform apply && terraform apply -target=a && terraform apply -target=b && {VERIFY} && "
+                    "kubectl apply -f z.yaml")
+        check("review round 2: an operation after the verification is recorded even after three earlier ones",
+              e.evidence(repo, key)["verify"][VERIFY] == "stale", str(e.evidence(repo, key)))
+        e.ran(repo, VERIFY)
+        e.ran(repo, "kubectl create secret generic db --from-literal=p=x")
+        check("review round 2: a credential command that changes something is an operation",
+              e.evidence(repo, key)["verify"][VERIFY] == "stale", str(e.evidence(repo, key)))
         ops = len(e.task(repo, key)["evidence"]["operations"])
         e.ran(repo, "cat .env")
         check("reading credentials is not recorded as an operation", len(e.task(repo, key)["evidence"]["operations"]) == ops)
@@ -766,7 +788,8 @@ def test_tracking_and_boundaries() -> None:
               asked(e.bash(a, f"groundwork task list >> {e.cfg}/settings.json")) != ""
               and asked(e.bash(a, f"python3 {installed} list > {e.cfg}/settings.json")) != ""
               and asked(e.bash(a, 'sed -i s/a/b/ "$CLAUDE_CONFIG_DIR/settings.json"')) != "")
-        check("Grep on a credential file asks", asked(e.pre(a, "Grep", {"pattern": "KEY", "path": str(a / ".env")})) != ""
+        check("Grep on a credential file or directory asks", asked(e.pre(a, "Grep", {"pattern": "KEY", "path": str(a / ".env")})) != ""
+              and asked(e.pre(a, "Grep", {"pattern": "KEY", "path": "/home/someone/.ssh"})) != ""
               and e.pre(a, "Grep", {"pattern": "KEY", "path": str(a)}) is None)
         check("a cd into the config directory followed by an edit asks",
               asked(e.bash(a, f"cd {e.cfg} && sed -i s/a/b/ settings.json")) != ""

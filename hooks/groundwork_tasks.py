@@ -498,7 +498,7 @@ def _escalate(root: str, task: dict, cls: dict, text: str) -> dict:
 VERIFY_HEADING = re.compile(r"^#{2,3}[ \t]+(?:verification|verification commands|verify|how to verify)[ \t]*#*[ \t]*$",
                             re.MULTILINE | re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{1,3}[ \t]", re.MULTILINE)
-COMMAND_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?`([^`\n]+)`(?:[ \t]*$|[ \t]*[:(][^\n]*$|"
+COMMAND_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+)?`([^`\n]+)`(?:[ \t]*$|[ \t]*[:(][^\n]*$|"
                           r"[ \t]+[\u2014\u2013-][ \t][^\n]*$)", re.MULTILINE)
 # `<name>` / `{zone}` placeholders: a command containing one can never be run as written, so evidence could never
 # match it (found in the live acceptance run).
@@ -594,7 +594,12 @@ def phase(root: str, task: dict, plan: dict | None = None) -> str:
 
 # Generated caches that running the verification itself creates; never part of the fingerprint.
 GENERATED_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-FINGERPRINT_TIMEOUT = 15
+FINGERPRINT_TIMEOUT = 8  # below the hooks' own timeouts (10 s and more), so a slow tree never stalls a hook
+LARGE_UNTRACKED = 5_000_000  # untracked files above this are fingerprinted by size and mtime, not hashed
+
+
+def _generated(rel: str) -> bool:
+    return any(part in GENERATED_CACHE_DIRS for part in rel.split("/")[:-1])
 
 
 def _git_in(root: str, env: dict, *args) -> str | None:
@@ -626,12 +631,26 @@ def fingerprint(root: str, task: dict) -> str:
         env = {"GIT_INDEX_FILE": tmp_index, "GIT_OBJECT_DIRECTORY": os.path.join(tmp, "objects"),
                "GIT_ALTERNATE_OBJECT_DIRECTORIES": os.path.abspath(objects)}
         caches = [f":(exclude,glob)**/{d}/**" for d in sorted(GENERATED_CACHE_DIRS)]
+        # Large untracked files (provider binaries, downloads) are fingerprinted by size and mtime instead of
+        # hashed, so the cost stays bounded (found by independent review: 150 MB untracked took ~9 s).
+        big = []
+        for rel in (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0"):
+            if rel and not rel.startswith("openspec/") and not _generated(rel):
+                try:
+                    st = os.lstat(os.path.join(root, rel))
+                except OSError:
+                    continue
+                if st.st_size > LARGE_UNTRACKED:
+                    big.append(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}")
+        skip = [":(exclude,literal)" + b.split("\0", 1)[0] for b in big]
         tree = None
-        if _git_in(root, env, "add", "-A", "--", ".", ":(exclude)openspec", *caches) is not None and \
+        if _git_in(root, env, "add", "-A", "--", ".", ":(exclude)openspec", *caches, *skip) is not None and \
                 _git_in(root, env, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", "openspec",
                         *[f":(glob)**/{d}/**" for d in sorted(GENERATED_CACHE_DIRS)]) is not None:
             tree = (_git_in(root, env, "write-tree") or "").strip()
-    return tree[:16] if tree else "unavailable-" + os.urandom(8).hex()
+    if not tree:
+        return "unavailable-" + os.urandom(8).hex()
+    return hashlib.sha256("\0".join([tree, *sorted(big)]).encode()).hexdigest()[:16] if big else tree[:16]
 
 
 def record_verification(root: str, key: str, cmd: str, ok: bool, detail: str = "") -> None:
@@ -690,11 +709,11 @@ def evidence_state(root: str, task: dict, plan: dict | None = None) -> dict:
 # ---------------------------------------------------------------------------------------------- transitions
 
 
-def completion_problems(root: str, task: dict) -> list[str]:
+def completion_problems(root: str, task: dict, plan: dict | None = None, state: dict | None = None) -> list[str]:
     """What a MATERIAL task still lacks to complete on evidence. STANDARD tasks complete when the user says so."""
     if task.get("tier") != MATERIAL:
         return []
-    plan = read_plan(root, task)
+    plan = plan or read_plan(root, task)
     problems = []
     if not plan["exists"]:
         problems.append(f"no OpenSpec change {plan_rel(root, task)}/ (create it: openspec new change {task.get('change')})")
@@ -704,7 +723,7 @@ def completion_problems(root: str, task: dict) -> list[str]:
     if plan["exists"] and not plan["verify"] and not plan["problems"]:
         problems.append("no verification declared: add a `## Verification` section (design.md, proposal.md or "
                         "tasks.md) listing each command that proves the change on its own line, in backticks")
-    state = evidence_state(root, task, plan)
+    state = state or evidence_state(root, task, plan)
     for cmd, seen in state["verify"].items():
         if seen != "passed":
             why = {"not run": "never run", "failed": "last run failed",
@@ -776,7 +795,7 @@ def set_blocker(root: str, key: str, reason: str | None) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------------------------- status
 
 
-def next_action(root: str, task: dict, plan: dict | None = None) -> str:
+def next_action(root: str, task: dict, plan: dict | None = None, state: dict | None = None) -> str:
     key = task["key"]
     if not is_open(task):
         return "none"
@@ -791,15 +810,15 @@ def next_action(root: str, task: dict, plan: dict | None = None) -> str:
                 "specs, tasks; /opsx:propose), then implement (/opsx:apply)")
     if ph == "implementing":
         return f"implement the next unchecked task in {plan_rel(root, task)}/tasks.md (/opsx:apply)"
-    problems = completion_problems(root, task)
+    problems = completion_problems(root, task, plan, state)
     return f"run: {task_cli()} complete {key}" if not problems else problems[0]
 
 
-def evidence_summary(root: str, task: dict, plan: dict | None = None) -> str:
+def evidence_summary(root: str, task: dict, plan: dict | None = None, state: dict | None = None) -> str:
     ev = task.get("evidence") or {}
     if task.get("tier") != MATERIAL or not task.get("change"):
         return f"{len(ev.get('verifications', []))} check run(s), {len(ev.get('reviews', []))} review(s)"
-    state = evidence_state(root, task, plan)
+    state = state or evidence_state(root, task, plan)
     passed = sum(1 for v in state["verify"].values() if v == "passed")
     review = "none" if state["review"] is None else f"{state['review']} must-fix"
     return f"verify {passed}/{len(state['verify'])} passed, review {review}"
@@ -808,10 +827,12 @@ def evidence_summary(root: str, task: dict, plan: dict | None = None) -> str:
 def render(root: str, task: dict, detail: bool = False) -> str:
     """Task, phase, progress, evidence, next action."""
     plan = read_plan(root, task) if task.get("change") else None
+    # One fingerprint per render: it is the expensive part (git hashes changed files).
+    state = evidence_state(root, task, plan) if plan and task.get("tier") == MATERIAL else None
     progress = f" · {plan['tasks_done']}/{plan['tasks_total']} tasks" if plan and plan["exists"] else ""
     lines = [f"{task['key']}  {task.get('title')}",
-             f"  {phase(root, task, plan)}{progress} · evidence: {evidence_summary(root, task, plan)}",
-             f"  next: {next_action(root, task, plan)}"]
+             f"  {phase(root, task, plan)}{progress} · evidence: {evidence_summary(root, task, plan, state)}",
+             f"  next: {next_action(root, task, plan, state)}"]
     if not detail:
         return "\n".join(lines)
     risk = task.get("risk") or {}
@@ -819,7 +840,7 @@ def render(root: str, task: dict, detail: bool = False) -> str:
                  (f" ({', '.join(risk.get('categories', []))})" if risk.get("categories") else ""))
     if plan:
         lines.append(f"  plan: {plan_rel(root, task)}/")
-        lines += [f"  verify: `{cmd}` — {seen}" for cmd, seen in evidence_state(root, task, plan)["verify"].items()]
+        lines += [f"  verify: `{cmd}` — {seen}" for cmd, seen in (state or evidence_state(root, task, plan))["verify"].items()]
         lines += [f"  plan problem: {p}" for p in plan["problems"]]
     ev = task.get("evidence") or {}
     if ev.get("reviews"):
@@ -850,9 +871,10 @@ def open_task_lines(cwd: str, limit: int = 700) -> list[str]:
     used = len(lines[0])
     for i, t in enumerate(tasks):
         plan = read_plan(root, t) if t.get("change") else None
+        state = evidence_state(root, t, plan) if plan and t.get("tier") == MATERIAL else None
         progress = f" {plan['tasks_done']}/{plan['tasks_total']}" if plan and plan["exists"] else ""
         row = (f"  {t['key']} [{phase(root, t, plan)}{progress}] {clip(t.get('title'), 60)} · evidence: "
-               f"{evidence_summary(root, t, plan)} · next: {clip(next_action(root, t, plan), 200)}")
+               f"{evidence_summary(root, t, plan, state)} · next: {clip(next_action(root, t, plan, state), 200)}")
         if used + len(row) > limit:
             lines.append(f"  … {len(tasks) - i} more ({task_cli()} list)")
             break
