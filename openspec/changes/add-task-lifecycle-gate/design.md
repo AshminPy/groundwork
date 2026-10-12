@@ -75,7 +75,7 @@ WHY:
 
 TRADEOFFS:
 - Any wording fix to the proposal, design or specs needs re-approval.
-- Task wording can change after approval without re-approval. This grants no authority: the gate reads Scope and Approved Operations from the proposal or design only. Removing approved tasks is refused at completion.
+- Task wording can change after approval without re-approval. This grants no authority: the gate reads Scope and Approved Operations from the proposal or design only. The task count is recorded when approval is requested; approval is refused, and completion is refused, while `tasks.md` has fewer tasks.
 
 VALIDATION METHOD: unit tests that ticking and annotating `tasks.md` keeps the approval valid, that removing a task is refused at completion, and that a scope edit voids the approval.
 
@@ -83,6 +83,7 @@ VALIDATION METHOD: unit tests that ticking and annotating `tasks.md` keeps the a
 
 DECISION:
 - `PreToolUse` gates edit tools by path, Bash with a read-only allowlist before approval and a sensitive-command list after it, and MCP tools by verb.
+- After approval, a sensitive command runs only when its words equal an Approved Operation exactly. In the live acceptance run, a prefix match let the model add flags the owner had not seen; a different `--project` would have passed the same way.
 - After every Bash, Agent or MCP call, `PostToolUse`/`PostToolUseFailure` diff the working tree against the base commit recorded at intake. Paths that were dirty at intake are excluded. The audit reports out-of-scope paths to Claude.
 - `complete` re-runs the audit and refuses on any violation.
 

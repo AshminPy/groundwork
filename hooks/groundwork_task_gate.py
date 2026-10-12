@@ -51,7 +51,7 @@ TASK_SUBS = {"list", "status", "show", "intake", "request-approval", "complete",
 # ---------------------------------------------------------------------------------------------- shell parsing
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", "\n", "(", ")", ";;"}
-REDIRECT_RE = re.compile(r"^(?:&>>?|>>?|>\||>&|<<<|<<-?|<&|<)$")
+REDIRECT_RE = re.compile(r"^(?:&>>?|>>?|>\||>&|<<<|<<-?|<&|<>|<)$")
 UNSAFE_SUBSTRINGS = ("$(", "`", "<(", ">(")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 DEV_SINKS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
@@ -85,23 +85,43 @@ SENSITIVE_HEADS = ("gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsuti
                    "rsync", "curl", "wget", "psql", "mysql", "sqlplus", "mongosh", "redis-cli", "docker", "rm", "claude")
 # Prefixes that run the command after them; unwrapped before the sensitivity check (found by independent review:
 # `sudo gcloud … delete`, `watch kubectl delete …`, `setsid terraform destroy` were not classified as sensitive).
-RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D"}, "doas": {"-u", "-C"},
-                "watch": {"-n", "--interval"}, "setsid": set(), "ionice": {"-c", "-n", "-p"},
+RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-T", "--user", "--group",
+                         "--close-from", "--host", "--prompt", "--other-user", "--role", "--type", "--chdir",
+                         "--command-timeout"},
+                "doas": {"-u", "-C"},
+                "watch": {"-n", "--interval"}, "setsid": set(),
+                "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
                 "chrt": set(), "taskset": set(), "unbuffer": set()}
 RUN_WRAPPER_POSITIONALS = {"chrt": 1, "taskset": 1}  # chrt PRIORITY cmd …, taskset MASK cmd …
 DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqlsh", "sqlcmd", "sqlite3"}
 
 
-def _protect_semicolons(cmd: str) -> str | None:
-    """Replace each unquoted `\\;` and each whole-word `';'` / `";"` with a placeholder; everything else is kept
-    verbatim, so a real separator next to quoted text (`echo "x";"terraform" apply`) or after an escaped backslash
-    (`echo \\\\; terraform apply`) stays a separator (found by independent review). None on an unbalanced quote."""
+# Shell operators, longest first. shlex returns a run of adjacent operator characters as one token ("&&\n", ";\n",
+# ")&&"), so runs are split into these (found by independent review: the line after `&&⏎` joined the previous command).
+OPERATORS = ("&>>", "<<<", "<<-", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<", ";", "|", "&",
+             "(", ")", "<", ">", "\n")
+OPERATOR_CHARS = "();<>|&\n"
+COMMENT_AFTER = " \t\n;&|()"  # a `#` after one of these (or at the start) begins a comment
+
+
+def _prepare_command(cmd: str) -> str | None:
+    """Pre-lexer pass, quote-aware. Replaces each unquoted `\\;` and each whole-word `';'` / `";"` with a placeholder
+    (an argument, as in find … -exec … \\;), drops `# comments` up to (not including) their newline, and drops
+    backslash-newline continuations. Everything else is kept verbatim, so a real separator next to quoted text or after
+    an escaped backslash stays a separator (found by independent review). None on an unbalanced quote or on `$'…'` /
+    `$"…"` quoting, which shlex does not decode."""
     out, i, n = [], 0, len(cmd)
     while i < n:
         c = cmd[i]
         if c == "\\":
-            out.append(" \x00SEMI\x00 " if cmd[i + 1:i + 2] == ";" else cmd[i:i + 2])
+            nxt = cmd[i + 1:i + 2]
+            out.append(" \x00SEMI\x00 " if nxt == ";" else "" if nxt == "\n" else cmd[i:i + 2])
             i += 2
+        elif c == "#" and (i == 0 or cmd[i - 1] in COMMENT_AFTER):
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+        elif c == "$" and cmd[i + 1:i + 2] in ("'", '"'):
+            return None
         elif c in "'\"":
             j = i + 1
             while j < n and cmd[j] != c:
@@ -117,19 +137,29 @@ def _protect_semicolons(cmd: str) -> str | None:
     return "".join(out)
 
 
+def _split_operators(tok: str) -> list[str]:
+    if not tok or any(ch not in OPERATOR_CHARS for ch in tok):
+        return [tok]
+    parts, k = [], 0
+    while k < len(tok):
+        op = next(o for o in OPERATORS if tok.startswith(o, k))
+        parts.append(op)
+        k += len(op)
+    return parts
+
+
 def split_segments(cmd: str):
     """[{argv, writes, prev, next}] for each simple command, or None when the command cannot be parsed.
     `writes`: an output redirection to a real file. prev/next: the operator before/after the segment."""
-    # An escaped or quoted semicolon (find … -exec … \;) is an argument, not a separator; shlex returns both as ";",
-    # so it is protected first (found by independent review: a second -exec clause escaped the check).
-    protected = _protect_semicolons(cmd)
-    if protected is None:
+    prepared = _prepare_command(cmd)
+    if prepared is None:
         return None
     try:
-        lex = shlex.shlex(protected, posix=True, punctuation_chars="();<>|&\n")
+        lex = shlex.shlex(prepared, posix=True, punctuation_chars=OPERATOR_CHARS)
         lex.whitespace = " \t\r"
         lex.whitespace_split = True
-        tokens = list(lex)  # the placeholder is turned back into ";" only where it is added as an argument
+        lex.commenters = ""  # comments were removed by _prepare_command; shlex's own would swallow the newline
+        tokens = [part for tok in lex for part in _split_operators(tok)]
     except ValueError:
         return None
     segments, cur, writes, prev = [], [], False, None
@@ -142,7 +172,8 @@ def split_segments(cmd: str):
             cur, writes, prev = [], False, tok
         elif REDIRECT_RE.match(tok):
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
-            if tok.startswith((">", "&>")) and not (tok == ">&" and target.isdigit()) and target not in DEV_SINKS:
+            if (tok.startswith((">", "&>")) or tok == "<>") and not (tok == ">&" and target.isdigit()) \
+                    and target not in DEV_SINKS:
                 writes = True
             i += 1  # skip the redirection target / heredoc delimiter
         elif tok.isdigit() and i + 1 < len(tokens) and REDIRECT_RE.match(tokens[i + 1]):
@@ -325,12 +356,12 @@ def unwrap_run(argv: list[str]) -> list[str]:
 
 
 def _shell_command_arg(args: list[str]):
-    """The command string of `sh -c CMD` (also -lc, -ec, `-o pipefail -c`); "" when the shell reads its commands
-    from stdin (no script and no -c); None when it runs a script file."""
-    i, has_c = 0, False
+    """The command string of `sh -c CMD` (also -lc, -ec, `-o pipefail -c`, `-c -o pipefail CMD`); "" when the shell
+    reads its commands from stdin (-s, or no script and no -c); None when it runs a script file."""
+    i, has_c, has_s = 0, False, False
     while i < len(args):
         a = args[i]
-        if a == "--" or a == "-":
+        if a in ("--", "-"):
             i += 1
             break
         if a.startswith("--"):
@@ -339,13 +370,16 @@ def _shell_command_arg(args: list[str]):
         if re.match(r"^[-+][a-zA-Z]+$", a):
             # each o/O in a cluster takes the next argument as its option name: -euo pipefail, -oc pipefail,
             # -c -o pipefail (found by independent review); -c makes the first operand the command string
-            has_c = has_c or (a[0] == "-" and "c" in a)
+            if a[0] == "-":
+                has_c, has_s = has_c or "c" in a, has_s or "s" in a
             i += 1 + sum(ch in "oO" for ch in a[1:])
             continue
         break
-    if i < len(args):
-        return args[i] if has_c else None
-    return ""
+    if has_c:
+        return args[i] if i < len(args) else ""
+    if has_s or i >= len(args):
+        return ""  # -s: commands come from stdin and operands are positional parameters (found by independent review)
+    return None
 
 
 def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
@@ -468,13 +502,9 @@ def _norm_tokens(cmd: str) -> list[str] | None:
 
 def matches_operation(argv: list[str], operations: list[str]) -> bool:
     """The command is an Approved Operation: its words, exactly as run (no wrapper stripped, so `sudo …` is not
-    covered by an approval of `…`), start with the approved words. A prefix match is accepted only for an operation
-    of at least three words, so a bare `gcloud` or `kubectl apply` approves nothing broader."""
-    for op in operations:
-        toks = _norm_tokens(op)
-        if toks and argv[: len(toks)] == toks and (len(argv) == len(toks) or len(toks) >= 3):
-            return True
-    return False
+    covered by an approval of `…`), equal the approved words. No extra arguments: the live acceptance run showed a
+    prefix match let flags the owner never saw (a different --project, say) ride on an approved command."""
+    return any(toks and argv == toks for toks in (_norm_tokens(op) for op in operations))
 
 
 def verification_status(segs, verify_cmd: str) -> str | None:
@@ -626,7 +656,7 @@ def on_expansion(data: dict) -> None:
         add_context("UserPromptExpansion", (
             f"[Groundwork task gate] {msg} The owner typed /gw-approve; Groundwork recorded it. You may now implement "
             f"{key}, only within its approved scope: {', '.join(f'`{s}`' for s in plan.get('scope', []))}. Sensitive "
-            f"operations allowed: {ops}; any other is denied. Then: check every task in tasks.md; run each verification "
+            f"operations allowed, exactly as written: {ops}; any other is denied. Then: check every task in tasks.md; run each verification "
             f"command on its own, not piped ({'; '.join(f'`{v}`' for v in plan.get('verify', []))}); dispatch a "
             "foreground independent review subagent (subagent_type or name containing 'review') whose final response "
             "ends with a REVIEW RESULT block (Verdict: approve|changes-required, Must-fix: N); fix any MUST FIX and "
@@ -729,7 +759,9 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
             label = segment_sensitive(s["argv"], data.get("cwd") or root)
             if label and not matches_operation(s["argv"], ops):
                 deny(f"Groundwork task gate: {label} is not an Approved Operation of {keys} "
-                     f"(approved: {'; '.join(ops) or 'none'}). Sensitive operations need the owner's approval in the plan.")
+                     f"(approved: {'; '.join(ops) or 'none'}). Sensitive operations need the owner's approval in the "
+                     "plan and run exactly as written, with no extra arguments; to change one, edit the plan and "
+                     "request approval again.")
         if any(u in cmd for u in UNSAFE_SUBSTRINGS) and re.search(
                 r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
             deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")

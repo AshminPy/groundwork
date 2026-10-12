@@ -300,10 +300,12 @@ def find_keys(text: str) -> list[str]:
     return keys
 
 
-def work_key(text: str, key: str, keys: list[str]) -> bool:
-    """True when `key` names the work: it is the prompt's first key, or it heads a clause (`KEY:` or `KEY - …`)."""
-    return key == keys[0] or bool(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(key) + r"\s*(?:[:–—]|-(?=\s))",
-                                            text or ""))
+def work_key(text: str, key: str) -> bool:
+    """True when `key` names the work: it starts the prompt (`COR-1 …`, `[COR-1] …`) or heads a clause (`COR-1:`,
+    `COR-1 - …`). A key elsewhere ("after COR-1 is merged", "depends on COR-2") is a reference."""
+    k = re.escape(key)
+    return bool(re.match(r"^\W*" + k + r"(?![A-Za-z0-9_-])", text or "") or re.search(
+        r"(?<![A-Za-z0-9_-])" + k + r"\s*(?:[:\u2013\u2014]|-(?=\s))", text or ""))
 
 
 def classify(text: str) -> dict | None:
@@ -424,15 +426,18 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
     # The prompt's LEADING key decides; other keys are context (found by independent review: "COR-124: follow-up to
     # COR-123 …" never registered COR-124). Known and open -> its state (escalated when the prompt is now MATERIAL);
     # known and closed -> a fresh task only when the prompt asks for work (an action verb); unknown -> a new task.
-    # Which key the work is for: the first new key that leads the prompt or heads a clause (follow-up tickets name the
-    # old ticket too, in any order — found by independent review); else the first open key; else the first closed
-    # key. A new key elsewhere ("depends on COR-122, which is merged") is context, not a new task.
+    # Which key the work is for (found by independent review; follow-up tickets name the old ticket too, in any order):
+    # a new key that starts the prompt or heads a clause; else an open key; else a closed key that starts the prompt
+    # or heads a clause (a fresh task when the prompt asks for work); else any new key ("after COR-1 is merged, deploy
+    # COR-2"); else the first key. A new key next to an open one ("depends on COR-122") is a reference.
     primary = None
     if is_task and cls["keys"]:
         known = {k: load_task(root, k) for k in cls["keys"]}
-        primary = next((k for k in cls["keys"] if known[k] is None and work_key(text, k, cls["keys"])), None) or \
-            next((k for k in cls["keys"] if known[k] and known[k].get("state") not in (COMPLETE, CANCELLED)), None) \
-            or cls["keys"][0]
+        new = [k for k in cls["keys"] if known[k] is None]
+        is_open = [k for k in cls["keys"] if known[k] and known[k].get("state") not in (COMPLETE, CANCELLED)]
+        closed = [k for k in cls["keys"] if known[k] and k not in is_open]
+        primary = next((k for k in new if work_key(text, k)), None) or next(iter(is_open), None) or \
+            next((k for k in closed if work_key(text, k)), None) or next(iter(new), None) or cls["keys"][0]
     current = load_task(root, primary) if primary else None
     if is_task and current and current.get("state") == OPEN and cls["tier"] == MATERIAL and cls.get("action"):
         return _escalate(root, current, cls, text)
@@ -828,15 +833,17 @@ def approve(root: str, key: str, code: str, session_id: str = "") -> tuple[bool,
     if (code or "").strip().lower() != requested:
         return False, f"Groundwork: approval code does not match {key}'s current plan code; nothing was approved."
     plan = read_plan(root, task)
-    problems = plan["problems"]  # the plan rules may be stricter than when approval was requested
+    problems = list(plan["problems"])  # the plan rules may be stricter than when approval was requested
+    requested_total = int((task.get("plan") or {}).get("tasks_total") or 0)
+    if plan["tasks_total"] < requested_total:  # tasks.md is outside the digest (design D3)
+        problems.append(f"tasks.md has {plan['tasks_total']} tasks but the plan had {requested_total} when approval "
+                        "was requested; tasks cannot be removed")
     if problems:
         return False, (f"Groundwork: {key}'s plan no longer passes the plan check, so nothing was approved: "
                        + "; ".join(problems[:3]) + ". Ask Claude to fix the plan and request approval again.")
 
     def apply(t):
         t["state"] = APPROVED
-        # tasks.md is outside the digest, so the task count the owner saw is taken now (completion_problems).
-        t.setdefault("plan", {})["tasks_total"] = plan["tasks_total"]
         t["approval"].update({"approved_code": requested, "approved_at": now(), "approved_session": session_id,
                               "via": "/gw-approve (UserPromptExpansion)"})
         add_history(t, "approved", f"owner approved plan code {requested}")

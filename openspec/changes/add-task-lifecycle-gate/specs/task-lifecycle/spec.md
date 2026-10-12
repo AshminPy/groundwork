@@ -11,9 +11,11 @@ Groundwork SHALL classify every submitted prompt in a git repository without a m
 For a MATERIAL task it SHALL create the OpenSpec change.
 
 The ticket a prompt is for SHALL be:
-- the first key not yet in the ledger that is the prompt's first key or heads a clause (`KEY:` or `KEY - …`). It is registered even when the prompt also names known keys, in any order. A new key elsewhere, such as a dependency (`depends on COR-122`), is context and is not registered;
-- otherwise the first open key, which receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals and an action verb;
-- otherwise a completed or cancelled key, which starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory.
+- the first key not yet in the ledger that starts the prompt or heads a clause (`KEY:` or `KEY - …`). It is registered even when the prompt also names known keys, in any order;
+- otherwise the first open key, which receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals and an action verb. A new key elsewhere in such a prompt, such as a dependency (`depends on COR-122`), is a reference and is not registered;
+- otherwise a completed or cancelled key that starts the prompt or heads a clause, which starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory;
+- otherwise the first new key anywhere (`after COR-1 is merged, deploy COR-2`);
+- otherwise the first key.
 
 A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be treated as input to that task, not as a new task. STANDARD work without a ticket key SHALL NOT be recorded.
 
@@ -37,6 +39,10 @@ A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be t
 - **WHEN** COR-126 is open and the prompt `COR-126: create it in us-central1-a. This depends on the network from COR-122, which is merged` arrives
 - **THEN** COR-122 is not registered and Claude receives COR-126's state
 
+#### Scenario: A closed ticket named as a precondition
+- **WHEN** COR-126 is cancelled and the prompt `After COR-126 is merged, deploy COR-127 to GCP production` arrives
+- **THEN** COR-127 is registered as a MATERIAL task and COR-126 is not reopened
+
 #### Scenario: The owner answers a waiting task's questions
 - **WHEN** COR-123 awaits approval and the owner sends a keyless reply describing the VM's zone and disk
 - **THEN** no new task is created and Claude receives COR-123's state
@@ -47,7 +53,7 @@ A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be t
 - `tasks.md` has at least one checkbox;
 - `proposal.md` or `design.md` has non-empty sections Prerequisites, Risks, Missing Information, Estimate (with a number and the word confidence or uncertainty), Scope (at least one specific, repository-relative path pattern in backticks; `*`, `**`, absolute paths and `..` are refused) and Verification (at least one command in backticks).
 
-On success it SHALL record the plan digest as the approval code and set the task to awaiting approval.
+On success it SHALL record the plan digest as the approval code and the number of tasks, and set the task to awaiting approval.
 
 #### Scenario: Incomplete plan
 - **WHEN** the plan has no Scope section
@@ -58,7 +64,7 @@ On success it SHALL record the plan digest as the approval code and set the task
 - **THEN** the command prints the approval code and the exact `/gw-approve <KEY> <code>` line for the owner
 
 ### Requirement: Owner-only approval bound to the plan
-An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest and the plan still passes the plan check. The digest SHALL cover `proposal.md`, `design.md` and `specs/**/*.md`. A change to any of them after approval SHALL void the approval for execution until the owner approves the new digest. Ticking or annotating `tasks.md` SHALL NOT void it.
+An approval SHALL be recorded only from a `UserPromptExpansion` event for the typed `/gw-approve <KEY> <code>` command, and only when the code equals the current plan digest, the plan still passes the plan check, and `tasks.md` has at least as many tasks as when approval was requested. The digest SHALL cover `proposal.md`, `design.md` and `specs/**/*.md`. A change to any of them after approval SHALL void the approval for execution until the owner approves the new digest. Ticking or annotating `tasks.md` SHALL NOT void it.
 
 Claude SHALL be denied any tool call that invokes, schedules or sends `/gw-approve` or `/gw-cancel`: the Skill tool, a command that is not read-only, a nested `claude` session, scheduled prompts, messages to other sessions, or MCP calls. It SHALL also be denied any write to the task ledger or to those command files. Text that only names the command in a file edit, a subagent prompt or a read-only command is allowed.
 
@@ -86,7 +92,7 @@ While a MATERIAL task in the repository is in planning or awaiting approval:
 
 While approved (the digest unchanged):
 - edits SHALL be allowed only within the approved Scope or the plan directory;
-- sensitive commands SHALL be allowed only when they match an Approved Operation, and mutating MCP tools only when named there;
+- sensitive commands SHALL be allowed only when their words equal an Approved Operation exactly (no extra arguments), and mutating MCP tools only when named there;
 - non-read-only commands touching Groundwork's hooks, settings or ledger SHALL be denied.
 
 A gate error while such a task is active SHALL deny the call.
@@ -102,6 +108,10 @@ A gate error while such a task is active SHALL deny the call.
 #### Scenario: Unapproved sensitive command
 - **WHEN** Claude runs `gcloud compute instances delete vm-1` and no Approved Operation matches it
 - **THEN** the command is denied
+
+#### Scenario: Approved command with extra arguments
+- **WHEN** the Approved Operation is `gcloud compute instances create gg-vm-1 --zone=us-central1-a` and Claude runs it with `--project=prod` added
+- **THEN** the command is denied, and the reason says Approved Operations run exactly as written and changing one needs a new approval
 
 ### Requirement: Evidence capture and scope audit
 After each tool call in a repository with an approved MATERIAL task, Groundwork SHALL record:
