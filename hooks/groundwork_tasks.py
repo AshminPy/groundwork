@@ -872,6 +872,10 @@ def completion_problems(root: str, task: dict) -> list[str]:
         return [f"{task['key']} is '{task.get('state')}'; only an approved task can complete"]
     if not approval_valid(root, task):
         # Everything else follows from this (the approved Scope no longer applies), so it is the only problem shown.
+        if task.get("change") and not change_dir(root, task).is_dir():
+            return [f"the plan directory {plan_rel(task)}/ is missing (moved or archived?), so the approval no longer "
+                    "applies: restore it unchanged, or recreate the plan and get the owner's new approval. Archive "
+                    "an OpenSpec change only after completion."]
         return ["the plan (proposal, design or specs) changed after approval, so the approval and its Scope no longer "
                 f"apply: run {task_cli()} request-approval {task['key']} and get the owner's new approval"]
     problems = []

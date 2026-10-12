@@ -92,7 +92,7 @@ While a MATERIAL task in the repository is in planning or awaiting approval:
 
 While approved (the digest unchanged):
 - edits SHALL be allowed only within the approved Scope or the plan directory;
-- sensitive commands SHALL be allowed only when their words equal an Approved Operation exactly (no extra arguments) and the same command does not also set, export, eval or source environment or define a function, and mutating MCP tools only when named there. A command that writes a file and runs a script of that name, or feeds a here-document with a sensitive command to something that may run it, SHALL be treated as sensitive;
+- sensitive commands SHALL be allowed only when their words equal an Approved Operation exactly (no extra arguments) and the same command does not also set, export, eval or source environment or define a function, and mutating MCP tools only when named there. A command that writes a file and then runs a script of that name, feeds a here-document with a sensitive command to something that may run it, or runs a sensitive command in a command substitution, SHALL be treated as sensitive. Archiving the task's OpenSpec change SHALL be denied until the task is complete;
 - non-read-only commands touching Groundwork's hooks, settings or ledger SHALL be denied.
 
 A gate error while such a task is active SHALL deny the call.

@@ -81,8 +81,6 @@ KUBECTL_WRITE = {"apply", "create", "delete", "replace", "patch", "scale", "roll
                  "attach", "port-forward", "debug"}
 TERRAFORM_READ = {"plan", "validate", "show", "output", "version", "providers", "graph"}
 HELM_READ = {"list", "ls", "status", "get", "show", "template", "lint", "version", "history", "search", "env"}
-SENSITIVE_HEADS = ("gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsutil", "bq", "ansible", "ssh", "scp",
-                   "rsync", "curl", "wget", "psql", "mysql", "sqlplus", "mongosh", "redis-cli", "docker", "rm", "claude")
 # Prefixes that run the command after them; unwrapped before the sensitivity check (found by independent review:
 # `sudo gcloud … delete`, `watch kubectl delete …`, `setsid terraform destroy` were not classified as sensitive).
 RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-T", "-R", "--user", "--group",
@@ -115,28 +113,28 @@ def _encode(text: str) -> str:
 
 
 def _heredoc_delimiter(cmd: str, j: int):
-    """(delimiter, index after it) for the word after `<<`/`<<-` at j, or None when it is not a here-document
+    """(delimiter, index after it, quoted) for the word after `<<`/`<<-` at j, or None when it is not a here-document
     delimiter this parser accepts (it must start with a letter, `_`, a quote or a backslash; `1<<2` is arithmetic)."""
     n = len(cmd)
     while j < n and cmd[j] in " \t":
         j += 1
     if j >= n or not (cmd[j].isalpha() or cmd[j] in "_'\"\\"):
         return None
-    word = []
+    word, quoted = [], False
     while j < n and cmd[j] not in " \t\r" and cmd[j] not in OPERATOR_CHARS:
         if cmd[j] in "'\"":
             k = cmd.find(cmd[j], j + 1)
             if k < 0:
                 return None
             word.append(cmd[j + 1:k])
-            j = k + 1
+            j, quoted = k + 1, True
         elif cmd[j] == "\\":
             word.append(cmd[j + 1:j + 2])
-            j += 2
+            j, quoted = j + 2, True
         else:
             word.append(cmd[j])
             j += 1
-    return ("".join(word), j) if word else None
+    return ("".join(word), j, quoted) if word else None
 
 
 def _scan_braced(cmd: str, j: int) -> int | None:
@@ -176,8 +174,64 @@ def _scan_arithmetic(cmd: str, j: int) -> int | None:
     return j if depth == 0 and first_close == j - 2 else None
 
 
-def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
-    """Quote-aware pass before shlex, matching bash where it matters to the gate. Returns (text, here-doc bodies).
+def _matching_paren(text: str, j: int) -> int | None:
+    """Index of the `)` closing a group whose body starts at j, honouring quotes and escapes inside it."""
+    n, depth = len(text), 1
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch in "'\"":
+            k = j + 1
+            while k < n and text[k] != ch:
+                k += 2 if ch == '"' and text[k] == "\\" else 1
+            if k >= n:
+                return None
+            j = k + 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return None
+
+
+def _expansions(text: str, subs: list[str]) -> bool:
+    """Record the `$(…)` and backtick bodies in text where quotes are literal (double-quoted text, an unquoted
+    here-document body, `${…}`, `$((…))`). False when one is not closed."""
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+        elif text.startswith("$((", i):
+            i += 3  # arithmetic: keep scanning inside it for a nested $(…)
+        elif text.startswith("$(", i):
+            j = _matching_paren(text, i + 2)
+            if j is None:
+                return False
+            subs.append(text[i + 2:j])
+            i = j + 1
+        elif c == "`":
+            j = i + 1
+            while j < n and text[j] != "`":
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                return False
+            subs.append(text[i + 1:j])
+            i = j + 1
+        else:
+            i += 1
+    return True
+
+
+def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
+    """Quote-aware pass before shlex, matching bash where it matters to the gate. Returns (text, here-doc bodies,
+    command-substitution bodies); the substitutions are what bash would run (see substitutions()).
     - quoted or escaped operator characters are literal (encoded, see _ENCODED); `\⏎` is a line continuation;
     - a `#` that starts a word begins a comment, removed up to (not including) the newline; elsewhere (`a#b`,
       `a\ #b`, `${x#y}`, `$#`) it is literal;
@@ -188,7 +242,7 @@ def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
     `$'…'` / `$"…"` quoting (shlex does not decode it), or a private-use character used by the encoding."""
     if any(ch in _DECODE for ch in map(ord, cmd)) or HEREDOC_MARK in cmd:
         return None
-    out, i, n, boundary, heredocs, bodies = [], 0, len(cmd), True, [], []
+    out, i, n, boundary, heredocs, bodies, subs = [], 0, len(cmd), True, [], [], []
     while i < n:
         c = cmd[i]
         if c == "\\":
@@ -207,22 +261,66 @@ def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
             j = _scan_braced(cmd, i + 2)
             if j is None:
                 return None
+            if not _expansions(cmd[i + 2:j], subs):
+                return None
             out.append("${" + _encode(cmd[i + 2:j]))
             i, boundary = j, False
         elif (c == "$" and cmd.startswith("$((", i) and _scan_arithmetic(cmd, i + 3)) or \
                 (c == "(" and boundary and cmd.startswith("((", i) and _scan_arithmetic(cmd, i + 2)):
             j = _scan_arithmetic(cmd, i + (3 if c == "$" else 2))
+            if not _expansions(cmd[i:j], subs):
+                return None
             out.append(_encode(cmd[i:j]))  # arithmetic: `<<` is a shift, not a here-document
             i, boundary = j, False
+        elif c == "$" and cmd[i + 1:i + 2] == "(":
+            j = _matching_paren(cmd, i + 2)
+            if j is None:
+                return None
+            subs.append(cmd[i + 2:j])  # also parsed in place below, as before
+            out.append(c)
+            i, boundary = i + 1, False
+        elif c == "`":
+            j = i + 1
+            while j < n and cmd[j] != "`":
+                j += 2 if cmd[j] == "\\" else 1
+            if j >= n:
+                return None
+            subs.append(cmd[i + 1:j])
+            out.append(_encode(cmd[i:j + 1]))
+            i, boundary = j + 1, False
+        elif c in "<>" and cmd[i + 1:i + 2] == "(":
+            j = _matching_paren(cmd, i + 2)
+            if j is None:
+                return None
+            subs.append(cmd[i + 2:j])  # process substitution; also parsed in place, as before
+            out.append(c)
+            i, boundary = i + 1, True
         elif c in "'\"":
             j = i + 1
             while j < n and cmd[j] != c:
-                j += 2 if c == '"' and cmd[j] == "\\" else 1
+                if c == "'":
+                    j += 1
+                elif cmd[j] == "\\":
+                    j += 2
+                elif cmd.startswith("$(", j) and not cmd.startswith("$((", j):  # "$(echo ")")" stays one word
+                    k = _matching_paren(cmd, j + 2)
+                    if k is None:
+                        return None
+                    j = k + 1
+                elif cmd[j] == "`":
+                    k = j + 1
+                    while k < n and cmd[k] != "`":
+                        k += 2 if cmd[k] == "\\" else 1
+                    j = k + 1
+                else:
+                    j += 1
             if j >= n:
                 return None
             body = cmd[i + 1:j]
             if c == '"':
                 body = body.replace("\\\n", "")
+                if not _expansions(body, subs):
+                    return None
             out.append(c + _encode(body) + c)
             i, boundary = j + 1, False
         elif cmd.startswith("<<<", i):
@@ -233,7 +331,7 @@ def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
             j = i + (3 if strip else 2)
             found = _heredoc_delimiter(cmd, j)
             if found:
-                heredocs.append((found[0], strip))
+                heredocs.append((found[0], strip, found[2]))
                 out.append("<< " + HEREDOC_MARK + _encode(found[0]) + " ")  # body taken out below; `-` no longer matters
                 i, boundary = found[1], False
             else:
@@ -242,7 +340,7 @@ def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
         elif c == "\n":
             out.append(c)
             i, boundary = i + 1, True
-            for delim, strip in heredocs:  # the bodies start after this newline, one after another
+            for delim, strip, quoted in heredocs:  # the bodies start after this newline, one after another
                 lines = []
                 while True:
                     if i >= n:
@@ -255,13 +353,15 @@ def _prepare_command(cmd: str) -> tuple[str, list[str]] | None:
                         break
                     lines.append(line)
                 bodies.append("\n".join(lines))
+                if not quoted and not _expansions(bodies[-1], subs):  # unquoted delimiter: the body is expanded
+                    return None
             heredocs = []
         else:
             out.append(c)
             i, boundary = i + 1, c in COMMENT_AFTER
     if heredocs:
         return None
-    return "".join(out), bodies
+    return "".join(out), bodies, subs
 
 
 def _split_operators(tok: str) -> list[str]:
@@ -295,7 +395,7 @@ def split_segments(cmd: str):
     while i < len(tokens):
         tok = tokens[i]
         if tok in SEPARATORS:
-            if cur or writes:
+            if cur or writes or docs:
                 segments.append({"argv": cur, "writes": writes, "targets": targets, "heredocs": docs, "prev": prev,
                                  "next": tok})
                 prev = tok
@@ -317,10 +417,19 @@ def split_segments(cmd: str):
         else:
             cur.append(tok.translate(_DECODE))
         i += 1
-    if cur or writes:
+    if cur or writes or docs:
         segments.append({"argv": cur, "writes": writes, "targets": targets, "heredocs": docs, "prev": prev,
                          "next": None})
     return segments
+
+
+def substitutions(cmd: str) -> list[str] | None:
+    """The command text of every `$(…)`, backtick and `<(…)` / `>(…)` that bash would run for cmd: unquoted, in
+    double quotes, in `${…}`, in `$((…))`, or in a here-document whose delimiter is unquoted; not in single quotes
+    or a quoted-delimiter here-document, where they are text (found by independent review). None when cmd cannot
+    be parsed."""
+    prepared = _prepare_command(cmd)
+    return prepared[2] if prepared else None
 
 
 def heredoc_bodies(cmd: str) -> list[str]:
@@ -539,9 +648,13 @@ def _shell_invocation(args: list[str]) -> tuple[str, str | None]:
         break
     if has_c:
         return "c", args[i] if i < len(args) else ""
-    if has_s or i >= len(args):
+    if has_s or i >= len(args) or _is_stdin_path(args[i]):
         return "stdin", None  # -s: commands come from stdin, operands are positional parameters (independent review)
     return "script", args[i]
+
+
+def _is_stdin_path(path: str) -> bool:
+    return path in ("/dev/stdin", "/proc/self/fd/0", "-") or path.startswith("/dev/fd/")
 
 
 def _shell_command_arg(args: list[str]):
@@ -558,8 +671,14 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         return None
     name, args = os.path.basename(argv[0]), argv[1:]
     words = _words(args)
-    if name == "eval" and depth < 3:
-        return command_sensitive(" ".join(args), cwd, depth + 1)
+    if "$" in argv[0] or "`" in argv[0]:
+        return "a command whose name comes from a variable (it cannot be checked)"
+    if name == "eval":
+        if any("$" in a or "`" in a for a in args):
+            return "eval of a variable (it cannot be checked)"
+        return command_sensitive(" ".join(args), cwd, depth + 1) if depth < 3 else "a deeply nested eval"
+    if name == "trap" and args and not args[0].startswith("-") and depth < 3:
+        return command_sensitive(args[0], cwd, depth + 1)
     if name in SHELLS:
         kind, value = _shell_invocation(args)
         if kind == "stdin" or (kind == "c" and value == ""):
@@ -568,6 +687,8 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
             return command_sensitive(value, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
         return _script_sensitive(value, cwd, depth)
     if name in ("source", ".") and words:
+        if _is_stdin_path(words[0]):
+            return "commands piped into a shell (they cannot be checked)"
         return _script_sensitive(words[0], cwd, depth, sourced=True)
     if name == "claude":
         return "a nested Claude Code session"
@@ -584,7 +705,9 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         if found:
             return found
     if name == "xargs":
-        rest = _xargs_command(args)
+        rest = unwrap_run(_xargs_command(args))
+        if rest and os.path.basename(rest[0]) in SHELLS | {"eval"}:
+            return "commands built by xargs for a shell (they cannot be checked)"
         return segment_sensitive(rest, cwd, depth + 1) if rest and depth < 3 else None
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
@@ -664,46 +787,55 @@ def command_sensitive(cmd: str, cwd: str, depth: int = 0) -> str | None:
 
 
 # Programs that can create or replace a file other than through a shell redirect.
-FILE_WRITERS = {"tee", "cp", "mv", "install", "ln", "dd", "wget", "tar", "unzip", "patch", "rsync", "scp"}
+FILE_WRITERS = {"wget", "tar", "unzip", "patch", "rsync", "scp"}
+
+
+GIT_TREE_WRITERS = {"checkout", "restore", "reset", "apply", "am", "pull", "merge", "stash", "switch", "clone",
+                    "cherry-pick", "revert", "rebase", "mv", "worktree", "submodule"}
+IN_PLACE_RE = re.compile(r"^-[A-Za-z0-9]*i|^--in-place")  # sed -i/-ri/-Ei/--in-place, perl -i/-pi/-0pi
 
 
 def _written_and_run(segs: list[dict]) -> bool:
-    """One command both writes a file and runs a script of that name (`cat > d.sh <<EOF … EOF; bash d.sh`,
-    `curl -o d.sh URL && bash d.sh`). The gate reads a script when it runs, so one created in the same command
-    cannot be checked first (found by independent review). Names are compared by basename; a writer whose
-    targets are unknown (wget, tar, git checkout …) counts as writing every name."""
-    written, everything, runs = set(), False, set()
+    """One command writes a file and later runs a script of that name (`cat > d.sh <<EOF … EOF; bash d.sh`,
+    `curl -o d.sh URL && bash d.sh`, `sed -ri … d.sh; bash d.sh`). The gate reads a script when it runs, so one
+    created or changed earlier in the same command cannot be checked first (found by independent review). Names
+    are compared by basename. A writer whose targets are unknown (wget, tar, curl -O, git checkout …) counts as
+    writing every relative path."""
+    written, everything = set(), False
     for s in segs:
-        written.update(os.path.basename(t) for t in s.get("targets", []))
         argv = unwrap_run(s["argv"])
-        if not argv:
-            continue
-        name, args = os.path.basename(argv[0]), argv[1:]
+        name, args = (os.path.basename(argv[0]), argv[1:]) if argv else ("", [])
         words = _words(args)
+        runs = None
+        if name in SHELLS:
+            kind, value = _shell_invocation(args)
+            runs = value if kind == "script" and value else None
+        elif name in ("source", ".") and words:
+            runs = words[0]
+        elif argv and "/" in argv[0]:
+            runs = argv[0]
+        if runs and (os.path.basename(runs) in written or (everything and not os.path.isabs(runs))):
+            return True
+        written.update(os.path.basename(t) for t in s.get("targets", []))
         if name in ("tee", "cp", "mv", "install", "ln"):
             written.update(os.path.basename(w.rstrip("/")) for w in words)
         elif name == "dd":
             written.update(os.path.basename(a[3:]) for a in args if a.startswith("of="))
+        elif name in ("sed", "perl") and any(IN_PLACE_RE.match(a) for a in args):
+            written.update(os.path.basename(w) for w in words)
         elif name == "curl":
             everything |= any(re.match(r"^-[a-zA-Z]*[oO]", a) or a.startswith(("--output", "--remote-name"))
                               for a in args)
-        elif name in FILE_WRITERS or (name in ("sed", "perl") and any(a.startswith("-i") for a in args)) or \
-                (name == "git" and not git_read_only(args)):
+        elif name in FILE_WRITERS or (name == "git" and words[:1] and words[0] in GIT_TREE_WRITERS):
             everything = True
-        if name in SHELLS:
-            kind, value = _shell_invocation(args)
-            if kind == "script" and value:
-                runs.add(os.path.basename(value))
-        elif name in ("source", ".") and words:
-            runs.add(os.path.basename(words[0]))
-        elif "/" in argv[0]:
-            runs.add(name)
-    return bool(runs) and (everything or bool(runs & written))
+    return False
 
 
 # Programs that only read a here-document as data. Any other receiver (a shell, `sudo -s`, `su`, `docker exec … sh`,
 # a `while read; do eval` loop, an interpreter) may run it as commands, so its body is checked.
-HEREDOC_DATA_READERS = ALWAYS_RO | {"git", "gh", "openspec", "tee", "base64", "xxd", "od", "less", "more"}
+HEREDOC_DATA_READERS = ALWAYS_RO | {"git", "gh", "openspec", "tee", "base64", "xxd", "od", "less", "more", ":", "read",
+                                    "mapfile", "readarray", "python", "python3", "node", "ruby", "perl", "php"}
+CONTAINER_RUNNERS = {"docker", "podman", "kubectl", "oc", "nerdctl"}  # read stdin as data unless they exec/run
 
 
 def embedded_sensitive(cmd: str, segs: list[dict], cwd: str, depth: int = 0) -> str | None:
@@ -714,19 +846,30 @@ def embedded_sensitive(cmd: str, segs: list[dict], cwd: str, depth: int = 0) -> 
     if _written_and_run(segs):
         return "a script written and run in the same command (it cannot be checked before it runs; write it first, " \
                "then run it in a separate command)"
+    if depth >= 3:
+        return "deeply nested commands"
+    subs = substitutions(cmd)
+    if subs is None:
+        return "an unclosed command substitution"
+    for body in subs:
+        found = command_sensitive(body, cwd, depth + 1)
+        if found:
+            return f"{found} (in a command substitution)"
     bodies = heredoc_bodies(cmd)
     for s in segs:
         receiver = unwrap_run(s["argv"])
-        if not s.get("heredocs") or (receiver and os.path.basename(receiver[0]) in HEREDOC_DATA_READERS):
+        rname = os.path.basename(receiver[0]) if receiver else ""
+        if not s.get("heredocs") or rname in HEREDOC_DATA_READERS or (
+                rname in CONTAINER_RUNNERS and not set(_words(receiver[1:])) & {"exec", "run", "attach", "debug"}):
             continue
         for k in s["heredocs"]:
-            if depth >= 3:
-                return "a deeply nested here-document"
             body = bodies[k] if k < len(bodies) else ""
-            if split_segments(body) is not None:
-                found = command_sensitive(body, cwd, depth + 1)
-                if found:
-                    return f"{found} (in a here-document)"
+            # a body that is not shell as a whole (an apostrophe in prose) is still checked line by line
+            for part in ([body] if split_segments(body) is not None else body.splitlines()):
+                if split_segments(part) is not None:
+                    found = command_sensitive(part, cwd, depth + 1)
+                    if found:
+                        return f"{found} (in a here-document)"
     return None
 
 
@@ -735,6 +878,11 @@ def _norm_tokens(cmd: str) -> list[str] | None:
         return shlex.split(cmd)
     except ValueError:
         return None
+
+
+def _archives_plan(argv: list[str]) -> bool:
+    argv = unwrap_run(argv)
+    return bool(argv) and os.path.basename(argv[0]) == "openspec" and "archive" in _words(argv[1:])
 
 
 ENV_BUILTINS = {"export", "unset", "source", ".", "declare", "typeset", "local", "readonly", "alias", "eval"}
@@ -870,7 +1018,8 @@ def on_prompt(data: dict) -> None:
             "## Verification (exact commands, in backticks) and, if it needs any, ## Approved Operations (each "
             "sensitive command, such as a deploy, written in full exactly as it will be run, with every flag and "
             "value, in backticks; only those exact commands will be allowed, and any other needs a new approval). Add specs/<capability>/spec.md with ADDED requirements "
-            "and scenarios, and tasks.md with '- [ ]' checkboxes.\n"
+            "and scenarios, and tasks.md with '- [ ]' checkboxes for the implementation and verification steps "
+            "(archive the change only after completion, not as a task).\n"
             f"  3. Run: {gt.task_cli()} request-approval {t['key']}  (it validates the plan and prints the owner's code)\n"
             "  4. Tell the owner, briefly: risk, prerequisites, the missing information you need from them, the "
             "estimate, and the exact /gw-approve line it printed. Then stop. You cannot approve.\n"
@@ -910,7 +1059,8 @@ def on_expansion(data: dict) -> None:
             f"command on its own, not piped ({'; '.join(f'`{v}`' for v in plan.get('verify', []))}); dispatch a "
             "foreground independent review subagent (subagent_type or name containing 'review') whose final response "
             "ends with a REVIEW RESULT block (Verdict: approve|changes-required, Must-fix: N); fix any MUST FIX and "
-            f"re-review; then run: {gt.task_cli()} complete {key}. Editing proposal.md, design.md or specs voids this "
+            f"re-review; then run: {gt.task_cli()} complete {key}; archive the OpenSpec change only after that. "
+            "Editing proposal.md, design.md or specs voids this "
             "approval; ticking or annotating tasks.md does not, but approved tasks cannot be removed."))
     if len(args) != 1 or not gt.KEY_SAFE.match(args[0].upper()):
         emit({"decision": "block", "reason": "Groundwork: usage /gw-cancel <TASK-KEY>"})
@@ -1019,19 +1169,19 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
                      f"(approved: {'; '.join(ops) or 'none'}). Sensitive operations need the owner's approval in the "
                      "plan and run exactly as written, with no extra arguments; to change one, edit the plan and "
                      "request approval again.")
+        if any(_archives_plan(s["argv"]) for s in segs):
+            deny(f"Groundwork task gate: archive the OpenSpec change only after `{gt.task_cli()} complete` succeeds "
+                 f"for {keys}. Archiving moves the approved plan, which voids the approval.")
         label = embedded_sensitive(cmd, segs, data.get("cwd") or root)
         if label:
             deny(f"Groundwork task gate: {label} is not an Approved Operation of {keys}. Sensitive operations need "
                  "the owner's approval in the plan.")
         if any(matches_operation(s["argv"], ops) for s in segs) and (
                 any(_changes_environment(s["argv"]) for s in segs)
-                or FUNCTION_DEF_RE.search((_prepare_command(cmd) or ("", []))[0])):
+                or FUNCTION_DEF_RE.search((_prepare_command(cmd) or ("", [], []))[0])):
             deny("Groundwork task gate: run the Approved Operation on its own. This command also sets or exports "
                  "environment variables, defines a function or sources a file, which can change what the approved "
                  "command acts on (for example its project).")
-        if any(u in cmd for u in UNSAFE_SUBSTRINGS) and re.search(
-                r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
-            deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")
         cdir = str(gt.claude_dir())
         # Any non-read-only command that names the config directory (also `cd ~/.claude && … settings.json`; found by
         # independent review) is denied while a task is gated. A project's own .claude/ files (rules, agents) are not.

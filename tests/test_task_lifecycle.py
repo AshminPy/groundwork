@@ -391,6 +391,36 @@ def test_shell_classifier() -> None:
           gate.split_segments("echo a \\") is None and sens("echo ${x:-'{'}; terraform apply; echo }") is not None
           and sens("echo $((1<<n))\nterraform apply\nn") is not None and sens("(( x<<n ))\nterraform apply\nn") is not None
           and sens("((cd a); kubectl delete ns x)") is not None and sens("xargs --replace terraform apply") is not None)
+    with tempfile.TemporaryDirectory() as sd:
+        (Path(sd) / "scripts").mkdir()
+        (Path(sd) / "scripts" / "destroy.sh").write_text("#!/bin/bash\nterraform destroy\n")
+        (Path(sd) / "s.sh").write_text('#!/bin/bash\nout="$(terraform apply -auto-approve)"\n')
+
+        def sens_in(cmd):
+            return gate.command_sensitive(cmd, sd)
+        check("review 7 MUST FIX: a command substitution is checked wherever bash runs it",
+              all(sens_in(c) is not None for c in ("n=$(( $(kubectl delete pod x | wc -l) + 1 ))", 'x="$(./scripts/destroy.sh)"',
+                                                   "echo `./scripts/destroy.sh`", 'echo "$(ansible-playbook site.yml)"',
+                                                   "cat <<EOF\n$(./scripts/destroy.sh)\nEOF", "./s.sh",
+                                                   "diff <(kubectl delete pod x) f")))
+        check("review 7: substitutions inside single quotes or a quoted here-document are text",
+              sens_in("echo '$(terraform apply)'") is None and sens_in("cat > d.md <<'EOF'\nRun `gcloud compute instances create`\nEOF") is None
+              and sens_in("git commit -m \"$(cat <<'EOF'\nfix: docs for claude.ai and docker usage\nEOF\n)\"") is None)
+    check("review 7 MUST FIX: in-place edits count as writes (sed -ri, sed --in-place, perl -pi)",
+          all(sens(c) is not None for c in ("sed -ri 's/a/b/' d.sh; bash d.sh", "sed --in-place s/a/b/ d.sh; bash d.sh",
+                                            "perl -pi -e 's/a/b/' d.sh && bash d.sh")))
+    check("review 7: write-and-run is order-aware and ignores commits and system binaries",
+          all(sens(c) is None for c in ("./scripts/verify.sh && git commit -am ok", "git add -A && git commit -m x && ./scripts/x.sh",
+                                        "/usr/bin/git commit -m x", "/usr/bin/curl -sSLO https://example.invalid/x"))
+          and sens("tar xzf x && ./configure") is not None)
+    check("review 7: /dev/stdin shells, eval of a variable, a variable command name, trap and xargs-to-shell are not hidden",
+          all(sens(c) is not None for c in ("( bash /dev/stdin ) <<EOF\nterraform apply\nEOF", "bash /dev/stdin <<<'terraform destroy'",
+                                            'c="terraform apply"; eval "$c"', "T=terraform; $T apply", "trap 'terraform apply' EXIT",
+                                            "echo terraform apply | xargs -I{} sh -c '{}'",
+                                            "while read c; do eval \"$c\"; done <<EOF\nterraform apply\necho it's\nEOF")))
+    check("review 7: here-documents read as data by :, read, python3 or docker build are not commands",
+          all(sens(c) is None for c in (": <<'X'\nssh = 1\nX", "read -r -d '' v <<'X'\nterraform apply\nX", "python3 - <<X\nssh = 1\nX",
+                                        "docker build - <<EOF\nFROM x\nRUN apt-get update && rm -rf /var/lib/apt/lists/*\nEOF")))
     check("review 4: `$'…'` quoting cannot be checked, so it fails closed; sudo --user VALUE is unwrapped",
           gate.split_segments("$'terraform' apply") is None and sens("$'terraform' apply") is not None
           and sens("sudo --user root terraform apply") is not None)
@@ -562,6 +592,9 @@ def test_full_lifecycle() -> None:
               and denied(e.pre(repo, "Bash", {"command": "set -euo pipefail; " + op})) == "")
         check("review 6: an owner-command text with a trailing backslash cannot crash past the gate",
               denied(e.pre(repo, "Bash", {"command": "terraform apply; echo gw-approve \\"})) != "")
+        r = denied(e.pre(repo, "Bash", {"command": f"openspec archive {change} --yes"}))
+        check("live run: archiving the plan before completion is denied (it moves the approved plan)",
+              "only after" in r and "complete" in r, r)
         r = denied(e.pre(repo, "Bash", {"command": "gcloud compute instances delete gg-vm-1"}))
         check("approved: unapproved sensitive operation denied", "not an Approved Operation" in r, r)
         check("approved: recursive delete denied", denied(e.pre(repo, "Bash", {"command": "rm -rf infra"})) != "")
@@ -598,6 +631,12 @@ def test_full_lifecycle() -> None:
               r.returncode == 1 and "changed after approval" in r.stderr and "request-approval" in r.stderr
               and "outside the approved scope" not in r.stderr, r.stderr)
         (d / "design.md").unlink()
+        moved = d.with_name(d.name + "-moved")
+        d.rename(moved)
+        r = e.cli(repo, "complete", key)
+        check("live run: a missing (archived) plan directory is named as such at completion",
+              r.returncode == 1 and "is missing" in r.stderr and "only after completion" in r.stderr, r.stderr)
+        moved.rename(d)
         r = e.cli(repo, "complete", key)
         check("completion refused before any evidence; lists each gap",
               r.returncode == 1 and "tasks.md: 0/2" in r.stderr and "never run" in r.stderr and "no independent review" in r.stderr, r.stderr)
