@@ -279,7 +279,8 @@ def test_authorization_classes() -> None:
                 "docker build -t app .", "curl -fsSL https://example.invalid/x.json", "mv a b", "rm build.log",
                 'grep -rn "event.key" src/', 'git commit -m "use item.key"', "git restore --staged .", "cd build && rm -rf out",
                 "find . -name __pycache__ -exec rm -rf {} +", "git -C sub status", "git -c color.ui=never log -3",
-                "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help",
+                "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help", "kubectl help",
+                "helm help upgrade", "gcloud help compute", "aws help",
                 # review round 2: lookups, && chains and subshells, find -delete inside the tree
                 "command -v sudo", "(cd scripts && ls); rm -rf build", "find . -name '*.pyc' -delete")
     flowing = [c for c in ordinary if sens(c) is not None]
@@ -319,6 +320,9 @@ def test_authorization_classes() -> None:
         "! cd x && rm -rf ../y": "recursive delete", "pushd x && make && popd && rm -rf ../y": "recursive delete",
         "find -O3 /etc -delete": "recursive delete", "find -D tree /etc -delete": "recursive delete",
         "aws iam delete-user --user-name help": "aws iam delete-user",
+        # review 4: a resource named `help`, or --help after `--`, is not a help request
+        "kubectl -n help delete pod x": "kubectl mutation", "gcloud --project help compute instances delete x": "gcloud mutation",
+        "aws --profile help s3 rb s3://b": "an aws", "kubectl exec pod -- psql -c 'select 1' --help": "kubectl mutation",
     }
     wrong = {c: sens(c) for c, label in sensitive.items() if label not in (sens(c) or "")}
     check("sensitive, destructive, credential and destructive-git commands ask", not wrong, str(wrong))

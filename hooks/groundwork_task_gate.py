@@ -667,9 +667,9 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
         if rest and os.path.basename(rest[0]) in SHELLS | {"eval"}:
             return "commands built by xargs for a shell (they cannot be checked)"
         return segment_sensitive(raw, cwd, depth + 1, base) if rest and depth < MAX_DEPTH else None
-    if name in HELP_CLIS and (any(a in ("--help", "-help") for a in args) or words[:1] == ["help"]
-                              or (name == "aws" and args[-1:] == ["help"] and not args[-2:-1][0].startswith("-")
-                                  if len(args) >= 2 else name == "aws" and args == ["help"])):
+    own = args[:args.index("--")] if "--" in args else args  # after `--` the words belong to another program
+    if name in HELP_CLIS and (any(a in ("--help", "-help") for a in own) or own[:1] == ["help"]
+                              or (name == "aws" and len(own) >= 2 and own[-1] == "help" and not own[-2].startswith("-"))):
         return None  # these CLIs print help and change nothing (`gcloud compute instances create --help`; live run)
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
