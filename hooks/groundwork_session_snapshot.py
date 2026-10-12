@@ -572,8 +572,8 @@ def build_snapshot(cwd: str) -> str:
     # by independent review (M1/M2): a busy repo's git/OpenSpec facts alone, unrelated to the
     # investigation file's own size, could previously crowd the whole investigation section out.
     lines += investigation_facts(cwd)
-    # Open tasks next, for the same reason: the task in flight and what it waits for (an owner approval, a
-    # verification, a review) must survive the prefix cut. The section bounds itself to MAX_TASK_CHARS and the cap
+    # Open tasks next, for the same reason: the task in flight, its phase and its next step (a plan, an unchecked
+    # task, a verification, a review) must survive the prefix cut. The section bounds itself to MAX_TASK_CHARS and the cap
     # grows by exactly its length, so it never displaces other facts and a repository without tasks is unchanged.
     try:
         task_lines = open_task_lines(cwd, MAX_TASK_CHARS)

@@ -98,10 +98,8 @@ chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/groundwork_telemetry.py \
          "$CLAUDE_DIR"/hooks/groundwork_task_gate.py \
          "$CLAUDE_DIR"/hooks/groundwork_tasks.py
-# Owner-only commands of the task lifecycle gate (openspec/changes/add-task-lifecycle-gate/): /gw-approve and
-# /gw-cancel. Only a person typing them records an approval (the gate reads Claude Code's UserPromptExpansion event).
-mkdir -p "$CLAUDE_DIR/commands"
-cp "$HERE"/commands/gw-*.md "$CLAUDE_DIR/commands/"
+# Earlier builds installed owner commands /gw-approve and /gw-cancel; task tracking no longer uses them.
+rm -f "$CLAUDE_DIR/commands/gw-approve.md" "$CLAUDE_DIR/commands/gw-cancel.md"
 # Health dashboard generator (no server, no LLM): installed beside the playbooks; the configured
 # launchd schedule (default weekly) is applied idempotently — one job, replaced on every install.
 mkdir -p "$CLAUDE_DIR/groundwork/bin" "$CLAUDE_DIR/groundwork/reports"

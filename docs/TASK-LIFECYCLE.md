@@ -1,65 +1,71 @@
-# Task lifecycle gate
+# Task tracking
 
-Groundwork records engineering tasks and enforces their lifecycle with hooks, not instructions. OpenSpec change: [`openspec/changes/add-task-lifecycle-gate/`](../openspec/changes/add-task-lifecycle-gate/).
+Groundwork records engineering tasks, keeps them across sessions and ties completion to evidence. Native OpenSpec stays the workflow: explore, propose, apply, sync and archive work as they always do. OpenSpec change: [`openspec/changes/add-task-lifecycle-gate/`](../openspec/changes/add-task-lifecycle-gate/).
 
 ```
-prompt ──► intake ──► planning ──► awaiting-approval ──► approved ──► complete
-           (hook)     plan in       request-approval       owner types   groundwork task complete
-                      openspec/     checks the plan        /gw-approve   checks the evidence
+prompt ──► intake ──► planning ──► implementing ──► verifying ──► complete ──► archived
+           (hook)     /opsx:propose  /opsx:apply      checks pass   groundwork task complete,
+                                                      + review      or the native archive
 ```
 
 ## What happens
 
-| Step | Who | What Groundwork checks |
+| Step | Who | What Groundwork does |
 |---|---|---|
-| Intake | the prompt hook | A ticket key (`COR-123`) or an action verb that is not a question becomes a task. MATERIAL when cloud, infrastructure, data, security, production or deployment words appear. STANDARD otherwise: tracked, no approval gate. MATERIAL tasks get an OpenSpec change (`openspec new change <key>-<slug>`). |
-| Planning | Claude | Only read-only commands, and edits inside `openspec/changes/<change>/`. |
-| Request approval | Claude runs `groundwork task request-approval <KEY>` | `openspec validate --strict` passes. `tasks.md` has checkboxes. The plan has `## Prerequisites`, `## Risks`, `## Missing Information`, `## Estimate` (a number plus confidence or uncertainty), `## Scope` (paths in backticks), `## Verification` (commands in backticks). It may have `## Approved Operations` (exact sensitive commands). Each Verification and Approved Operations entry must be one exact, simple command: no placeholders, `&&`, pipes or redirection. On success it prints an approval code: a digest of the plan. |
-| Approval | **the owner types** `/gw-approve <KEY> <code>` | The code must match the current plan. Only a typed slash command records it (Claude Code's `UserPromptExpansion` event). Text such as "approve COR-123" in a message does not. Claude cannot run, send or schedule the command. |
-| Execution | Claude | Edits only inside Scope. Sensitive commands only when they equal an Approved Operation exactly, with no extra arguments and no `export`, `eval`, `source` or function definition in the same command: cloud, cluster, Terraform and Helm mutations, recursive deletes, ssh, mutating HTTP, database clients. Archive the OpenSpec change only after completion. Editing the proposal, design or specs voids the approval; ticking or annotating `tasks.md` does not, and approved tasks cannot be removed. After every Bash, agent or MCP call, a git audit reports any change outside Scope. |
-| Completion | Claude runs `groundwork task complete <KEY>` | The plan is unchanged since approval and every task is checked. No out-of-scope change remains. Each Verification command passed on the current working tree, after the last approved operation. It must have run exactly as declared: no extra arguments, not piped, and followed only by `&&`. A foreground review subagent reported `Must-fix: 0` on the current working tree. |
+| Intake | the prompt hook | A ticket key (`COR-123`) or MATERIAL engineering work becomes a task. Questions, slash commands and keyless STANDARD work do not. MATERIAL when cloud, infrastructure, data, security, production or deployment words appear. MATERIAL tasks get a native OpenSpec change (`openspec new change <key>-<slug>`). Claude is told to plan and implement it the native way. |
+| Plan | Claude, with the owner | The native OpenSpec artifacts are the plan. Add a `## Verification` section (in `design.md`, `proposal.md` or `tasks.md`) listing the exact commands that prove the change, one per line in backticks. Revise any artifact at any time. Groundwork reads them fresh on every check. |
+| Implement | Claude | Ordinary edits, builds, tests, commits and pushes run without prompts. Sensitive actions show Claude Code's permission prompt (below). |
+| Evidence | the hook | Records each run of a declared verification command (passed or failed, on which version of the code), each foreground review's `REVIEW RESULT`, and each sensitive operation that ran. |
+| Complete | Claude runs `groundwork task complete <KEY>`, or archives natively | MATERIAL: every task in `tasks.md` is checked, each declared verification passed on the current code after the last sensitive operation, and the latest review reports `Must-fix: 0`. STANDARD: on request. A native archive (`openspec archive`, `/opsx:archive`) completes the task when this evidence is in place. Otherwise it reports what is missing. |
 
-`/gw-cancel <KEY>` (owner only) stops a task gating the repository.
+Phase comes from the native artifacts: **planning** (no `tasks.md` yet), **implementing** (unchecked tasks), **verifying** (all checked), **archived** (moved to `openspec/changes/archive/`).
 
-Which ticket a prompt is for:
-- The first key not yet in the ledger, so `COR-124: follow-up to COR-123 …` registers COR-124.
-- Otherwise the first open key. An open STANDARD task asked to do MATERIAL work is escalated and gated.
-- Otherwise a closed key, which opens a fresh task only when the prompt asks for work (an action verb). The old record is kept as `<KEY>.closed-<time>.json`.
+Evidence follows the code, not the plan:
+- Editing the proposal, design, specs or tasks, syncing specs and archiving never make a passed verification stale.
+- Changing code does.
+- The latest run on the current code decides.
 
-While a task waits on the owner, a reply without a ticket key is treated as input to that task, and Claude is shown that task's state.
+## What asks for authorization
 
-Any tool that runs a shell command (Bash, Monitor) is checked the same way. PowerShell is denied while a task is gated. A nested `claude` session counts as a sensitive command. The scope audit ignores generated caches (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`).
+Groundwork returns Claude Code's native `ask` decision, which shows the usual permission prompt. It does this in every repository, task or no task, for:
+
+- cloud, cluster, Terraform and Helm changes (`gcloud … create`, `kubectl apply`, `terraform apply`, …), database clients, `ssh`, and HTTP requests that send data;
+- recursive deletes of, or outside, the working directory (`rm -rf .`, `rm -rf ~/x`, `rm -rf "$VAR"`). Deletes inside it and in temporary directories do not ask;
+- destructive Git: forced or deleting push, `reset --hard`, `clean -f`, `branch -D`, `stash drop`/`clear`, `checkout .`/`restore .`;
+- credential access: `.env`, SSH keys, cloud credential files, `gh auth`, `aws configure`, `kubectl get secret`, `vault`, and similar;
+- `sudo`/`doas`, commands that cannot be checked (piped into a shell, computed, PowerShell), and edits to Claude Code settings or Groundwork's hooks.
+
+Commands are checked inside wrappers, nested shells, scripts run directly, command substitutions and here-documents. File tools cannot write the task ledger. Pushes to protected branches are still blocked by `block_protected_push.py`.
 
 ## Commands
 
 ```bash
 groundwork task list            # open tasks in this repository (--all: every repository)
-groundwork task show COR-123    # one task: plan, approval, scope, evidence, history, next action
-groundwork task request-approval COR-123
+groundwork task show COR-123    # one task: phase, progress, verification state, review, history
 groundwork task complete COR-123
+groundwork task cancel COR-123
 groundwork task block COR-123 "waiting for the network team"   # or --clear
+groundwork task intake "deploy the cache to production"        # record work the intake missed
 ```
 
-A new session sees the open tasks, their state and their next action in the session snapshot.
+A new session sees each open task as one line: `KEY [phase n/m] title · evidence: … · next: …`.
 
 ## Where state lives
 
 - The plan is the OpenSpec change in the repository.
-- The ledger is `~/.claude/groundwork/tasks/<repo>-<hash>/<KEY>.json`, outside the repository, so a cloned repository cannot ship an approval.
-- One ledger per repository. A separate `CLAUDE_CONFIG_DIR` (for example work and personal) has its own ledgers.
-- Uninstall keeps the ledger.
+- The ledger is `~/.claude/groundwork/tasks/<repo>-<hash>/<KEY>.json`, outside the repository, so a cloned repository cannot ship evidence.
+- There is one ledger per repository. A separate `CLAUDE_CONFIG_DIR` (for example work and personal) has its own ledgers.
+- Uninstall keeps the ledger. Records from the earlier approval-code build are read as open tasks.
 
 ## Switching it off
 
-Set `"GROUNDWORK_TASK_GATE": "off"` in the `env` of `~/.claude/settings.json`. Claude cannot change a hook's environment, and settings edits are denied while a task is gated.
+Set `"GROUNDWORK_TASK_GATE": "off"` in the `env` of `~/.claude/settings.json`. Edits to settings ask first.
 
 ## Limits
 
-- **Not a sandbox.** Code that runs with your user's permissions (for example a Python script Claude writes inside Scope) can write the ledger or call a cloud API that the shell check cannot see. The gate controls Claude's tool calls and audits the repository. It does not contain arbitrary programs.
-- **Programs are not inspected.** Sensitive commands inside shell scripts run directly are found. Sensitive calls inside Python, Node and other programs are not.
-- **Side effects outside the repository** are covered only by the sensitive-command list. The git audit covers changes inside the repository however they were made.
-- **Intake is keyword-based.** It can miss a MATERIAL request or flag a harmless one. The owner can `/gw-cancel` a spurious task.
-- **Read-only allowlist.** Before approval some harmless commands are denied (`sed`, `awk`, running tests, command substitution). Claude can use Read and Grep instead.
-- **Shell checking is conservative after approval.** The gate parses commands the way bash does (quoting, here-documents, substitutions, `cd`, compound commands). What it cannot check is denied, so a few ordinary forms are denied and must be rewritten: `xargs … sh -c '…'`, `sh -c "$(…)"`, `eval "$(…)"`, and a script written and run in the same command. A command name taken from a computed variable (`TF=$(command -v terraform); $TF apply`) is not resolved. An Approved Operation matches the typed words only: its working directory and environment are not part of the match, apart from `export`, `eval`, `source` or a function definition in the same command.
-- **Reviews must run in the foreground** and end with a `REVIEW RESULT` block. Background reviews are not captured.
-- **Not runtime-validated:** whether another session's message or a scheduled prompt that begins with `/gw-approve` would expand as a command. Claude is denied creating either.
+- **Headless runs.** In a non-interactive `claude -p` run nobody can answer the prompt, so sensitive actions are denied, and Claude sees the reason. Run them interactively.
+- **Not a sandbox.** Programs such as Python or Node are not inspected. A script Claude writes can call a cloud API that the shell check cannot see. MCP tools are left to Claude Code's own permission rules.
+- **Intake is keyword-based.** It can miss MATERIAL work or flag harmless work. Use `groundwork task intake` or `groundwork task cancel`.
+- **Shell checking is conservative.** What cannot be parsed asks. This includes `xargs … sh -c '…'`, `sh -c "$(…)"`, `eval "$(…)"` and a script written and run in the same command. A command name taken from a computed variable (`TF=$(command -v terraform); $TF apply`) is not resolved.
+- **Reviews must run in the foreground** and end with a `REVIEW RESULT` block. Background reviews and background verification runs are not evidence.
+- **Not verified:** how the `ask` decision behaves under `bypassPermissions` mode.

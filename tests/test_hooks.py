@@ -1284,22 +1284,37 @@ def test_settings_merge() -> None:
         fresh = tmp / "fresh.json"
         r = run_script(MERGE, args=[str(fresh)])
         data = load(fresh)
-        events = ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "UserPromptExpansion")
+        events = ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit")
         cmds = [h["command"] for ev in events for g in data["hooks"][ev] for h in g["hooks"]]
-        check("fresh: eleven hook entries registered (five hook scripts; telemetry three times, task gate five times)",
-              len(cmds) == 11 and sum(1 for c in cmds if "telemetry" in c) == 3 and sum(1 for c in cmds if "task_gate" in c) == 5
-              and any("snapshot" in c for c in cmds), r.stdout)
+        check("fresh: ten hook entries registered (five hook scripts; telemetry three times, task gate four times)",
+              len(cmds) == 10 and sum(1 for c in cmds if "telemetry" in c) == 3 and sum(1 for c in cmds if "task_gate" in c) == 4
+              and any("snapshot" in c for c in cmds) and "UserPromptExpansion" not in data["hooks"], r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))
         tel = [g for ev in ("PostToolUse", "PostToolUseFailure") for g in data["hooks"][ev] if "telemetry" in g["hooks"][0]["command"]]
         check("fresh: telemetry PostToolUse/PostToolUseFailure fire on every tool (empty matcher) with a short timeout",
               len(tel) == 2 and all(g.get("matcher") == "" and g["hooks"][0].get("timeout") == 5 for g in tel),
               json.dumps({ev: data["hooks"][ev] for ev in ("PostToolUse", "PostToolUseFailure")}))
         gate = {ev: g for ev in events for g in data["hooks"][ev] if "task_gate" in g["hooks"][0]["command"]}
-        check("fresh: task gate on PreToolUse/PostToolUse for every tool, PostToolUseFailure for Bash, expansion for the owner commands",
+        check("fresh: task hook on PreToolUse/PostToolUse for every tool, PostToolUseFailure for Bash, and prompt intake",
               gate.get("PreToolUse", {}).get("matcher") == "" and gate.get("PostToolUse", {}).get("matcher") == ""
               and gate.get("PostToolUseFailure", {}).get("matcher") == "Bash"
-              and gate.get("UserPromptExpansion", {}).get("matcher") == "gw-approve|gw-cancel"
               and "matcher" not in gate.get("UserPromptSubmit", {"matcher": 1}), json.dumps(gate))
+
+        # an older install's owner-command entry is removed on merge (and on unmerge), other entries kept
+        old_install = tmp / "old_install.json"
+        gate_cmd = "python3 ~/.claude/hooks/groundwork_task_gate.py"
+        old_install.write_text(json.dumps({"hooks": {"UserPromptExpansion": [
+            {"matcher": "gw-approve|gw-cancel", "hooks": [{"type": "command", "command": gate_cmd}]},
+            {"matcher": "mine", "hooks": [{"type": "command", "command": "my-hook.sh"}]}]}}))
+        run_script(MERGE, args=[str(old_install)])
+        upe = load(old_install)["hooks"].get("UserPromptExpansion", [])
+        check("upgrade: the retired UserPromptExpansion task-gate entry is removed, the user's own entry kept",
+              [h["command"] for g in upe for h in g["hooks"]] == ["my-hook.sh"], json.dumps(upe))
+        old_install.write_text(json.dumps({"hooks": {"UserPromptExpansion": [
+            {"matcher": "gw-approve|gw-cancel", "hooks": [{"type": "command", "command": gate_cmd}]}]}}))
+        run_script(UNMERGE, args=[str(old_install)])
+        check("unmerge: a retired UserPromptExpansion task-gate entry is removed too",
+              "UserPromptExpansion" not in load(old_install).get("hooks", {}), load(old_install))
         check("fresh: no agent-teams env by default", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in data["env"], json.dumps(data["env"]))
         check("fresh: statusLine registered to Groundwork's own script",
               data.get("statusLine", {}).get("command", "").endswith("groundwork_statusline.py"), data.get("statusLine"))

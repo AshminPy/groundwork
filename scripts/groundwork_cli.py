@@ -218,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser(
         "task",
-        help="engineering task ledger: list/show/request-approval/complete (see 'groundwork task --help')",
+        help="engineering task tracking: list/show/complete/cancel/block (see 'groundwork task --help')",
         add_help=False,
     )
     return parser

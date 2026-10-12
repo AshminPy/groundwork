@@ -11,11 +11,11 @@
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py,
-#     groundwork_task_gate.py, groundwork_tasks.py, and the owner commands
-#     ~/.claude/commands/gw-approve.md and gw-cancel.md (the task ledger under
-#     ~/.claude/groundwork/tasks/ is kept — it is your data)
+#     groundwork_task_gate.py, groundwork_tasks.py, and the retired owner commands
+#     ~/.claude/commands/gw-approve.md and gw-cancel.md that earlier builds installed
+#     (the task ledger under ~/.claude/groundwork/tasks/ is kept — it is your data)
 #   - the hook entries (five hook scripts; groundwork_telemetry.py registers three — Stop,
-#     PostToolUse, PostToolUseFailure — and groundwork_task_gate.py five), the deny rules,
+#     PostToolUse, PostToolUseFailure — and groundwork_task_gate.py four), the deny rules,
 #     and the env defaults this repo's install.sh added to settings.json (via
 #     scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"

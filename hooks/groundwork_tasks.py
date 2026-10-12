@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Groundwork task ledger and lifecycle (openspec/changes/add-task-lifecycle-gate/).
+"""Groundwork task tracking around native OpenSpec (openspec/changes/add-task-lifecycle-gate/).
 
 Library for hooks/groundwork_task_gate.py and the `groundwork task` CLI. Not registered as a hook.
 
-One JSON file per task under $CLAUDE_CONFIG_DIR/groundwork/tasks/<repo key>/<KEY>.json, never in the
-repository: a cloned repository must not be able to ship its own approval (design D1). The plan itself is
-the task's OpenSpec change in the repository (source of truth for WHAT/WHY).
-
-Lifecycle of a MATERIAL task: planning -> awaiting-approval -> approved -> complete (or cancelled).
-  - intake():            deterministic classification of a prompt; creates the task and its OpenSpec change
-  - request_approval():  plan gate (openspec validate --strict + Groundwork's required sections) -> code
-  - approve()/cancel():  called ONLY from the UserPromptExpansion hook for a typed /gw-approve, /gw-cancel
-  - complete():          evidence gate (plan unchanged, tasks checked, no out-of-scope change, verification
-                         and a zero-MUST-FIX review on the current working-tree fingerprint)
-STANDARD tasks are tracked for continuity (state "open") and are never gated.
+Native OpenSpec is the development workflow (explore, propose, apply, sync, archive); its change directory is the
+plan and the source of truth. Groundwork adds what OpenSpec does not keep:
+  - intake():    deterministic classification of a prompt; records the task, and for MATERIAL work creates the
+                 OpenSpec change with `openspec new change` (nothing else in the plan is written here)
+  - evidence:    verification runs, review results and sensitive operations, tied to a fingerprint of the code
+  - continuity:  one JSON record per task under $CLAUDE_CONFIG_DIR/groundwork/tasks/<repo key>/, outside the
+                 repository, shown in every new session with phase, progress, evidence and next action
+  - complete():  a MATERIAL task completes on evidence: tasks checked, each declared verification passed on the
+                 current code, and a review with zero MUST FIX
+There is no approval code and no scope gate: plans and implementation can change at any time. Sensitive actions
+ask the user through Claude Code's own permission prompt (groundwork_task_gate.py).
 
 Standard library only. Every git/openspec call has a timeout. CLI: python3 groundwork_tasks.py --help
 """
 import argparse
 import contextlib
-import fnmatch
 import hashlib
 import json
 import os
@@ -38,26 +37,26 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None
 
-SCHEMA = 1
+SCHEMA = 2
 MATERIAL, STANDARD = "MATERIAL", "STANDARD"
-PLANNING, AWAITING, APPROVED, COMPLETE, CANCELLED, OPEN = (
-    "planning", "awaiting-approval", "approved", "complete", "cancelled", "open")
-GATED_STATES = (PLANNING, AWAITING, APPROVED)
-OPEN_STATES = GATED_STATES + (OPEN,)
-OWNER_COMMANDS = ("gw-approve", "gw-cancel")
+OPEN, COMPLETE, CANCELLED = "open", "complete", "cancelled"
+CLOSED_STATES = (COMPLETE, CANCELLED)  # any other state (including schema-1 states) is open
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's well-known empty tree: base for a repo with no commits
 GIT_TIMEOUT = 5
 OPENSPEC_TIMEOUT = 30
 MAX_MISSION = 2000
 MAX_HISTORY = 60
 MAX_EVIDENCE = 30
-MAX_BASELINE = 300
 FINGERPRINT_DIFF_CAP = 20_000_000
-CODE_LEN = 10
 
 CHECKBOX_ANY = re.compile(r"^\s*-\s*\[[ xX]\]", re.MULTILINE)
 CHECKBOX_DONE = re.compile(r"^\s*-\s*\[[xX]\]", re.MULTILINE)
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏  ‪-‮⁦-⁩﻿]")
+
+
+def is_open(task: dict) -> bool:
+    return task.get("state") not in CLOSED_STATES
+
 
 # ---------------------------------------------------------------------------------------------- paths
 
@@ -200,8 +199,8 @@ def load_tasks(root: str) -> list[dict]:
     return out
 
 
-def gated_tasks(root: str) -> list[dict]:
-    return [t for t in load_tasks(root) if t.get("tier") == MATERIAL and t.get("state") in GATED_STATES]
+def open_tasks(root: str) -> list[dict]:
+    return [t for t in load_tasks(root) if is_open(t)]
 
 
 def save_task(root: str, task: dict) -> None:
@@ -265,7 +264,7 @@ RISK_SIGNALS = {
 }
 MATERIAL_CATEGORIES = {"cloud", "infrastructure", "data", "security", "production", "deployment"}
 
-# What the plan must establish, per category (deterministic intake checklist; the model resolves each in the plan).
+# What the plan should settle, per category (deterministic intake checklist; the model resolves each in the plan).
 CHECKLIST = {
     "ticket": ("Ticket content and acceptance criteria (fetch it if a Jira integration is configured; otherwise ask the owner)",),
     "cloud": ("Target cloud project/account and environment (dev, staging or production)", "Region and zone",
@@ -305,7 +304,7 @@ def work_key(text: str, key: str) -> bool:
     `COR-1 - …`). A key elsewhere ("after COR-1 is merged", "depends on COR-2") is a reference."""
     k = re.escape(key)
     return bool(re.match(r"^\W*" + k + r"(?![A-Za-z0-9_-])", text or "") or re.search(
-        r"(?<![A-Za-z0-9_-])" + k + r"\s*(?:[:\u2013\u2014]|-(?=\s))", text or ""))
+        r"(?<![A-Za-z0-9_-])" + k + r"\s*(?:[:–—]|-(?=\s))", text or ""))
 
 
 def classify(text: str) -> dict | None:
@@ -370,26 +369,6 @@ def next_gw_key(root: str) -> str:
     return f"GW-{n + 1}"
 
 
-def _file_digest(path: Path) -> str:
-    try:
-        if path.is_symlink():
-            return "symlink:" + os.readlink(path)
-        if not path.exists():
-            return "deleted"
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        return h.hexdigest()[:16]
-    except Exception:
-        return "unreadable"
-
-
-def _status_paths(root: str) -> list[str]:
-    out = git(root, "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames") or ""
-    return [rec[3:] for rec in out.split("\0") if len(rec) > 3]
-
-
 def ensure_openspec_change(root: str, change: str) -> str:
     """Create the task's OpenSpec change with the OpenSpec CLI (never by hand). Returns a short status."""
     target = Path(root) / "openspec" / "changes" / change
@@ -412,7 +391,7 @@ def ensure_openspec_change(root: str, change: str) -> str:
 
 
 def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
-    """Classify a prompt and register a task when it is engineering work.
+    """Classify a prompt and record a task when it is engineering work. Never blocks anything.
 
     Returns {"action": "created"|"existing", "tasks": [...], "root": root, "openspec": status} or None."""
     root = repo_root(cwd)
@@ -423,40 +402,36 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         return None
     existing = [t for t in (load_task(root, k) for k in find_keys(text or "")) if t]
     is_task = bool(cls) and cls["kind"] == "task"
-    # The prompt's LEADING key decides; other keys are context (found by independent review: "COR-124: follow-up to
-    # COR-123 …" never registered COR-124). Known and open -> its state (escalated when the prompt is now MATERIAL);
-    # known and closed -> a fresh task only when the prompt asks for work (an action verb); unknown -> a new task.
-    # Which key the work is for (found by independent review; follow-up tickets name the old ticket too, in any order):
-    # a new key that starts the prompt or heads a clause; else an open key; else a closed key that starts the prompt
-    # or heads a clause (a fresh task when the prompt asks for work); else any new key ("after COR-1 is merged, deploy
-    # COR-2"); else the first key. A new key next to an open one ("depends on COR-122") is a reference.
+    # Which key the work is for (follow-up tickets name the old ticket too, in any order): a new key that starts the
+    # prompt or heads a clause; else an open key; else a closed key that starts the prompt or heads a clause (a fresh
+    # task when the prompt asks for work); else any new key ("after COR-1 is merged, deploy COR-2"); else the first
+    # key. A new key next to an open one ("depends on COR-122") is a reference.
     primary = None
     if is_task and cls["keys"]:
         known = {k: load_task(root, k) for k in cls["keys"]}
         new = [k for k in cls["keys"] if known[k] is None]
-        is_open = [k for k in cls["keys"] if known[k] and known[k].get("state") not in (COMPLETE, CANCELLED)]
-        closed = [k for k in cls["keys"] if known[k] and k not in is_open]
-        primary = next((k for k in new if work_key(text, k)), None) or next(iter(is_open), None) or \
+        opened = [k for k in cls["keys"] if known[k] and is_open(known[k])]
+        closed = [k for k in cls["keys"] if known[k] and k not in opened]
+        primary = next((k for k in new if work_key(text, k)), None) or next(iter(opened), None) or \
             next((k for k in closed if work_key(text, k)), None) or next(iter(new), None) or cls["keys"][0]
     current = load_task(root, primary) if primary else None
-    if is_task and current and current.get("state") == OPEN and cls["tier"] == MATERIAL and cls.get("action"):
+    if is_task and current and is_open(current) and current.get("tier") == STANDARD and cls["tier"] == MATERIAL \
+            and cls.get("action"):
         return _escalate(root, current, cls, text)
-    if not is_task or (current and (current.get("state") not in (COMPLETE, CANCELLED) or not cls.get("action"))):
+    if not is_task or (current and (is_open(current) or not cls.get("action"))):
         return {"action": "existing", "tasks": existing, "root": root} if existing else None
     if cls["tier"] == STANDARD and not cls["keys"]:
         return None  # untracked STANDARD work stays lightweight; a ticket key is what asks for tracking
     if not cls["keys"]:
-        # A keyless engineering prompt while a task waits on the owner is almost always the owner answering that
-        # task's questions (found by independent review: the reply opened a duplicate MATERIAL task).
-        waiting = [t for t in gated_tasks(root) if t.get("state") in (PLANNING, AWAITING)]
-        if waiting:
-            return {"action": "existing", "tasks": waiting, "root": root, "suppressed": True}
+        # A keyless prompt while a MATERIAL task is open is almost always more of that task (an answer, a revision).
+        active = [t for t in open_tasks(root) if t.get("tier") == MATERIAL]
+        if active:
+            return {"action": "existing", "tasks": active, "root": root, "suppressed": True}
     with locked(root):
         key = primary or next_gw_key(root)
         current = load_task(root, key)
-        if current and current.get("state") in (COMPLETE, CANCELLED):
-            # Follow-up work on a closed ticket is a new task: keep the old record, under a name the ledger never
-            # loads as a task (found by independent review: a closed key stayed ungated forever).
+        if current and not is_open(current):
+            # Follow-up work on a closed ticket is a new task: keep the old record under a name never loaded as a task.
             os.replace(task_file(root, key), ledger_dir(root) / f"{key}.closed-{int(now())}.json")
         elif current:  # created concurrently
             return {"action": "existing", "tasks": [current], "root": root}
@@ -466,9 +441,8 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
             "tier": cls["tier"], "risk": {"level": cls["level"], "categories": cls["categories"],
                                           "signals": cls["signals"]},
             "checklist": cls["checklist"], "repo_root": os.path.abspath(root), "session_id": session_id,
-            "state": PLANNING if cls["tier"] == MATERIAL else OPEN, "created_at": now(),
-            "approval": {}, "plan": {}, "blockers": [],
-            "evidence": {"verifications": [], "reviews": [], "last_op_ts": 0},
+            "state": OPEN, "created_at": now(), "blockers": [],
+            "evidence": {"verifications": [], "reviews": [], "operations": [], "last_op_ts": 0},
         }
         status = None
         if cls["tier"] == MATERIAL:
@@ -477,12 +451,7 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
             task["openspec_intake"] = status
         head = (git(root, "rev-parse", "HEAD") or "").strip()
         task["base_commit"] = head or EMPTY_TREE
-        dirty = _status_paths(root)
-        # Paths beyond the cap are recorded without a digest: excluded from the audit whatever their content
-        # (found by independent review: they became permanent violations).
-        task["baseline"] = {rel: (_file_digest(Path(root) / rel) if i < MAX_BASELINE else None)
-                            for i, rel in enumerate(dirty)}
-        add_history(task, "intake", f"{task['tier']} task registered from a prompt")
+        add_history(task, "intake", f"{task['tier']} task recorded from a prompt")
         save_task(root, task)
     return {"action": "created", "tasks": [task], "root": root, "openspec": status}
 
@@ -495,13 +464,12 @@ def _new_change_name(root: str, key: str, title: str) -> str:
 
 
 def _escalate(root: str, task: dict, cls: dict, text: str) -> dict:
-    """An open STANDARD task whose key returns with MATERIAL signals becomes a gated MATERIAL task (found by
-    independent review: 'COR-55: now deploy this to production' stayed ungated)."""
+    """An open STANDARD task whose key returns with MATERIAL signals becomes MATERIAL and gets an OpenSpec change."""
     with locked(root):
         t = load_task(root, task["key"])
-        if not t or t.get("tier") != STANDARD or t.get("state") != OPEN:
+        if not t or t.get("tier") != STANDARD or not is_open(t):
             return {"action": "existing", "tasks": [t] if t else [], "root": root}
-        t.update({"tier": MATERIAL, "state": PLANNING,
+        t.update({"tier": MATERIAL,
                   "risk": {"level": cls["level"], "categories": cls["categories"], "signals": cls["signals"]},
                   "checklist": [i for i in t.get("checklist", []) if i not in cls["checklist"]] + cls["checklist"]})
         t["mission"] = clip(t.get("mission", "") + "\n" + text, MAX_MISSION)
@@ -513,25 +481,16 @@ def _escalate(root: str, task: dict, cls: dict, text: str) -> dict:
     return {"action": "created", "tasks": [t], "root": root, "openspec": status, "escalated": True}
 
 
-# ---------------------------------------------------------------------------------------------- plan
+# ---------------------------------------------------------------------------------------------- plan (native OpenSpec)
 
-REQUIRED_SECTIONS = ("prerequisites", "risks", "missing information", "estimate", "scope", "verification")
-SECTION_ALIASES = {
-    "prerequisites": ("prerequisites", "prerequisite", "prerequisites and dependencies", "dependencies and prerequisites"),
-    "risks": ("risks", "risk", "risk assessment", "risks and mitigations"),
-    "missing information": ("missing information", "open questions", "missing info", "unknowns"),
-    "estimate": ("estimate", "effort estimate", "estimation", "effort"),
-    "scope": ("scope", "approved scope"),
-    "verification": ("verification", "verification commands"),
-    "approved operations": ("approved operations",),
-}
+# The one Groundwork convention in the plan: a "## Verification" section (in proposal.md, design.md or tasks.md)
+# listing the exact commands that prove the change works. Evidence is matched against them.
+SECTION_ALIASES = {"verification": ("verification", "verification commands", "verify", "how to verify")}
 HEADING = re.compile(r"^(#{2,3})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 BACKTICK = re.compile(r"`([^`\n]+)`")
 # `<name>` / `{zone}` placeholders: a command containing one can never be run as written, so evidence could never
-# match it (found in the live acceptance run: a plan declared `gcloud compute instances describe <name> --zone <zone>`).
+# match it (found in the live acceptance run).
 PLACEHOLDER = re.compile(r"<[A-Za-z_][^<>\s]*>|\{[A-Za-z_][^{}\s]*\}")
-# A Verification or Approved Operations entry must be ONE simple command: evidence is matched against a single command
-# exactly as declared (found by independent review: `make lint && pytest` was approved but could never be recorded).
 SHELL_OPERATOR_CHARS = "();<>|&"
 
 
@@ -556,22 +515,6 @@ def plan_sections(text: str) -> dict:
     return found
 
 
-def change_dir(root: str, task: dict) -> Path:
-    return Path(root) / "openspec" / "changes" / task.get("change", "")
-
-
-def plan_rel(task: dict) -> str:
-    return f"openspec/changes/{task.get('change', '')}"
-
-
-def _bad_scope(pattern: str) -> str | None:
-    if pattern.startswith(("/", "~")) or ".." in pattern.split("/"):
-        return "must be a repository-relative path"
-    if set(pattern) <= set("*/.") or pattern == "**/*":
-        return "matches the whole repository; name specific paths"
-    return None
-
-
 def _simple_command(cmd: str) -> bool:
     """One simple command: no unquoted shell operator (&& || ; | & < > parentheses), no command substitution, no
     comment, balanced quotes. Quoted text such as --format='value(status)' is fine."""
@@ -588,137 +531,65 @@ def _simple_command(cmd: str) -> bool:
         not any(t.startswith("#") for t in tokens)
 
 
+def change_dir(root: str, task: dict) -> Path:
+    """The task's OpenSpec change directory; after a native `openspec archive` it is the archived copy."""
+    name = task.get("change", "")
+    live = Path(root) / "openspec" / "changes" / name
+    if not name or live.is_dir():
+        return live
+    archived = sorted((Path(root) / "openspec" / "changes" / "archive").glob(f"????-??-??-{name}"))
+    return archived[-1] if archived else live
+
+
+def is_archived(root: str, task: dict) -> bool:
+    return bool(task.get("change")) and change_dir(root, task).parent.name == "archive"
+
+
+def plan_rel(root: str, task: dict) -> str:
+    return change_dir(root, task).relative_to(root).as_posix()
+
+
 def _md(path: Path) -> str:
     return path.read_text(errors="replace") if path.is_file() and not path.is_symlink() else ""
 
 
 def read_plan(root: str, task: dict) -> dict:
-    """Parse the task's plan. Returns scope, verify, operations, task counts, open questions, problems."""
+    """What tracking needs from the native OpenSpec change: task progress and the declared verification commands,
+    read fresh every time, so the plan can be revised whenever the user wants."""
     d = change_dir(root, task)
-    sections = plan_sections(_md(d / "proposal.md") + "\n" + _md(d / "design.md"))
-    problems = []
-    if not task.get("change") or not d.is_dir():
-        problems.append(f"the OpenSpec change {plan_rel(task)}/ does not exist (create it: openspec new change {task.get('change')})")
-    for name in REQUIRED_SECTIONS:
-        if not sections.get(name, "").strip():
-            problems.append(f"plan section '## {name.title()}' is missing or empty (proposal.md or design.md)")
-    est = sections.get("estimate", "")
-    if est and not (re.search(r"\d", est) and re.search(r"confiden|uncertain", est, re.IGNORECASE)):
-        problems.append("'## Estimate' needs a number (or range) and a stated confidence or uncertainty")
-    scope, verify, ops = [], [], []
-    for pat in BACKTICK.findall(sections.get("scope", "")):
-        pat = pat.strip()
-        pat = pat[2:] if pat.startswith("./") else pat
-        why = _bad_scope(pat)
-        if why:
-            problems.append(f"scope pattern `{pat}` {why}")
-        elif pat not in scope:
-            scope.append(pat)
-    if sections.get("scope") and not scope and not any("scope pattern" in p for p in problems):
-        problems.append("'## Scope' must list at least one path pattern in backticks, e.g. `infra/vm/**`")
-    for section, found in (("verification", verify), ("approved operations", ops)):
-        for cmd in BACKTICK.findall(sections.get(section, "")):
-            cmd = " ".join(cmd.split())
-            if PLACEHOLDER.search(cmd):
-                problems.append(f"'## {section.title()}' command `{cmd}` contains a placeholder; write the exact "
-                                "command that will be run (evidence is matched against it)")
-            elif not _simple_command(cmd):
-                problems.append(f"'## {section.title()}' entry `{cmd}` must be one simple command (no &&, ||, ;, |, "
-                                "&, redirection, command substitution, comment or unbalanced quote); list each "
-                                "command as its own entry")
-            elif len(cmd) >= 3 and cmd not in found:
-                found.append(cmd)
-    if sections.get("verification") and not verify and not any("Verification" in p for p in problems):
-        problems.append("'## Verification' must list at least one exact command in backticks")
     tasks_text = _md(d / "tasks.md")
-    total, done = len(CHECKBOX_ANY.findall(tasks_text)), len(CHECKBOX_DONE.findall(tasks_text))
-    if total == 0:
-        problems.append("tasks.md has no '- [ ]' task checkboxes")
-    open_questions = [ln.strip().lstrip("-* \t") for ln in sections.get("missing information", "").splitlines()
-                      if ln.strip().startswith(("-", "*")) and not re.search(r"\b(none|resolved|answered)\b", ln, re.I)]
-    return {"scope": scope, "verify": verify, "operations": ops, "tasks_total": total, "tasks_done": done,
-            "open_questions": open_questions[:12], "problems": problems}
+    sections = plan_sections(_md(d / "proposal.md") + "\n" + _md(d / "design.md") + "\n" + tasks_text)
+    verify, problems = [], []
+    for cmd in BACKTICK.findall(sections.get("verification", "")):
+        cmd = " ".join(cmd.split())
+        if PLACEHOLDER.search(cmd):
+            problems.append(f"verification `{cmd}` contains a placeholder; write the exact command that will be run")
+        elif not _simple_command(cmd):
+            problems.append(f"verification `{cmd}` must be one simple command (no &&, ||, ;, |, redirection or "
+                            "command substitution); list each command as its own entry")
+        elif len(cmd) >= 3 and cmd not in verify:
+            verify.append(cmd)
+    return {"exists": bool(task.get("change")) and d.is_dir(), "verify": verify, "problems": problems,
+            "tasks_total": len(CHECKBOX_ANY.findall(tasks_text)), "tasks_done": len(CHECKBOX_DONE.findall(tasks_text))}
 
 
-def plan_digest(root: str, task: dict) -> str | None:
-    """sha256 over proposal.md, design.md and specs/**/*.md — where Scope, Verification and Approved Operations live
-    (design D3). tasks.md is the progress checklist and is excluded: ticking or annotating it during execution voided
-    the approval in the live acceptance run. Removing approved tasks is refused at completion instead."""
-    d = change_dir(root, task)
-    if not task.get("change") or not d.is_dir():
-        return None
-    files = [d / n for n in ("proposal.md", "design.md") if (d / n).is_file()]
-    if (d / "specs").is_dir():
-        files += sorted(p for p in (d / "specs").rglob("*.md") if p.is_file())
-    h = hashlib.sha256()
-    for p in files:
-        try:
-            content = p.read_bytes().replace(b"\r\n", b"\n")
-        except Exception:
-            content = b"<unreadable>"
-        h.update(p.relative_to(d).as_posix().encode() + b"\0" + content + b"\0")
-    return h.hexdigest()[:CODE_LEN]
+def phase(root: str, task: dict, plan: dict | None = None) -> str:
+    """planning -> implementing -> verifying (or archived) -> complete, read from the native OpenSpec artifacts."""
+    if not is_open(task):
+        return task.get("state", "")
+    if task.get("tier") != MATERIAL:
+        return "in progress"
+    plan = plan or read_plan(root, task)
+    if not plan["exists"] or plan["tasks_total"] == 0:
+        return "planning"  # as in native OpenSpec, implementation starts from tasks.md
+    if plan["tasks_done"] < plan["tasks_total"]:
+        return "implementing"
+    return "archived" if is_archived(root, task) else "verifying"
 
 
-def approval_valid(root: str, task: dict) -> bool:
-    code = (task.get("approval") or {}).get("approved_code")
-    return task.get("state") == APPROVED and bool(code) and plan_digest(root, task) == code
+# ---------------------------------------------------------------------------------------------- evidence
 
-
-def openspec_validate(root: str, change: str) -> tuple[bool, str]:
-    exe = shutil.which("openspec")
-    if not exe:
-        return False, "the openspec CLI is not on PATH, so the plan cannot be validated"
-    try:
-        r = subprocess.run([exe, "validate", change, "--strict", "--no-interactive"], cwd=root, capture_output=True,
-                           text=True, timeout=OPENSPEC_TIMEOUT, stdin=subprocess.DEVNULL)
-    except Exception as exc:
-        return False, f"openspec validate failed to run: {clip(exc, 160)}"
-    return r.returncode == 0, clip((r.stdout + "\n" + r.stderr).strip(), 600)
-
-
-# ---------------------------------------------------------------------------------------------- scope audit
-
-
-def path_matches(rel: str, pattern: str) -> bool:
-    """`dir/**` and `dir/` match everything below dir; otherwise fnmatch, where * also crosses '/'."""
-    if pattern.endswith("/**"):
-        prefix = pattern[:-3]
-        return rel == prefix or rel.startswith(prefix + "/")
-    if pattern.endswith("/"):
-        return rel.startswith(pattern)
-    return rel == pattern or fnmatch.fnmatchcase(rel, pattern)
-
-
-def rel_path(root: str, path) -> str | None:
-    """Repository-relative POSIX path of `path` (symlinks resolved), or None when it is outside the repository."""
-    real_root = os.path.realpath(root)
-    p = os.path.realpath(path if os.path.isabs(str(path)) else os.path.join(root, str(path)))
-    if p == real_root:
-        return ""
-    if not p.startswith(real_root + os.sep):
-        return None
-    return Path(os.path.relpath(p, real_root)).as_posix()
-
-
-def in_plan_dir(rel: str, tasks: list[dict]) -> bool:
-    for t in tasks:
-        pr = plan_rel(t)
-        if t.get("change") and (rel == pr or rel.startswith(pr + "/")):
-            return True
-    return False
-
-
-def allowed_rel(root: str, rel: str, tasks: list[dict]) -> bool:
-    if in_plan_dir(rel, tasks):
-        return True
-    return any(approval_valid(root, t) and any(path_matches(rel, pat) for pat in t.get("plan", {}).get("scope", []))
-               for t in tasks)
-
-
-# Generated caches that running the verification itself creates. Never a change anyone reviews, and counting them made
-# every Python test run an "unauthorized change" in a repository without a .gitignore (found in the live acceptance
-# run). Matched by whole path segment only.
+# Generated caches that running the verification itself creates; never part of the fingerprint.
 GENERATED_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 
 
@@ -726,233 +597,27 @@ def _generated(rel: str) -> bool:
     return any(part in GENERATED_CACHE_DIRS for part in rel.split("/")[:-1])
 
 
-def changed_paths(root: str, task: dict) -> list[str]:
-    """Paths changed since intake (committed, staged, unstaged, untracked), excluding paths that were already
-    dirty at intake and are byte-identical now, and generated caches (GENERATED_CACHE_DIRS)."""
-    base = task.get("base_commit") or EMPTY_TREE
-    out = git(root, "diff", "--name-only", "-z", "--no-renames", base, "--")
-    if out is None:
-        out = git(root, "diff", "--name-only", "-z", "--no-renames", "HEAD", "--") or ""
-    paths = {p for p in out.split("\0") if p}
-    paths |= {p for p in (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0") if p}
-    baseline = task.get("baseline") or {}
-    return [rel for rel in sorted(paths) if not _generated(rel)
-            and not (rel in baseline and baseline[rel] in (None, _file_digest(Path(root) / rel)))]
-
-
-def scope_violations(root: str, tasks: list[dict] | None = None) -> list[str]:
-    tasks = gated_tasks(root) if tasks is None else tasks
-    bad = set()
-    for t in tasks:
-        bad.update(rel for rel in changed_paths(root, t) if not allowed_rel(root, rel, tasks))
-    return sorted(bad)
-
-
 def fingerprint(root: str, task: dict) -> str:
-    """Hash of the working tree's changes since intake, excluding the task's own plan directory (design D5)."""
+    """Hash of the code's changes since intake. openspec/ is excluded: revising the plan, syncing specs or archiving
+    the change never makes verification evidence stale; any other change does, whichever tool made it."""
     base = task.get("base_commit") or EMPTY_TREE
-    excl = f":(exclude){plan_rel(task)}"
+    excl = ":(exclude)openspec"
     diff = git_bytes(root, "diff", "--binary", "--no-renames", base, "--", ".", excl, timeout=15)
     if diff is None:
         diff = git_bytes(root, "diff", "--binary", "--no-renames", "HEAD", "--", ".", excl, timeout=15)
     if diff is None:
-        # Never a constant: an unreadable tree must not let earlier evidence match (found by independent review).
-        return "unavailable-" + os.urandom(8).hex()
+        return "unavailable-" + os.urandom(8).hex()  # never a constant: an unreadable tree must not match old evidence
     elif len(diff) > FINGERPRINT_DIFF_CAP:
         diff = (git_bytes(root, "diff", "--stat", base, "--", ".", excl) or b"") + b"<large>"
     h = hashlib.sha256(diff + b"\0")
-    pr = plan_rel(task)
     untracked = (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0")
-    for rel in sorted(p for p in untracked if p and not _generated(p) and not (p == pr or p.startswith(pr + "/"))):
+    for rel in sorted(p for p in untracked if p and not _generated(p) and not p.startswith("openspec/")):
         try:
             st = os.lstat(os.path.join(root, rel))
             h.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
         except OSError:
             h.update(f"{rel}\0gone\0".encode())
     return h.hexdigest()[:16]
-
-
-# ---------------------------------------------------------------------------------------------- transitions
-
-
-def request_approval(root: str, key: str) -> tuple[bool, str]:
-    task = load_task(root, key)
-    if not task:
-        return False, f"no task {key} in this repository's ledger"
-    if task.get("tier") != MATERIAL:
-        return False, f"{key} is {task.get('tier')}: no owner approval is needed"
-    if task.get("state") not in GATED_STATES:
-        return False, f"{key} is {task.get('state')}"
-    if task.get("state") == APPROVED and approval_valid(root, task):
-        return False, f"{key} is already approved and its plan is unchanged; nothing to request"
-    plan = read_plan(root, task)
-    problems = list(plan["problems"])
-    if task.get("change") and change_dir(root, task).is_dir():
-        ok, out = openspec_validate(root, task["change"])
-        if not ok:
-            problems.append("openspec validate --strict failed: " + out)
-    if problems:
-        update_task(root, key, lambda t: add_history(t, "approval-refused", f"{len(problems)} plan problem(s)"))
-        return False, f"Approval not requested for {key}; fix the plan first:\n" + "\n".join(f"  - {p}" for p in problems)
-    code = plan_digest(root, task)
-
-    def apply(t):
-        t["plan"] = {k: plan[k] for k in ("scope", "verify", "operations", "tasks_total", "open_questions")}
-        t["approval"] = {"code": code, "requested_at": now()}
-        t["state"] = AWAITING
-        add_history(t, "approval-requested", f"plan code {code}")
-    update_task(root, key, apply)
-    task = load_task(root, key)
-    lines = [f"Approval requested for {key} ({task['tier']}, risk {task['risk']['level']}): {task['title']}",
-             f"  plan:      {plan_rel(task)}/ ({plan['tasks_total']} tasks)",
-             f"  scope:     {', '.join(plan['scope'])}",
-             f"  verify:    {'; '.join(plan['verify'])}"]
-    if plan["operations"]:
-        lines.append(f"  approved operations (allowed only exactly as written): {'; '.join(plan['operations'])}")
-    if plan["open_questions"]:
-        lines.append(f"  open questions ({len(plan['open_questions'])}; approving accepts the plan's stated assumptions):")
-        lines += [f"    - {clip(q, 160)}" for q in plan["open_questions"][:8]]
-    lines += ["", f"OWNER ACTION: review the plan, then type   /gw-approve {key} {code}",
-              f"              or cancel the task with     /gw-cancel {key}",
-              "Claude cannot approve. Until the owner approves, Groundwork allows only read-only work and plan edits;"
-              " an edit to proposal.md, design.md or specs changes the code and needs a new request."]
-    return True, "\n".join(lines)
-
-
-def approve(root: str, key: str, code: str, session_id: str = "") -> tuple[bool, str]:
-    """Record the owner's approval. Call ONLY from the UserPromptExpansion hook (design D2)."""
-    task = load_task(root, key)
-    if not task:
-        return False, f"Groundwork: no task {key} in this repository's ledger ({root})."
-    if task.get("state") != AWAITING:
-        return False, f"Groundwork: {key} is '{task.get('state')}', not awaiting approval; nothing was approved."
-    requested = (task.get("approval") or {}).get("code")
-    if plan_digest(root, task) != requested:
-        return False, (f"Groundwork: {key}'s plan changed after approval was requested (code {requested} is stale). "
-                       "Ask Claude to run request-approval again and approve the new code.")
-    if (code or "").strip().lower() != requested:
-        return False, f"Groundwork: approval code does not match {key}'s current plan code; nothing was approved."
-    plan = read_plan(root, task)
-    problems = list(plan["problems"])  # the plan rules may be stricter than when approval was requested
-    requested_total = int((task.get("plan") or {}).get("tasks_total") or 0)
-    if plan["tasks_total"] < requested_total:  # tasks.md is outside the digest (design D3)
-        problems.append(f"tasks.md has {plan['tasks_total']} tasks but the plan had {requested_total} when approval "
-                        "was requested; tasks cannot be removed")
-    if problems:
-        return False, (f"Groundwork: {key}'s plan no longer passes the plan check, so nothing was approved: "
-                       + "; ".join(problems[:3]) + ". Ask Claude to fix the plan and request approval again.")
-
-    def apply(t):
-        t["state"] = APPROVED
-        t["approval"].update({"approved_code": requested, "approved_at": now(), "approved_session": session_id,
-                              "via": "/gw-approve (UserPromptExpansion)"})
-        add_history(t, "approved", f"owner approved plan code {requested}")
-    update_task(root, key, apply)
-    return True, f"Groundwork: owner approved {key} (plan code {requested})."
-
-
-def cancel(root: str, key: str) -> tuple[bool, str]:
-    task = load_task(root, key)
-    if not task:
-        return False, f"Groundwork: no task {key} in this repository's ledger."
-    if task.get("state") in (COMPLETE, CANCELLED):
-        return False, f"Groundwork: {key} is already {task.get('state')}."
-
-    def apply(t):
-        t["state"] = CANCELLED
-        add_history(t, "cancelled", "owner cancelled the task")
-    update_task(root, key, apply)
-    return True, f"Groundwork: owner cancelled {key}; it no longer gates this repository."
-
-
-def completion_problems(root: str, task: dict) -> list[str]:
-    if task.get("tier") != MATERIAL:
-        return []
-    if task.get("state") != APPROVED:
-        return [f"{task['key']} is '{task.get('state')}'; only an approved task can complete"]
-    if not approval_valid(root, task):
-        # Everything else follows from this (the approved Scope no longer applies), so it is the only problem shown.
-        if task.get("change") and not change_dir(root, task).is_dir():
-            return [f"the plan directory {plan_rel(task)}/ is missing (moved or archived?), so the approval no longer "
-                    "applies: restore it unchanged, or recreate the plan and get the owner's new approval. Archive "
-                    "an OpenSpec change only after completion."]
-        return ["the plan (proposal, design or specs) changed after approval, so the approval and its Scope no longer "
-                f"apply: run {task_cli()} request-approval {task['key']} and get the owner's new approval"]
-    problems = []
-    plan = read_plan(root, task)
-    if plan["tasks_total"] == 0 or plan["tasks_done"] < plan["tasks_total"]:
-        problems.append(f"tasks.md: {plan['tasks_done']}/{plan['tasks_total']} tasks checked")
-    approved_total = int((task.get("plan") or {}).get("tasks_total") or 0)
-    if plan["tasks_total"] < approved_total:
-        problems.append(f"tasks.md has {plan['tasks_total']} tasks but the approved plan had {approved_total}; "
-                        "approved tasks cannot be removed")
-    bad = scope_violations(root)
-    if bad:
-        problems.append("changes outside the approved scope: " + ", ".join(bad[:10]))
-    fp = fingerprint(root, task)
-    ev = task.get("evidence") or {}
-    last_op = float(ev.get("last_op_ts") or 0)
-    for cmd in task.get("plan", {}).get("verify", []):
-        runs = [r for r in ev.get("verifications", []) if r.get("cmd") == cmd]
-        good = [r for r in runs if r.get("ok") and r.get("fp") == fp and float(r.get("ts", 0)) >= last_op]
-        if not good:
-            why = "never run" if not runs else ("last run failed" if not runs[-1].get("ok") else
-                                                "not re-run since the working tree or an operation changed")
-            problems.append(f"verification `{cmd}` has no successful run on the current working tree ({why})")
-    current = [r for r in ev.get("reviews", []) if r.get("fp") == fp]
-    # The latest review that reported a result decides; one without a REVIEW RESULT block neither approves nor masks
-    # an earlier result (found by independent review).
-    reported = [r for r in current if r.get("must_fix") is not None]
-    if not current:
-        problems.append("no independent review of the current working tree (dispatch a foreground review subagent "
-                        "whose response ends with a REVIEW RESULT block: Verdict / Must-fix)")
-    elif not reported:
-        problems.append("no review of the current working tree has a parseable REVIEW RESULT block (Verdict / Must-fix)")
-    elif reported[-1]["must_fix"] > 0:
-        problems.append(f"the latest review reported {reported[-1]['must_fix']} MUST FIX finding(s); fix them and get a fresh review")
-    return problems
-
-
-def complete(root: str, key: str) -> tuple[bool, str]:
-    task = load_task(root, key)
-    if not task:
-        return False, f"no task {key} in this repository's ledger"
-    if task.get("state") in (COMPLETE, CANCELLED):
-        return False, f"{key} is already {task.get('state')}"
-    problems = completion_problems(root, task)
-    if problems:
-        update_task(root, key, lambda t: add_history(t, "completion-refused", f"{len(problems)} unmet condition(s)"))
-        return False, f"{key} is NOT complete:\n" + "\n".join(f"  - {p}" for p in problems)
-
-    def apply(t):
-        t["state"] = COMPLETE
-        t["completed_at"] = now()
-        add_history(t, "complete", "evidence gate passed" if t.get("tier") == MATERIAL else "marked complete")
-    update_task(root, key, apply)
-    lines = [f"{key} is COMPLETE ({task.get('tier')})."]
-    if task.get("tier") == MATERIAL:
-        lines += [f"  verified: `{cmd}` passed on the final working tree" for cmd in task.get("plan", {}).get("verify", [])]
-        reviews = (task.get("evidence") or {}).get("reviews", [])
-        if reviews:
-            lines.append(f"  reviewed: {reviews[-1].get('reviewer')} — {reviews[-1].get('verdict') or 'approve'}, 0 MUST FIX")
-        lines.append("  scope:    no change outside the approved scope")
-    return True, "\n".join(lines)
-
-
-def set_blocker(root: str, key: str, reason: str | None) -> tuple[bool, str]:
-    def apply(t):
-        if reason:
-            t.setdefault("blockers", []).append({"ts": now(), "reason": clip(reason, 300)})
-            add_history(t, "blocked", reason)
-        else:
-            t["blockers"] = []
-            add_history(t, "unblocked", "")
-    if update_task(root, key, apply) is None:
-        return False, f"no task {key} in this repository's ledger"
-    return True, f"{key}: blocker {'recorded' if reason else 'cleared'}"
-
-
-# ---------------------------------------------------------------------------------------------- evidence
 
 
 def record_verification(root: str, key: str, cmd: str, ok: bool, detail: str = "") -> None:
@@ -978,6 +643,7 @@ def record_review(root: str, key: str, reviewer: str, result: dict) -> None:
 
 
 def record_operation(root: str, key: str, cmd: str) -> None:
+    """A sensitive operation ran after the user authorized it: verification must run again after it."""
     def apply(t):
         ev = t.setdefault("evidence", {})
         ev["last_op_ts"] = now()
@@ -986,62 +652,173 @@ def record_operation(root: str, key: str, cmd: str) -> None:
     update_task(root, key, apply)
 
 
-# ---------------------------------------------------------------------------------------------- rendering
+def evidence_state(root: str, task: dict, plan: dict | None = None) -> dict:
+    """Each declared verification: passed / failed / stale / not run, on the current code; and the latest review."""
+    plan = plan or read_plan(root, task)
+    ev = task.get("evidence") or {}
+    fp = fingerprint(root, task)
+    last_op = float(ev.get("last_op_ts") or 0)
+    verify = {}
+    for cmd in plan["verify"]:
+        runs = [r for r in ev.get("verifications", []) if r.get("cmd") == cmd]
+        # The latest run on the current code (after the last sensitive operation) decides.
+        current = [r for r in runs if r.get("fp") == fp and float(r.get("ts", 0)) >= last_op]
+        if current:
+            verify[cmd] = "passed" if current[-1].get("ok") else "failed"
+        else:
+            verify[cmd] = "stale" if runs else "not run"
+    # The latest review with a parseable result decides; one without a REVIEW RESULT block neither approves nor
+    # masks an earlier result.
+    current = [r for r in ev.get("reviews", []) if r.get("fp") == fp and r.get("must_fix") is not None]
+    return {"verify": verify, "review": current[-1]["must_fix"] if current else None}
 
 
-def next_action(root: str, task: dict) -> str:
-    key, state = task["key"], task.get("state")
+# ---------------------------------------------------------------------------------------------- transitions
+
+
+def completion_problems(root: str, task: dict) -> list[str]:
+    """What a MATERIAL task still lacks to complete on evidence. STANDARD tasks complete when the user says so."""
     if task.get("tier") != MATERIAL:
-        return f"plan inline, implement, test; then: {task_cli()} complete {key}" if state == OPEN else "none"
-    if state == PLANNING:
-        return (f"write the plan in {plan_rel(task)}/ (proposal.md or design.md with ## Prerequisites, ## Risks, "
-                f"## Missing Information, ## Estimate, ## Scope, ## Verification; tasks.md), then run: "
-                f"{task_cli()} request-approval {key}")
-    if state == AWAITING:
-        return f"owner: review the plan, then type /gw-approve {key} {task['approval'].get('code')} (or /gw-cancel {key})"
-    if state == APPROVED:
-        if not approval_valid(root, task):
-            return f"the plan changed after approval: run {task_cli()} request-approval {key} and get a new approval"
-        problems = completion_problems(root, task)
-        return f"run: {task_cli()} complete {key}" if not problems else "implement within scope; next gap: " + problems[0]
-    return "none"
+        return []
+    plan = read_plan(root, task)
+    problems = []
+    if not plan["exists"]:
+        problems.append(f"no OpenSpec change {plan_rel(root, task)}/ (create it: openspec new change {task.get('change')})")
+    elif plan["tasks_total"] == 0 or plan["tasks_done"] < plan["tasks_total"]:
+        problems.append(f"tasks.md: {plan['tasks_done']}/{plan['tasks_total']} tasks checked")
+    problems += plan["problems"]
+    if plan["exists"] and not plan["verify"] and not plan["problems"]:
+        problems.append("no verification declared: add a `## Verification` section with the exact commands that "
+                        "prove the change (design.md, proposal.md or tasks.md)")
+    state = evidence_state(root, task, plan)
+    for cmd, seen in state["verify"].items():
+        if seen != "passed":
+            why = {"not run": "never run", "failed": "last run failed",
+                   "stale": "not re-run since the code or an operation changed"}[seen]
+            problems.append(f"verification `{cmd}` has no passing run on the current code ({why})")
+    if state["review"] is None:
+        problems.append("no independent review of the current code (a foreground review subagent whose response ends "
+                        "with a REVIEW RESULT block: Verdict / Must-fix)")
+    elif state["review"] > 0:
+        problems.append(f"the latest review reported {state['review']} MUST FIX finding(s); fix them and get a fresh review")
+    return problems
+
+
+def complete(root: str, key: str) -> tuple[bool, str]:
+    task = load_task(root, key)
+    if not task:
+        return False, f"no task {key} in this repository's ledger"
+    if not is_open(task):
+        return False, f"{key} is already {task.get('state')}"
+    problems = completion_problems(root, task)
+    if problems:
+        update_task(root, key, lambda t: add_history(t, "completion-refused", f"{len(problems)} unmet condition(s)"))
+        return False, f"{key} is not complete yet:\n" + "\n".join(f"  - {p}" for p in problems)
+
+    def apply(t):
+        t["state"] = COMPLETE
+        t["completed_at"] = now()
+        add_history(t, "complete", "evidence passed" if t.get("tier") == MATERIAL else "marked complete")
+    update_task(root, key, apply)
+    lines = [f"{key} is complete."]
+    if task.get("tier") == MATERIAL:
+        lines += [f"  verified: `{cmd}` passed on the final code" for cmd in read_plan(root, task)["verify"]]
+        reviews = (task.get("evidence") or {}).get("reviews", [])
+        if reviews:
+            lines.append(f"  reviewed: {reviews[-1].get('reviewer')}, 0 MUST FIX")
+        if not is_archived(root, task):
+            lines.append(f"  next: archive the change natively when ready (openspec archive {task.get('change')})")
+    return True, "\n".join(lines)
+
+
+def cancel(root: str, key: str) -> tuple[bool, str]:
+    task = load_task(root, key)
+    if not task:
+        return False, f"no task {key} in this repository's ledger"
+    if not is_open(task):
+        return False, f"{key} is already {task.get('state')}"
+
+    def apply(t):
+        t["state"] = CANCELLED
+        add_history(t, "cancelled", "cancelled")
+    update_task(root, key, apply)
+    return True, f"{key} cancelled."
+
+
+def set_blocker(root: str, key: str, reason: str | None) -> tuple[bool, str]:
+    def apply(t):
+        if reason:
+            t.setdefault("blockers", []).append({"ts": now(), "reason": clip(reason, 300)})
+            add_history(t, "blocked", reason)
+        else:
+            t["blockers"] = []
+            add_history(t, "unblocked", "")
+    if update_task(root, key, apply) is None:
+        return False, f"no task {key} in this repository's ledger"
+    return True, f"{key}: blocker {'recorded' if reason else 'cleared'}"
+
+
+# ---------------------------------------------------------------------------------------------- status
+
+
+def next_action(root: str, task: dict, plan: dict | None = None) -> str:
+    key = task["key"]
+    if not is_open(task):
+        return "none"
+    if task.get("blockers"):
+        return f"blocked: {clip(task['blockers'][-1].get('reason'), 160)}"
+    if task.get("tier") != MATERIAL:
+        return f"implement and test; then: {task_cli()} complete {key}"
+    plan = plan or read_plan(root, task)
+    ph = phase(root, task, plan)
+    if ph == "planning":
+        return (f"plan it with OpenSpec in {plan_rel(root, task)}/ (proposal, design with a ## Verification section, "
+                "specs, tasks; /opsx:propose), then implement (/opsx:apply)")
+    if ph == "implementing":
+        return f"implement the next unchecked task in {plan_rel(root, task)}/tasks.md (/opsx:apply)"
+    problems = completion_problems(root, task)
+    return f"run: {task_cli()} complete {key}" if not problems else problems[0]
+
+
+def evidence_summary(root: str, task: dict, plan: dict | None = None) -> str:
+    ev = task.get("evidence") or {}
+    if task.get("tier") != MATERIAL or not task.get("change"):
+        return f"{len(ev.get('verifications', []))} check run(s), {len(ev.get('reviews', []))} review(s)"
+    state = evidence_state(root, task, plan)
+    passed = sum(1 for v in state["verify"].values() if v == "passed")
+    review = "none" if state["review"] is None else f"{state['review']} must-fix"
+    return f"verify {passed}/{len(state['verify'])} passed, review {review}"
 
 
 def render(root: str, task: dict, detail: bool = False) -> str:
+    """Task, phase, progress, evidence, next action."""
+    plan = read_plan(root, task) if task.get("change") else None
+    progress = f" · {plan['tasks_done']}/{plan['tasks_total']} tasks" if plan and plan["exists"] else ""
+    lines = [f"{task['key']}  {task.get('title')}",
+             f"  {phase(root, task, plan)}{progress} · evidence: {evidence_summary(root, task, plan)}",
+             f"  next: {next_action(root, task, plan)}"]
+    if not detail:
+        return "\n".join(lines)
     risk = task.get("risk") or {}
-    head = f"{task['key']}  {task.get('tier')}  {task.get('state')}"
-    if task.get("tier") == MATERIAL:
-        head += f"  risk {risk.get('level')} ({', '.join(risk.get('categories', []))})"
-    lines = [head, f"  {task.get('title')}"]
-    if task.get("change"):
-        plan = read_plan(root, task)
-        lines.append(f"  plan:      {plan_rel(task)}/  tasks {plan['tasks_done']}/{plan['tasks_total']}")
-        appr = task.get("approval") or {}
-        if appr.get("approved_at"):
-            valid = ("task " + task.get("state", "")) if task.get("state") != APPROVED else (
-                "valid" if approval_valid(root, task) else "VOID: plan changed since")
-            lines.append(f"  approval:  owner approved code {appr.get('approved_code')} at {iso(appr['approved_at'])} ({valid})")
-        elif appr.get("code"):
-            lines.append(f"  approval:  requested {iso(appr.get('requested_at'))}, code {appr.get('code')}")
-        if task.get("plan", {}).get("scope"):
-            lines.append(f"  scope:     {', '.join(task['plan']['scope'])}")
-        ev = task.get("evidence") or {}
-        for cmd in task.get("plan", {}).get("verify", []):
-            runs = [r for r in ev.get("verifications", []) if r.get("cmd") == cmd]
-            seen = "not run" if not runs else ("passed" if runs[-1]["ok"] else "FAILED") + f" {iso(runs[-1]['ts'])}"
-            lines.append(f"  verify:    `{cmd}` — {seen}")
-        if ev.get("reviews"):
-            r = ev["reviews"][-1]
-            lines.append(f"  review:    {r.get('reviewer')} — must-fix {r.get('must_fix')} at {iso(r.get('ts'))}")
-    for b in task.get("blockers", [])[-3:]:
-        lines.append(f"  blocker:   {b.get('reason')}")
-    if detail and task.get("checklist") and task.get("state") in (PLANNING, AWAITING, OPEN):
-        lines.append("  intake checklist (resolve in the plan):")
+    lines.insert(1, f"  {task.get('tier')}, risk {risk.get('level')}" +
+                 (f" ({', '.join(risk.get('categories', []))})" if risk.get("categories") else ""))
+    if plan:
+        lines.append(f"  plan: {plan_rel(root, task)}/")
+        lines += [f"  verify: `{cmd}` — {seen}" for cmd, seen in evidence_state(root, task, plan)["verify"].items()]
+        lines += [f"  plan problem: {p}" for p in plan["problems"]]
+    ev = task.get("evidence") or {}
+    if ev.get("reviews"):
+        r = ev["reviews"][-1]
+        lines.append(f"  review: {r.get('reviewer')} — must-fix {r.get('must_fix')} at {iso(r.get('ts'))}")
+    if ev.get("operations"):
+        op = ev["operations"][-1]
+        lines.append(f"  last sensitive operation: {op.get('cmd')} at {iso(op.get('ts'))}")
+    if task.get("checklist") and is_open(task):
+        lines.append("  intake checklist (settle each in the plan):")
         lines += [f"    - {c}" for c in task["checklist"]]
-    if detail and task.get("history"):
+    if task.get("history"):
         lines.append("  history:")
         lines += [f"    {iso(h.get('ts'))}  {h.get('event')}  {h.get('detail', '')}" for h in task["history"][-8:]]
-    lines.append(f"  next:      {next_action(root, task)}")
     return "\n".join(lines)
 
 
@@ -1050,19 +827,17 @@ def open_task_lines(cwd: str, limit: int = 700) -> list[str]:
     root = repo_root(cwd)
     if not root:
         return []
-    tasks = [t for t in load_tasks(root) if t.get("state") in OPEN_STATES]
+    tasks = open_tasks(root)
     if not tasks:
         return []
-    # Gated tasks first, newest first within each group: the task waiting on the owner must never be crowded out by
-    # older STANDARD tasks (found by independent review).
-    tasks.sort(key=lambda t: (t.get("state") not in GATED_STATES or t.get("tier") != MATERIAL, -float(t.get("created_at", 0))))
-    lines = [f"open tasks (Groundwork task ledger, enforced by the task gate; details: {task_cli()} show <KEY>):"]
+    tasks.sort(key=lambda t: (t.get("tier") != MATERIAL, -float(t.get("created_at", 0))))
+    lines = [f"open tasks (Groundwork task ledger; details: {task_cli()} show <KEY>):"]
     used = len(lines[0])
     for i, t in enumerate(tasks):
-        row = f"  {t['key']} {t.get('tier')} {t.get('state')} — {clip(t.get('title'), 70)}"
-        if t.get("change"):
-            row += f" | plan {plan_rel(t)}/"
-        row += f" | next: {clip(next_action(root, t), 220)}"
+        plan = read_plan(root, t) if t.get("change") else None
+        progress = f" {plan['tasks_done']}/{plan['tasks_total']}" if plan and plan["exists"] else ""
+        row = (f"  {t['key']} [{phase(root, t, plan)}{progress}] {clip(t.get('title'), 60)} · evidence: "
+               f"{evidence_summary(root, t, plan)} · next: {clip(next_action(root, t, plan), 200)}")
         if used + len(row) > limit:
             lines.append(f"  … {len(tasks) - i} more ({task_cli()} list)")
             break
@@ -1086,20 +861,19 @@ def _all_roots() -> list[str]:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="groundwork task", description="Groundwork task ledger: intake, plan gate, "
-                                "approval state and evidence-gated completion. Approval is not available here: "
-                                "the owner types /gw-approve <KEY> <code> in Claude Code.")
+    p = argparse.ArgumentParser(prog="groundwork task", description="Groundwork task tracking around native "
+                                "OpenSpec: intake, status, evidence and evidence-based completion.")
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("list", help="open tasks in this repository (--all: every repository, every state)")
     s.add_argument("--all", action="store_true")
     sub.add_parser("status", help="same as list")
     s = sub.add_parser("show", help="one task in full")
     s.add_argument("key")
-    s = sub.add_parser("intake", help="register a task from a description (normally done by the prompt hook)")
+    s = sub.add_parser("intake", help="record a task from a description (normally done by the prompt hook)")
     s.add_argument("text", nargs="+")
-    s = sub.add_parser("request-approval", help="check the plan and record the code the owner approves")
+    s = sub.add_parser("complete", help="complete a task (MATERIAL: on evidence)")
     s.add_argument("key")
-    s = sub.add_parser("complete", help="evidence-gated completion")
+    s = sub.add_parser("cancel", help="drop a task")
     s.add_argument("key")
     s = sub.add_parser("block", help="record a blocker (or --clear)")
     s.add_argument("key")
@@ -1126,7 +900,7 @@ def main(argv=None) -> int:
         print("not inside a git repository: tasks are recorded per repository", file=sys.stderr)
         return 2
     if a.cmd in ("list", "status"):
-        tasks = [t for t in load_tasks(root) if t.get("state") in OPEN_STATES]
+        tasks = open_tasks(root)
         print("\n".join(render(root, t) for t in tasks) if tasks else f"no open tasks in {root}")
         return 0
     if a.cmd == "intake":
@@ -1135,24 +909,24 @@ def main(argv=None) -> int:
             print("not recognised as an engineering task (no ticket key or action verb, or phrased as a question)")
             return 1
         for t in res["tasks"]:
-            print(("registered " if res["action"] == "created" else "already recorded ") + t["key"])
+            print(("recorded " if res["action"] == "created" else "already recorded ") + t["key"])
             print(render(root, t, detail=True))
         return 0
     key = a.key.upper()
+    if not KEY_SAFE.match(key):
+        print(f"not a task key: {key}", file=sys.stderr)
+        return 2
     if a.cmd == "show":
-        t = load_task(root, key) if KEY_SAFE.match(key) else None
+        t = load_task(root, key)
         if not t:
             print(f"no task {key} in {root}", file=sys.stderr)
             return 1
         print(render(root, t, detail=True))
         return 0
-    if not KEY_SAFE.match(key):
-        print(f"not a task key: {key}", file=sys.stderr)
-        return 2
-    if a.cmd == "request-approval":
-        ok, msg = request_approval(root, key)
-    elif a.cmd == "complete":
+    if a.cmd == "complete":
         ok, msg = complete(root, key)
+    elif a.cmd == "cancel":
+        ok, msg = cancel(root, key)
     else:
         if not a.clear and not a.reason:
             print("give a reason, or --clear", file=sys.stderr)
