@@ -109,8 +109,9 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 
 | Mechanism | Enforced (hook) or advisory (rule text) |
 |---|---|
-| Tier classification (TRIVIAL/STANDARD/MATERIAL) | Advisory — judgment call, not machine-checked |
-| OpenSpec proposal/spec/design/tasks for MATERIAL work | Advisory — the rule says to, nothing blocks skipping it |
+| Tier classification (TRIVIAL/STANDARD/MATERIAL) | **Enforced floor** for prompts the task intake recognises (a ticket key, or an action verb that is not a question): `hooks/groundwork_task_gate.py` registers the task and sets MATERIAL when cloud, infrastructure, data, security, production or deployment signals appear — keyword-based, so it can miss or over-match ([TASK-LIFECYCLE.md](TASK-LIFECYCLE.md)). Otherwise advisory |
+| OpenSpec proposal/spec/design/tasks for MATERIAL work | **Enforced** for a registered MATERIAL task: implementation is denied until `groundwork task request-approval` accepts the plan (`openspec validate --strict` plus Groundwork's required sections) and the owner types `/gw-approve`. Advisory for MATERIAL work the intake did not recognise |
+| Owner approval before implementation; staying inside the approved scope; evidence-backed completion | **Enforced** by the task gate (PreToolUse per call, a git scope audit after every Bash/Agent/MCP call, an evidence-gated `complete`). Approval is recorded only from Claude Code's `UserPromptExpansion` event for a typed `/gw-approve`. Not a sandbox against a deliberately adversarial same-user process — see [TASK-LIFECYCLE.md](TASK-LIFECYCLE.md) "Limits" |
 | Architecture-quality questions and DECISION records | Advisory |
 | Evidence labels, validation ladder, runtime-validation rule | Advisory |
 | Execution model choice (main / subagent / team) | Advisory; the platform itself gates team spawning on `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and interactivity |

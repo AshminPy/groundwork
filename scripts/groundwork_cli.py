@@ -63,6 +63,9 @@ INSTALLED_STATUSLINE_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_status
 # `copilot` is the same kind of pass-through: every arg after "copilot" is forwarded verbatim to the installed
 # groundwork_copilot.py, which owns terminal resolution, redaction and the (tool-less) model call.
 INSTALLED_COPILOT_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_copilot.py"
+# `task` is the same kind of pass-through to the task ledger (openspec/changes/add-task-lifecycle-gate/). It lives in
+# hooks/ because the task gate hook imports it as a sibling module; one installed copy serves both.
+INSTALLED_TASKS_PY = CLAUDE_DIR / "hooks" / "groundwork_tasks.py"
 
 
 def _read_version() -> str | None:
@@ -155,6 +158,15 @@ def cmd_copilot(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_task(extra_argv: list[str]) -> int:
+    if not INSTALLED_TASKS_PY.exists():
+        print(f"task: {INSTALLED_TASKS_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run hooks/groundwork_tasks.py directly from a repo clone)", file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_TASKS_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -204,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="statusline display settings: config list/get/set/unset (see 'groundwork statusline config --help')",
         add_help=False,
     )
+    sub.add_parser(
+        "task",
+        help="engineering task ledger: list/show/request-approval/complete (see 'groundwork task --help')",
+        add_help=False,
+    )
     return parser
 
 
@@ -225,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_statusline(argv[1:])
     if argv and argv[0] == "copilot":
         return cmd_copilot(argv[1:])
+    if argv and argv[0] == "task":
+        return cmd_task(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

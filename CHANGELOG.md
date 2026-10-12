@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **Task lifecycle gate (M1)**: engineering tasks are now recorded and their lifecycle is enforced by hooks, not
+  instructions (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`, [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md),
+  `openspec/changes/add-task-lifecycle-gate/`).
+  - A prompt with a ticket key or an action verb is registered as a task, deterministically. MATERIAL tasks
+    (cloud, infrastructure, data, security, production or deployment signals) get an OpenSpec change and an
+    intake checklist.
+  - Implementation is denied until `groundwork task request-approval` accepts the plan (`openspec validate --strict`
+    plus Prerequisites, Risks, Missing Information, Estimate, Scope and Verification) and the owner types
+    `/gw-approve <KEY> <code>`. Only that typed command, seen through Claude Code's `UserPromptExpansion` event,
+    records an approval, and the approval is bound to a digest of the plan.
+  - After approval, edits must stay inside the plan's Scope. Sensitive commands need an Approved Operation. A git
+    audit after every Bash, agent or MCP call reports out-of-scope changes.
+  - `groundwork task complete` passes only with verification and a zero-MUST-FIX review on the current working tree.
+  - Open tasks appear in the session snapshot. The ledger lives under `~/.claude/groundwork/tasks/`, per
+    repository.
+  - New hook registrations: UserPromptSubmit, UserPromptExpansion, PreToolUse, PostToolUse, PostToolUseFailure.
+    New owner commands: `/gw-approve`, `/gw-cancel`. Off switch: `GROUNDWORK_TASK_GATE=off`.
+
 ## 2.4.0 — 2026-10-11
 
 - **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on

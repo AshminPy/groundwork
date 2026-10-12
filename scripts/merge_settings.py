@@ -5,11 +5,12 @@ settings file, without touching anything else the user has configured.
 Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwrites
 the file wholesale — only adds/updates the specific keys Groundwork owns:
   - hooks.PreToolUse / hooks.Stop / hooks.SessionStart / hooks.PostToolUse /
-    hooks.PostToolUseFailure: appends Groundwork's six hook entries (four hook
-    scripts; groundwork_telemetry.py is registered three times — Stop for its
-    per-turn record, PostToolUse/PostToolUseFailure for its per-tool-call record,
-    added in the Usage Telemetry change) if not already present (matched by
-    command string, so re-running never duplicates).
+    hooks.PostToolUseFailure / hooks.UserPromptSubmit / hooks.UserPromptExpansion:
+    appends Groundwork's eleven hook entries (five hook scripts;
+    groundwork_telemetry.py is registered three times — Stop for its per-turn
+    record, PostToolUse/PostToolUseFailure for its per-tool-call record — and
+    groundwork_task_gate.py five times, see TASK_GATE_EVENTS) if not already
+    present (matched by command string, so re-running never duplicates).
   - permissions.deny: adds Groundwork's destructive-command deny patterns, skipping
     any already present.
   - env.GATEGUARD_EXEMPT_GLOBS / env.NODE_USE_SYSTEM_CA: set only if the user hasn't
@@ -46,6 +47,17 @@ PUSH_CMD = "python3 ~/.claude/hooks/block_protected_push.py"
 REVIEW_CMD = "python3 ~/.claude/hooks/require_material_review.py"
 SNAPSHOT_CMD = "python3 ~/.claude/hooks/groundwork_session_snapshot.py"
 TELEMETRY_CMD = "python3 ~/.claude/hooks/groundwork_telemetry.py"
+# Task lifecycle gate (openspec/changes/add-task-lifecycle-gate/): one script on five events. PreToolUse/PostToolUse
+# use matcher "" (every tool) so an unknown or new tool cannot slip past the gate; the script exits at once for
+# read-only tools and for repositories with no gated task. UserPromptExpansion fires only for the typed owner commands.
+TASK_GATE_CMD = "python3 ~/.claude/hooks/groundwork_task_gate.py"
+TASK_GATE_EVENTS = (  # (event, matcher, timeout seconds, status message)
+    ("UserPromptSubmit", None, 30, "Groundwork task intake..."),
+    ("UserPromptExpansion", "gw-approve|gw-cancel", 30, "Groundwork owner command..."),
+    ("PreToolUse", "", 10, "Groundwork task gate..."),
+    ("PostToolUse", "", 20, "Groundwork task evidence..."),
+    ("PostToolUseFailure", "Bash", 20, "Groundwork task evidence..."),
+)
 STATUSLINE_CMD = "python3 ~/.claude/groundwork/bin/groundwork_statusline.py"
 STATUSLINE_VALUE = {"type": "command", "command": STATUSLINE_CMD}
 # Built-in Claude Code output style (code.claude.com/docs/en/output-styles) that leads with the
@@ -191,6 +203,12 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
     if not has_command(start, SNAPSHOT_CMD):
         start.append(hook_entry(SNAPSHOT_CMD, "Building Groundwork project snapshot...", timeout=10))
         changed.append("hooks.SessionStart: groundwork_session_snapshot.py")
+
+    for event, matcher, timeout, message in TASK_GATE_EVENTS:
+        groups = hooks.setdefault(event, [])
+        if not has_command(groups, TASK_GATE_CMD):
+            groups.append(hook_entry(TASK_GATE_CMD, message, matcher=matcher, timeout=timeout))
+            changed.append(f"hooks.{event}: groundwork_task_gate.py")
 
     permissions = data.setdefault("permissions", {})
     deny = permissions.setdefault("deny", [])
