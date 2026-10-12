@@ -419,9 +419,15 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
     # The prompt's LEADING key decides; other keys are context (found by independent review: "COR-124: follow-up to
     # COR-123 …" never registered COR-124). Known and open -> its state (escalated when the prompt is now MATERIAL);
     # known and closed -> a fresh task only when the prompt asks for work (an action verb); unknown -> a new task.
-    primary = cls["keys"][0] if is_task and cls["keys"] else None
+    # Which key the work is for: the first key not yet in the ledger (follow-up tickets name the old ticket too, in
+    # any order — found by independent review); else the first open key; else the first closed key.
+    primary = None
+    if is_task and cls["keys"]:
+        known = {k: load_task(root, k) for k in cls["keys"]}
+        primary = next((k for k in cls["keys"] if known[k] is None), None) or \
+            next((k for k in cls["keys"] if known[k].get("state") not in (COMPLETE, CANCELLED)), None) or cls["keys"][0]
     current = load_task(root, primary) if primary else None
-    if is_task and current and current.get("state") in (OPEN,) and cls["tier"] == MATERIAL:
+    if is_task and current and current.get("state") == OPEN and cls["tier"] == MATERIAL and cls.get("action"):
         return _escalate(root, current, cls, text)
     if not is_task or (current and (current.get("state") not in (COMPLETE, CANCELLED) or not cls.get("action"))):
         return {"action": "existing", "tasks": existing, "root": root} if existing else None
@@ -434,7 +440,7 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         if waiting:
             return {"action": "existing", "tasks": waiting, "root": root, "suppressed": True}
     with locked(root):
-        key = cls["keys"][0] if cls["keys"] else next_gw_key(root)
+        key = primary or next_gw_key(root)
         current = load_task(root, key)
         if current and current.get("state") in (COMPLETE, CANCELLED):
             # Follow-up work on a closed ticket is a new task: keep the old record, under a name the ledger never
@@ -442,7 +448,7 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
             os.replace(task_file(root, key), ledger_dir(root) / f"{key}.closed-{int(now())}.json")
         elif current:  # created concurrently
             return {"action": "existing", "tasks": [current], "root": root}
-        title = title_of(text, cls["keys"])
+        title = title_of(text, [key])
         task = {
             "schema": SCHEMA, "key": key, "title": title, "mission": clip(text, MAX_MISSION),
             "tier": cls["tier"], "risk": {"level": cls["level"], "categories": cls["categories"],
@@ -514,7 +520,7 @@ BACKTICK = re.compile(r"`([^`\n]+)`")
 PLACEHOLDER = re.compile(r"<[A-Za-z_][^<>\s]*>|\{[A-Za-z_][^{}\s]*\}")
 # A Verification or Approved Operations entry must be ONE simple command: evidence is matched against a single command
 # exactly as declared (found by independent review: `make lint && pytest` was approved but could never be recorded).
-COMPOUND = re.compile(r"&&|\|\||;|\||[<>]|`|\$\(|\n")
+SHELL_OPERATOR_CHARS = "();<>|&"
 
 
 def _canonical(heading: str) -> str | None:
@@ -554,11 +560,20 @@ def _bad_scope(pattern: str) -> str | None:
     return None
 
 
-def _tokens_ok(cmd: str) -> bool:
+def _simple_command(cmd: str) -> bool:
+    """One simple command: no unquoted shell operator (&& || ; | & < > parentheses), no command substitution, no
+    comment, balanced quotes. Quoted text such as --format='value(status)' is fine."""
+    if "\n" in cmd or "$(" in cmd or "`" in cmd:
+        return False
     try:
-        return bool(shlex.split(cmd))
+        lx = shlex.shlex(cmd, posix=True, punctuation_chars=SHELL_OPERATOR_CHARS)
+        lx.whitespace_split = True
+        lx.commenters = ""
+        tokens = list(lx)
     except ValueError:
         return False
+    return bool(tokens) and not any(set(t) <= set(SHELL_OPERATOR_CHARS) for t in tokens) and \
+        not any(t.startswith("#") for t in tokens)
 
 
 def _md(path: Path) -> str:
@@ -595,7 +610,7 @@ def read_plan(root: str, task: dict) -> dict:
             if PLACEHOLDER.search(cmd):
                 problems.append(f"'## {section.title()}' command `{cmd}` contains a placeholder; write the exact "
                                 "command that will be run (evidence is matched against it)")
-            elif COMPOUND.search(cmd) or cmd.endswith("&") or re.search(r"(^|\s)#", cmd) or not _tokens_ok(cmd):
+            elif not _simple_command(cmd):
                 problems.append(f"'## {section.title()}' entry `{cmd}` must be one simple command (no &&, ||, ;, |, "
                                 "&, redirection, command substitution, comment or unbalanced quote); list each "
                                 "command as its own entry")

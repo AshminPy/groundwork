@@ -19,7 +19,14 @@ prompt ──► intake ──► planning ──► awaiting-approval ──►
 | Execution | Claude | Edits only inside Scope. Sensitive commands only when listed in Approved Operations: cloud, cluster, Terraform and Helm mutations, recursive deletes, ssh, mutating HTTP, database clients. Editing the plan voids the approval. After every Bash, agent or MCP call, a git audit reports any change outside Scope. |
 | Completion | Claude runs `groundwork task complete <KEY>` | The plan is unchanged since approval and every task is checked. No out-of-scope change remains. Each Verification command passed on the current working tree, after the last approved operation. It must have run exactly as declared: no extra arguments, not piped, and followed only by `&&`. A foreground review subagent reported `Must-fix: 0` on the current working tree. |
 
-`/gw-cancel <KEY>` (owner only) stops a task gating the repository. A new prompt for a closed key opens a fresh task. The old record is kept as `<KEY>.closed-<time>.json`. While a task waits on the owner, a reply without a ticket key is treated as input to that task, not as a new task.
+`/gw-cancel <KEY>` (owner only) stops a task gating the repository.
+
+Which ticket a prompt is for:
+- The first key not yet in the ledger, so `COR-124: follow-up to COR-123 …` registers COR-124.
+- Otherwise the first open key. An open STANDARD task asked to do MATERIAL work is escalated and gated.
+- Otherwise a closed key, which opens a fresh task only when the prompt asks for work (an action verb). The old record is kept as `<KEY>.closed-<time>.json`.
+
+While a task waits on the owner, a reply without a ticket key is treated as input to that task, and Claude is shown that task's state.
 
 Any tool that runs a shell command (Bash, Monitor) is checked the same way. PowerShell is denied while a task is gated. A nested `claude` session counts as a sensitive command. The scope audit ignores generated caches (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`).
 

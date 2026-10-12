@@ -112,7 +112,7 @@ The model writes the analysis in the plan (prerequisites, missing information, r
 
 WHY: deterministic checks first. Effort numbers and domain prerequisites need reasoning, and the gate makes them mandatory instead of inventing them.
 
-TRADEOFFS: keyword classification has false positives ("for instance") and misses. The owner can `/gw-cancel` a spurious task. Escalating a missed task is M2.
+TRADEOFFS: keyword classification has false positives ("for instance") and misses. The owner can `/gw-cancel` a spurious task. An open STANDARD task whose key returns with MATERIAL signals and an action verb is escalated. MATERIAL work under no key at all is not caught; Claude can register it with `groundwork task intake`.
 
 ## Architecture-quality §2 answers
 

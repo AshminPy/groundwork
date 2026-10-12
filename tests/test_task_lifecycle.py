@@ -309,6 +309,18 @@ def test_shell_classifier() -> None:
           and not gate.mcp_read_only("mcp__github__resolve_review_thread"))
     check("re-review: resolve-library-id and camelCase getJiraIssue are read-only",
           gate.mcp_read_only("mcp__Context7__resolve-library-id") and gate.mcp_read_only("mcp__atlassian__getJiraIssue"))
+    check("re-review 2: resolve is read-only only for lookups (resolve_finding / resolve_merge_conflicts are writes)",
+          not gate.mcp_read_only("mcp__x__resolve_finding") and not gate.mcp_read_only("mcp__x__resolve_merge_conflicts")
+          and not gate.mcp_read_only("mcp__x__resolveReviewThread"))
+    check("re-review 2 MUST FIX: `bash -euo pipefail -c` / `-eo pipefail -c` are unwrapped",
+          sens("bash -euo pipefail -c 'gcloud compute instances delete vm-9'") is not None
+          and sens("bash -eo pipefail -c 'kubectl delete ns x'") is not None)
+    check("re-review 2: every find -exec clause is checked; `watch -dn 5` is unwrapped",
+          sens("find . -name x -exec echo {} \\; -exec rm -rf {} \\;") is not None
+          and sens("find . -name x -exec echo {} ';' -exec rm -rf {} ';'") is not None
+          and sens("watch -dn 5 kubectl delete ns x") is not None)
+    check("the installed task CLI is recognised through ~", ro("python3 " + str(TASKS).replace(os.path.expanduser("~"), "~", 1) + " list")
+          if str(TASKS).startswith(os.path.expanduser("~")) else True)
     check("re-review: watch -d, chrt, taskset, `bash -o pipefail -c`, `… | bash`, find -exec rm -rf are sensitive",
           all(sens(c) for c in ("watch -d gcloud compute instances delete vm-1", "chrt -f 99 terraform destroy",
                                 "taskset 0x1 kubectl delete ns x", "bash -o pipefail -c 'gcloud compute instances delete x'",
@@ -390,10 +402,15 @@ def test_full_lifecycle() -> None:
         check("review MUST FIX 5: a compound verification entry is refused (it could never be recorded)",
               r.returncode == 1 and "one simple command" in r.stderr, r.stderr[:300])
         refused = []
-        for bad in ("python3 -m pytest tests -q &", "python3 -c 'unbalanced", "python3 -m pytest tests -q # all"):
+        for bad in ("python3 -m pytest tests -q &", "python3 -c 'unbalanced", "python3 -m pytest tests -q # all",
+                    "python3 -m pytest tests -q & echo done", "(python3 -m pytest tests -q)"):
             (d / "proposal.md").write_text(PLAN_PROPOSAL.replace("`python3 -m pytest tests -q`", f"`{bad}`"))
             refused.append("one simple command" in e.cli(repo, "request-approval", key).stderr)
-        check("re-review: trailing &, unbalanced quote and # comment entries are refused", all(refused), str(refused))
+        check("re-review: trailing or mid &, parentheses, unbalanced quote and # comment entries are refused", all(refused), str(refused))
+        (d / "proposal.md").write_text(PLAN_PROPOSAL.replace("`python3 -m pytest tests -q`",
+                                                             "`python3 -m pytest tests -q`\n- `gcloud compute instances list --format='value(status)'`"))
+        r = e.cli(repo, "request-approval", key)
+        check("quoted parentheses in a single command are accepted", "one simple command" not in r.stderr, r.stderr[:300])
         write_plan(repo, change)
         r = e.cli(repo, "request-approval", key)
         check("plan gate: complete plan accepted, prints the owner's /gw-approve line", r.returncode == 0 and "/gw-approve COR-123 " in r.stdout, r.stdout + r.stderr)
@@ -590,11 +607,26 @@ def test_separation_and_failure_modes() -> None:
               and e.task(a, "COR-1")["state"] == "cancelled"
               and denied(e.pre(a, "Bash", {"command": "terraform apply -auto-approve"})) != "", context(out)[:200])
         e.expand(a, "gw-cancel", "COR-124")
+        out = e.prompt(a, "COR-1 is cancelled; instead COR-125: deploy a Cloud SQL database in GCP production")
+        check("re-review 2 MUST FIX: a new key after a closed key is the one registered (closed key not reopened)",
+              e.task(a, "COR-125") is not None and e.task(a, "COR-1")["state"] == "cancelled", context(out)[:200])
+        e.expand(a, "gw-cancel", "COR-125")
+        out = e.prompt(a, "Thanks, COR-1 is merged. Next up COR-126: Cloud SQL database in GCP production")
+        check("re-review 2 MUST FIX: a trailing new key is registered and gates the repository",
+              e.task(a, "COR-126") is not None and denied(e.pre(a, "Write", {"file_path": str(a / "x.py"), "content": "x"})) != "",
+              context(out)[:200])
+        out = e.prompt(a, "The VM zone is us-central1-a and the disk is 500GB pd-ssd")
+        check("re-review 2: a keyless reply without an action verb still gets the waiting task's state",
+              "COR-126" in context(out) and "waiting on the owner" in context(out), context(out)[:200])
+        e.expand(a, "gw-cancel", "COR-126")
         check("untracked STANDARD work (no ticket key) records no task", e.prompt(a, "fix the typo in the README") is None
               and not list((e.cfg / "groundwork" / "tasks").rglob("GW-*.json")))
         out = e.prompt(a, "COR-77: fix the typo in the README")
         check("ticketed STANDARD task tracked without a gate", "COR-77 is tracked as a STANDARD" in context(out)
               and denied(e.pre(a, "Write", {"file_path": str(a / "README.md"), "content": "x"})) == "", context(out)[:200])
+        out = e.prompt(a, "COR-77 looks good, merged and live in prod, thanks")
+        check("re-review 2: escalation needs an action verb (a thank-you mentioning prod does not gate)",
+              e.task(a, "COR-77")["tier"] == "STANDARD", context(out)[:200])
         out = e.prompt(a, "COR-77: now deploy this to production on GCP with terraform")
         check("re-review: an open STANDARD task re-prompted with MATERIAL work is escalated and gated",
               "escalated from STANDARD" in context(out) and e.task(a, "COR-77")["tier"] == "MATERIAL"

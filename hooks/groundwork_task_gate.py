@@ -95,11 +95,14 @@ DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqls
 def split_segments(cmd: str):
     """[{argv, writes, prev, next}] for each simple command, or None when the command cannot be parsed.
     `writes`: an output redirection to a real file. prev/next: the operator before/after the segment."""
+    # An escaped or quoted semicolon (find … -exec … \;) is an argument, not a separator; shlex returns both as ";",
+    # so it is protected first (found by independent review: a second -exec clause escaped the check).
+    protected = re.sub(r"\\;|';'|\";\"", " \x00SEMI\x00 ", cmd)
     try:
-        lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&\n")
+        lex = shlex.shlex(protected, posix=True, punctuation_chars="();<>|&\n")
         lex.whitespace = " \t\r"
         lex.whitespace_split = True
-        tokens = list(lex)
+        tokens = list(lex)  # the placeholder is turned back into ";" only where it is added as an argument
     except ValueError:
         return None
     segments, cur, writes, prev = [], [], False, None
@@ -118,7 +121,7 @@ def split_segments(cmd: str):
         elif tok.isdigit() and i + 1 < len(tokens) and REDIRECT_RE.match(tokens[i + 1]):
             pass  # the "2" in "2>&1"
         else:
-            cur.append(tok)
+            cur.append(tok.replace("\x00SEMI\x00", ";"))
         i += 1
     if cur:
         segments.append({"argv": cur, "writes": writes, "prev": prev, "next": None})
@@ -206,7 +209,8 @@ def segment_read_only(argv: list[str], depth: int = 0) -> bool:
         return True
     head, args = argv[0], argv[1:]
     name = os.path.basename(head)
-    if name in ("python3", "python") and len(args) >= 2 and os.path.realpath(args[0]) == installed_task_cli():
+    if name in ("python3", "python") and len(args) >= 2 and \
+            os.path.realpath(os.path.expanduser(args[0])) == installed_task_cli():
         return args[1] in TASK_SUBS
     if "/" in head:
         return False  # a path-qualified program may be anything (e.g. a script written into the plan directory)
@@ -275,7 +279,10 @@ def unwrap_run(argv: list[str]) -> list[str]:
         value_flags = RUN_WRAPPERS[name]
         i = 1
         while i < len(argv) and argv[i].startswith("-"):
-            i += 2 if argv[i] in value_flags else 1
+            flag = argv[i]
+            # a value flag alone (-n 5) or ending a short cluster (-dn 5)
+            takes_value = flag in value_flags or (not flag.startswith("--") and len(flag) > 2 and f"-{flag[-1]}" in value_flags)
+            i += 2 if takes_value else 1
         i += RUN_WRAPPER_POSITIONALS.get(name, 0)
         argv, _ = strip_wrappers(argv[i:])
     return argv
@@ -289,7 +296,9 @@ def _shell_command_arg(args: list[str]):
         a = args[i]
         if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a):
             return args[i + 1] if i + 1 < len(args) else ""
-        if a in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+        # -o NAME, also inside a cluster such as -euo pipefail (found by independent review), and long options
+        # that take a value.
+        if re.match(r"^[-+][a-zA-Z]*[oO]$", a) or a in ("--rcfile", "--init-file"):
             i += 2
             continue
         if not a.startswith(("-", "+")):
@@ -317,12 +326,12 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
         return _script_sensitive(words[0], cwd, depth) if words else None
     if name == "claude":
         return "a nested Claude Code session"
-    if name == "find":
-        for flag in ("-exec", "-execdir", "-ok", "-okdir"):
-            if flag in args:
-                rest = args[args.index(flag) + 1:]
-                end = next((k for k, a in enumerate(rest) if a in (";", "+")), len(rest))
-                found = segment_sensitive(rest[:end], cwd, depth + 1) if depth < 3 else None
+    if name == "find" and depth < 3:
+        for k, flag in enumerate(args):  # every -exec clause, not only the first (found by independent review)
+            if flag in ("-exec", "-execdir", "-ok", "-okdir"):
+                rest = args[k + 1:]
+                end = next((j for j, a in enumerate(rest) if a in (";", "+")), len(rest))
+                found = segment_sensitive(rest[:end], cwd, depth + 1)
                 if found:
                     return f"{found} (run by find {flag})"
     if "/" in argv[0] or argv[0].endswith(".sh"):
@@ -502,6 +511,14 @@ def on_prompt(data: dict) -> None:
                         ". Tell the owner that; do not treat this message as approval.")
     res = gt.intake(cwd, prompt, str(data.get("session_id") or ""))
     if not res:
+        # Any other prompt while a task waits on the owner (typically the owner answering its questions without
+        # naming it) still gets that task's state, so the answer is applied to the right plan.
+        cls = gt.classify(stripped)
+        root = gt.repo_root(cwd) if stripped and stripped[0] not in "/<!" and not (cls and cls["kind"] == "question") else None
+        waiting = [t for t in gt.gated_tasks(root) if t.get("state") in (gt.PLANNING, gt.AWAITING)] if root else []
+        if waiting:
+            add_context("UserPromptSubmit", "[Groundwork task ledger] Task(s) waiting on the owner in this repository "
+                        "(apply the owner's message to them where it fits):\n" + "\n".join(gt.render(root, t) for t in waiting)[:1500])
         return
     root = res["root"]
     if res["action"] == "existing":
@@ -677,7 +694,7 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
         cdir = str(gt.claude_dir())
         # Any non-read-only command that names the config directory at all (also `cd ~/.claude && … settings.json`;
         # found by independent review) is denied while a task is gated.
-        markers = PROTECTED_MARKERS + (cdir, "~/.claude", "$HOME/.claude", "${HOME}/.claude", "CLAUDE_CONFIG_DIR")
+        markers = PROTECTED_MARKERS + (cdir, ".claude", "CLAUDE_CONFIG_DIR")
         if any(m in cmd for m in markers) and not command_read_only(cmd):
             deny(f"Groundwork: Groundwork's hooks, settings and task ledger cannot be changed while {keys} is gated.")
         return
@@ -698,7 +715,10 @@ MCP_WRITE_WORDS = {"create", "update", "set", "delete", "remove", "add", "put", 
                    "approve", "start", "stop", "restart", "enable", "disable", "push", "apply", "deploy", "edit",
                    "insert", "drop", "archive", "invite", "share", "spawn", "fork", "rename", "label",
                    "mark", "trash", "submit", "subscribe", "unsubscribe", "reply", "comment"}
-RESOLVE_TARGETS = {"thread", "review", "comment", "conversation", "issue", "incident", "alert", "ticket"}
+# `resolve` is a lookup only when it resolves an identifier-like thing; anything else (resolve_review_thread,
+# resolve_finding, resolve_merge_conflicts …) is treated as a write — fail closed (found by independent review).
+RESOLVE_LOOKUPS = {"id", "ids", "library", "package", "uri", "url", "symbol", "dns", "name", "path", "host",
+                   "address", "ref", "reference", "alias", "version"}
 
 
 def mcp_read_only(tool: str) -> bool:
@@ -709,7 +729,7 @@ def mcp_read_only(tool: str) -> bool:
     server = parts[1].lower() if len(parts) > 2 else ""
     name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", parts[-1])  # getJiraIssue -> get_Jira_Issue
     words = [w for w in re.split(r"[^a-z0-9]+", name.lower()) if w]
-    if "resolve" in words and RESOLVE_TARGETS & set(words):
+    if "resolve" in words and not RESOLVE_LOOKUPS & set(words):
         return False
     if words and words[0] in re.split(r"[^a-z0-9]+", server):
         words = words[1:]

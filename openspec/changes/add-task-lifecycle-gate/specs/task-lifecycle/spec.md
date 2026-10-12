@@ -10,10 +10,10 @@ Groundwork SHALL classify every submitted prompt in a git repository without a m
 
 For a MATERIAL task it SHALL create the OpenSpec change.
 
-The prompt's leading key SHALL decide:
-- A known open key receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals.
-- A known completed or cancelled key starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory.
-- An unknown key is registered even when the prompt also names known keys.
+The ticket a prompt is for SHALL be:
+- the first key not yet in the ledger, which is registered even when the prompt also names known keys in any order;
+- otherwise the first open key, which receives that task's state. An open STANDARD task is escalated to MATERIAL (gated, with its own OpenSpec change) when the prompt carries MATERIAL signals and an action verb;
+- otherwise a completed or cancelled key, which starts a fresh task only when the prompt asks for work (an action verb). The old record is kept, and the new task gets its own plan directory.
 
 A keyless engineering prompt while a MATERIAL task waits on the owner SHALL be treated as input to that task, not as a new task. STANDARD work without a ticket key SHALL NOT be recorded.
 
