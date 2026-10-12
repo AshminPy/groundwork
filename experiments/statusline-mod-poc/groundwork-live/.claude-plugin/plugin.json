@@ -1,0 +1,5 @@
+{
+  "name": "groundwork-live",
+  "version": "0.1.0",
+  "description": "Optional, read-only status line for running subagents; a proof-of-concept complement to Groundwork's statusLine."
+}
