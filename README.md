@@ -2,11 +2,13 @@
 
 **A small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.**
 
-Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: five rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and four small deterministic hooks — a push guard, an enforced independent review for material changes, a session-start snapshot of the repository so a fresh session can continue an existing project, and a usage-telemetry recorder. That's the whole product: rule files, hooks, an installer. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
+Groundwork is not a fork or a redistribution of ECC or OpenSpec — it installs both from their own official sources and adds a thin governance layer on top: five rule files that route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof; and five small deterministic hooks — a push guard, an enforced independent review for material changes, a session-start snapshot of the repository so a fresh session can continue an existing project, a usage-telemetry recorder, and task tracking that keeps engineering tasks across sessions and shows Claude Code's permission prompt before sensitive actions. That's the whole product: rule files, hooks, an installer and a small `groundwork` command. No new agents, no new skills, no plugin ecosystem, no daemon, no database.
 
 Built and validated by **Ashmin** ([@AshminPy](https://github.com/AshminPy)) — see [CREDITS.md](CREDITS.md) for exactly what's original here versus what's installed from upstream.
 
 ## Version history
+
+**Unreleased (on `main`)** adds task tracking around native OpenSpec, as a controlled pilot: engineering tasks are recorded automatically, kept across sessions, and completed only on evidence, while OpenSpec stays the workflow. Sensitive actions — cloud, cluster and Terraform changes, destructive Git, credential access, recursive deletes outside the working directory, settings and hook edits — show Claude Code's normal permission prompt. See [Task tracking](#task-tracking), [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md) and [CHANGELOG.md](CHANGELOG.md).
 
 **Groundwork 2.4** (current) added four capabilities, none of which changes existing behaviour unless used: per-tool-call
 usage telemetry (a minimal local record of which tools ran and whether each call succeeded), statusLine symbol presets
@@ -168,6 +170,9 @@ groundwork routines run pr_followup  # run one routine now (same fail-closed pat
 groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
+groundwork task list                 # open tasks in this repository (--all: every repository)
+groundwork task show COR-123         # one task: phase, progress, verification, review, history
+groundwork task complete COR-123     # complete a task (MATERIAL: only on evidence)
 
 groundwork copilot explain           # read-only: what went wrong in THIS terminal (tmux), and what to check next
 groundwork copilot explain --dry-run # show exactly what would be sent; send nothing
@@ -182,6 +187,7 @@ model. `groundwork update`/`rollback` never reimplement the installer — see
 [docs/UPGRADE-ROLLBACK.md](docs/UPGRADE-ROLLBACK.md) for the full behavior. `groundwork routines`
 forwards to the existing Routines execution/scheduling engine unchanged — see
 [docs/ROUTINES.md](docs/ROUTINES.md) for the full truth model and the six shipped routines.
+`groundwork task` forwards to the task ledger — see [Task tracking](#task-tracking).
 `groundwork copilot explain` is **read-only help with a failure in the terminal you typed it in**. In a tmux
 pane it reads a bounded slice (default 120 lines, at most 400 lines / 16,000 characters) of that pane's recent
 output, proven to be yours by `$TMUX_PANE`, your process's own controlling tty, and the pane's process being an
@@ -222,7 +228,7 @@ python3 scripts/merge_settings.py --profile work ~/.claude/settings.json   # set
 ./uninstall.sh               # remove Groundwork (keeps telemetry and reports)
 ```
 
-It installs ECC (official plugin path), the OpenSpec CLI (official npm package), Groundwork's five rule files, four hooks, ten playbooks and the report generator into `~/.claude/`, merging into your existing `settings.json` without overwriting anything. Safe to re-run.
+It installs ECC (official plugin path), the OpenSpec CLI (official npm package), Groundwork's five rule files, five hooks (plus their two helper modules), ten playbooks and the report generator into `~/.claude/`, merging into your existing `settings.json` without overwriting anything. Safe to re-run.
 
 ## What each tier actually requires
 
@@ -234,6 +240,12 @@ It installs ECC (official plugin path), the OpenSpec CLI (official npm package),
 
 Full text: [rules/engineering-workflow.md](rules/engineering-workflow.md).
 
+## Task tracking
+
+A prompt with a ticket key (`COR-123`), or MATERIAL engineering work, becomes a tracked task. The prompt hook decides this from the text alone, with no model call and no approval codes. A MATERIAL task gets a native OpenSpec change. Its OpenSpec artifacts are the plan, and you can revise them at any time. Groundwork records verification runs, review results and sensitive operations against a fingerprint of the code. A MATERIAL task completes (with `groundwork task complete`, or a native OpenSpec archive) only when every task in `tasks.md` is checked, every declared verification passed on the current code, and the latest review reports zero MUST FIX. Open tasks appear in the session-start snapshot, so a fresh session picks them up.
+
+Ordinary work never prompts. Sensitive actions show Claude Code's normal permission prompt, in every repository. This is a controlled pilot: use the normal permission modes (default or `acceptEdits`, not `bypassPermissions`), and do not let unattended runs (`claude -p`, scheduled Routines, background agents) perform production, destructive or credential-related actions. In a headless run nobody can answer the prompt, so such an action is denied. It is not a sandbox. Full detail and limits: [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md).
+
 ## How Claude chooses main session, subagents, or an Agent Team
 
 Simplest model that produces the result. Main session for sequential work that shares context. A subagent for a focused, isolated investigation or review whose result comes back. An Agent Team (Claude Code's native, experimental feature — enabled only by `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, interactive sessions only) when two or more genuinely independent workstreams benefit from parallelism or independent reasoning: architecture + implementation + validation, infrastructure + application, competing incident hypotheses, implementation plus independent security validation. Teams are sized to the work (2–4), each teammate owns its files, specialists are derived from the task, and the lead synthesizes. When teams are off or the session is `-p`, the same decomposition runs on subagents. Groundwork adds no orchestration code of its own.
@@ -244,7 +256,7 @@ Every substantive request is routed to exactly one of ten task categories — RE
 
 Every answer then follows the global output contract in [rules/output-contract.md](rules/output-contract.md): a plain-language main response first (result, what matters, what changed or is recommended, whether it was really verified, one next action when needed), then `Technical details` when useful evidence exists (errors, log paths, copyable commands, key files, tests, PR, commit), then `Evidence & references` when the conclusion depends on sources. Empty sections are omitted; technical evidence is translated into understandable language in the main response and kept exact in the details.
 
-Substantive task responses end with a small `Harness metadata` block (four lines: `Groundwork <version> · <PLAYBOOK>`, execution, evidence types, validation — profile/environment/roles/tools only when relevant), and a fourth hook, `hooks/groundwork_telemetry.py`, appends one JSON line per substantive turn — the block is present, or at least one tool ran — to `~/.claude/groundwork/telemetry/events.jsonl` (owner-only); `declared.block_present` records whether the block was there. Each record separates **observed** facts the hook determined itself (profile from `GROUNDWORK_PROFILE`, tool and MCP names, agent calls, files-changed count, tests run, deploy-shaped commands, version) from **declared** metadata taken from the response (playbook, execution mode, evidence types, validation, outcome from the Status sentence) — declared fields are recorded as stated, not verified. Never prompt text, commands, paths, secrets or reasoning: free text is kept only as short labels. Append-only and fail-open; `GROUNDWORK_TELEMETRY=off` disables; set `GROUNDWORK_PROFILE=work` in your own `settings.json` `env` to label the profile (machine-specific, not shipped by the installer). The records are designed for later reports (playbook frequency, execution modes, tool usage, clarification and blocked rates, validation rate, trends by version).
+Substantive task responses end with a small `Harness metadata` block (four lines: `Groundwork <version> · <PLAYBOOK>`, execution, evidence types, validation — profile/environment/roles/tools only when relevant), and the telemetry hook, `hooks/groundwork_telemetry.py`, appends one JSON line per substantive turn — the block is present, or at least one tool ran — to `~/.claude/groundwork/telemetry/events.jsonl` (owner-only); `declared.block_present` records whether the block was there. Each record separates **observed** facts the hook determined itself (profile from `GROUNDWORK_PROFILE`, tool and MCP names, agent calls, files-changed count, tests run, deploy-shaped commands, version) from **declared** metadata taken from the response (playbook, execution mode, evidence types, validation, outcome from the Status sentence) — declared fields are recorded as stated, not verified. Never prompt text, commands, paths, secrets or reasoning: free text is kept only as short labels. Append-only and fail-open; `GROUNDWORK_TELEMETRY=off` disables; set `GROUNDWORK_PROFILE=work` in your own `settings.json` `env` to label the profile (machine-specific, not shipped by the installer). The records are designed for later reports (playbook frequency, execution modes, tool usage, clarification and blocked rates, validation rate, trends by version).
 
 The same script is also registered on Claude Code's `PostToolUse`/`PostToolUseFailure` events (fires on every tool call), appending a second, much smaller record to a sibling file, `~/.claude/groundwork/telemetry/tool_events.jsonl` (same 0600/0700 permission model, same off-switch) — timestamp, session id, the tool name, a category (`builtin` or `mcp`, with the server slug for an MCP tool), and whether that one call succeeded or failed (a call that ended as an abort is flagged `interrupted`, not counted as a failure). Calls that are denied by permissions or rejected before execution fire neither hook, and cancelling a running tool fires no failure event, so they leave no row: the rows are calls that finished or failed, not everything Claude attempted. "Succeeded" means Claude Code reported the call as completed — the hook never reads `tool_response`, so a Bash command that timed out into the background still counts as a completed call. This answers "which integrations are actually used, and do they succeed" per call, which the per-turn record alone cannot (it only ever saw tool *names used somewhere in the turn*). The hook never reads `tool_input` or `tool_response`/`error` — only the event's own `tool_name` and `session_id` — so command text, prompts, responses, secrets and file contents never reach it. Known limitation: a Bash-invoked CLI integration (`gh`, `kubectl`, `terraform`, …) is still not attributable by name, since that would mean reading `tool_input.command`, which this hook must not do — only MCP-mechanism and built-in-tool usage is classified.
 
@@ -312,8 +324,13 @@ groundwork/
 │   ├── require_material_review.py     denies finishing a MATERIAL change without a fresh independent review reporting Must-fix: 0
 │   ├── groundwork_session_snapshot.py injects a deterministic repo snapshot (+ investigation continuity, harness version, profile) at session start
 │   ├── groundwork_telemetry.py        Stop: one schema-2 JSONL record per tool-using task (observed vs declared); PostToolUse/PostToolUseFailure: one minimal per-tool-call record (tool, category, success) to a sibling file — both fail-open
+│   ├── groundwork_task_gate.py        task tracking: intake on each prompt, Claude Code's permission prompt before sensitive actions, evidence recording
+│   ├── groundwork_tasks.py            task ledger, plan reader and the `groundwork task` CLI; imported by the task gate, not a hook itself
 │   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
 ├── scripts/
+│   ├── groundwork_cli.py              the `groundwork` command: one entry point that dispatches to the scripts below
+│   ├── groundwork_update.py           `groundwork update` / `rollback`: install a published release, restore a backup
+│   ├── check_routing.py               live routing check: the twelve reference scenarios through real headless sessions
 │   ├── groundwork_report.py           health dashboard generator + launchd schedule (installed to ~/.claude/groundwork/bin/)
 │   ├── groundwork_config.py           capability/Routines config: profiles, config.json read/write; `validate` checks for credential-shaped keys on request
 │   ├── groundwork_routines.py         Routines framework: safe headless claude -p invocation, launchd scheduling, telemetry
@@ -332,13 +349,19 @@ groundwork/
 │   ├── test_groundwork_config.py      capability config (profiles, validation, fail-open, CLAUDE_CONFIG_DIR resolution)
 │   ├── test_groundwork_routines.py    Routines (safety contract, off-switches, scheduling, telemetry)
 │   ├── test_groundwork_integrations.py Integration Catalog (state combinations, presence≠connected, no secret exposure, doc consistency)
-│   └── test_groundwork_statusline.py  statusLine (session isolation, cache-only integrations, fail-safe, measured execution time)
+│   ├── test_groundwork_statusline.py  statusLine (session isolation, cache-only integrations, fail-safe, measured execution time)
+│   ├── test_groundwork_cli.py         the `groundwork` command and its installation
+│   ├── test_groundwork_update.py      update/rollback (release validation, safe archive extraction)
+│   ├── test_groundwork_copilot.py     `groundwork copilot explain` (read-only terminal help)
+│   └── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
     ├── ARCHITECTURE.md
     ├── VALIDATION.md                  real test results and live runs, including the failures on the way
     ├── RELEASE-REPORT-2.0.md          Groundwork 2.0 release-readiness report: per-capability evidence, test results, known limitations
     ├── RELEASE-REPORT-2.1.md          Groundwork 2.1 release report: same shape, this version's evidence
+    ├── RELEASE-REPORT-2.2.md          Groundwork 2.2 release report
+    ├── RELEASE-REPORT-2.3.md          Groundwork 2.3 release report
     ├── RELEASE-REPORT-2.4.md          Groundwork 2.4 release notes and report: scope, evidence, known limitations
     ├── MACOS-SMOKE-TEST.md            short macOS smoke test for 2.4 (throwaway HOME, nothing of yours is touched)
     ├── TROUBLESHOOTING.md
@@ -347,6 +370,7 @@ groundwork/
     ├── CONTEXT-ENGINEERING.md         what enters context, classified always/selective/lazy/isolated/persisted/reconstructed
     ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
     ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
+    ├── TASK-LIFECYCLE.md              task tracking: intake, plan, evidence, completion, what asks for authorization, pilot scope
     └── images/                        overview diagram and dashboard screenshot
 ```
 
