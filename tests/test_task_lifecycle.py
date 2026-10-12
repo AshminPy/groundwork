@@ -278,7 +278,8 @@ def test_authorization_classes() -> None:
                 "npm install", "sed -i s/a/b/ README.md", "git branch -d merged", "git worktree add ../wt", "make test",
                 "docker build -t app .", "curl -fsSL https://example.invalid/x.json", "mv a b", "rm build.log",
                 'grep -rn "event.key" src/', 'git commit -m "use item.key"', "git restore --staged .", "cd build && rm -rf out",
-                "find . -name __pycache__ -exec rm -rf {} +", "git -C sub status", "git -c color.ui=never log -3")
+                "find . -name __pycache__ -exec rm -rf {} +", "git -C sub status", "git -c color.ui=never log -3",
+                "gcloud compute instances create --help", "kubectl apply --help", "aws s3 rm help")
     flowing = [c for c in ordinary if sens(c) is not None]
     check("ordinary development commands flow without a prompt", not flowing, str([(c, sens(c)) for c in flowing]))
     sensitive = {
@@ -307,6 +308,7 @@ def test_authorization_classes() -> None:
         "env X=1 sudo ls": "elevated", "time sudo ls": "elevated", "echo a | xargs sudo ls": "elevated",
         "kubectl -n ns get secret x": "credential", "aws --profile p secretsmanager get-secret-value --secret-id x": "credential",
         "cat certs/server.key": "credential",
+        "rm -rf / --help": "recursive delete",  # BSD rm reads a late --help as a file name
     }
     wrong = {c: sens(c) for c, label in sensitive.items() if label not in (sens(c) or "")}
     check("sensitive, destructive, credential and destructive-git commands ask", not wrong, str(wrong))

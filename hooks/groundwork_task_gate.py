@@ -594,6 +594,8 @@ def _shell_command_arg(args: list[str]):
 
 
 ELEVATORS = {"sudo", "doas", "su", "pkexec"}
+# CLIs whose --help (or `help` subcommand) only prints help. Not rm and the like: BSD rm reads a late `--help` as a file.
+HELP_CLIS = {"gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsutil", "bq", "docker", "oc"}
 
 
 def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | None = None) -> str | None:
@@ -658,6 +660,9 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
         if rest and os.path.basename(rest[0]) in SHELLS | {"eval"}:
             return "commands built by xargs for a shell (they cannot be checked)"
         return segment_sensitive(raw, cwd, depth + 1, base) if rest and depth < MAX_DEPTH else None
+    if name in HELP_CLIS and (any(a in ("--help", "-help") for a in args) or words[:1] == ["help"]
+                              or (name == "aws" and words[-1:] == ["help"])):
+        return None  # these CLIs print help and change nothing (`gcloud compute instances create --help`; live run)
     if name == "gcloud" and any(w in GCLOUD_WRITE or w.startswith(("add-", "remove-", "set-")) for w in words):
         return "a gcloud mutation"
     if name == "kubectl" and any(w in KUBECTL_WRITE for w in words):
