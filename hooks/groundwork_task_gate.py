@@ -55,8 +55,8 @@ REDIRECT_RE = re.compile(r"^(?:&>>?|>>?|>\||>&|<<<|<<-?|<&|<)$")
 UNSAFE_SUBSTRINGS = ("$(", "`", "<(", ">(")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 DEV_SINKS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
-PROTECTED_MARKERS = ("settings.json", "settings.local.json", ".claude/hooks", "groundwork/tasks", "disableAllHooks",
-                     "groundwork_task_gate", "commands/gw-")
+PROTECTED_MARKERS = (".claude/settings", ".claude/hooks", "groundwork/tasks", "disableAllHooks", "groundwork_task_gate",
+                     "groundwork_tasks.py", "commands/gw-", "GROUNDWORK_TASK_GATE")
 
 ALWAYS_RO = {"ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "stat", "file", "pwd", "echo",
              "printf", "which", "type", "tree", "du", "df", "date", "uname", "whoami", "id", "hostname", "basename",
@@ -82,7 +82,12 @@ KUBECTL_WRITE = {"apply", "create", "delete", "replace", "patch", "scale", "roll
 TERRAFORM_READ = {"plan", "validate", "show", "output", "version", "providers", "graph"}
 HELM_READ = {"list", "ls", "status", "get", "show", "template", "lint", "version", "history", "search", "env"}
 SENSITIVE_HEADS = ("gcloud", "kubectl", "terraform", "helm", "aws", "az", "gsutil", "bq", "ansible", "ssh", "scp",
-                   "rsync", "curl", "wget", "psql", "mysql", "sqlplus", "mongosh", "redis-cli", "docker", "rm")
+                   "rsync", "curl", "wget", "psql", "mysql", "sqlplus", "mongosh", "redis-cli", "docker", "rm", "claude")
+# Prefixes that run the command after them; unwrapped before the sensitivity check (found by independent review:
+# `sudo gcloud … delete`, `watch kubectl delete …`, `setsid terraform destroy` were not classified as sensitive).
+RUN_WRAPPERS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D"}, "doas": {"-u", "-C"},
+                "watch": {"-n", "--interval", "-d"}, "setsid": set(), "ionice": {"-c", "-n", "-p"},
+                "chrt": set(), "taskset": set(), "unbuffer": set()}
 DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqlsh", "sqlcmd", "sqlite3"}
 
 
@@ -261,18 +266,45 @@ def command_read_only(cmd: str, depth: int = 0) -> bool:
     return all(segment_read_only(s["argv"], depth) and not s["writes"] for s in segs)
 
 
+def unwrap_run(argv: list[str]) -> list[str]:
+    """strip_wrappers() plus the prefixes in RUN_WRAPPERS (sudo, watch, setsid, …), repeatedly."""
+    argv, _ = strip_wrappers(argv)
+    while argv and os.path.basename(argv[0]) in RUN_WRAPPERS:
+        value_flags = RUN_WRAPPERS[os.path.basename(argv[0])]
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in value_flags else 1
+        argv, _ = strip_wrappers(argv[i:])
+    return argv
+
+
+def _shell_command_arg(args: list[str]) -> str | None:
+    """The command string of `sh -c CMD`, also for combined flags such as -lc, -ec, -xc."""
+    for i, a in enumerate(args):
+        if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a) and i + 1 < len(args):
+            return args[i + 1]
+        if not a.startswith("-"):
+            return None
+    return None
+
+
 def segment_sensitive(argv: list[str], cwd: str, depth: int = 0) -> str | None:
     """A label when the command changes systems outside the working tree (cloud, cluster, data, remote hosts),
-    deletes recursively, or escapes the scope audit; else None."""
-    argv, _ = strip_wrappers(argv)
+    deletes recursively, starts a nested Claude Code session, or escapes the scope audit; else None."""
+    argv = unwrap_run(argv)
     if not argv:
         return None
     name, args = os.path.basename(argv[0]), argv[1:]
     words = _words(args)
+    if name == "eval" and depth < 3:
+        return command_sensitive(" ".join(args), cwd, depth + 1)
     if name in SHELLS:
-        if "-c" in args and args.index("-c") + 1 < len(args) and depth < 3:
-            return command_sensitive(args[args.index("-c") + 1], cwd, depth + 1)
+        inner = _shell_command_arg(args)
+        if inner is not None:
+            return command_sensitive(inner, cwd, depth + 1) if depth < 3 else "a deeply nested shell"
         return _script_sensitive(words[0], cwd, depth) if words else None
+    if name == "claude":
+        return "a nested Claude Code session"
     if "/" in argv[0] or argv[0].endswith(".sh"):
         found = _script_sensitive(argv[0], cwd, depth)
         if found:
@@ -365,9 +397,9 @@ def _norm_tokens(cmd: str) -> list[str] | None:
 
 
 def matches_operation(argv: list[str], operations: list[str]) -> bool:
-    """The command is an Approved Operation: it starts with the approved tokens. A prefix match is accepted only for
-    an operation of at least three tokens, so a bare `gcloud` or `kubectl apply` approves nothing broader."""
-    argv, _ = strip_wrappers(argv)
+    """The command is an Approved Operation: its words, exactly as run (no wrapper stripped, so `sudo …` is not
+    covered by an approval of `…`), start with the approved words. A prefix match is accepted only for an operation
+    of at least three words, so a bare `gcloud` or `kubectl apply` approves nothing broader."""
     for op in operations:
         toks = _norm_tokens(op)
         if toks and argv[: len(toks)] == toks and (len(argv) == len(toks) or len(toks) >= 3):
@@ -376,19 +408,26 @@ def matches_operation(argv: list[str], operations: list[str]) -> bool:
 
 
 def verification_status(segs, verify_cmd: str) -> str | None:
-    """'counted' when the approved verification command ran as its own segment whose exit status reaches the
-    tool result; 'masked' when it ran piped, after || or before ; & (status not observed); else None."""
+    """'counted' when the declared verification command ran exactly as declared (same words; output redirection
+    allowed) and its exit status is the tool's exit status: started at the beginning, after ; or && (not after ||)
+    and followed only by && (found by independent review: `cmd && echo PASS || echo FAIL` exits 0 when cmd fails,
+    and `cmd -k x` / `--collect-only` are not the declared run). 'masked' when it ran but its status was not
+    observable or it ran with extra arguments; else None."""
     toks = _norm_tokens(verify_cmd)
     if not toks:
         return None
     found = None
     for k, s in enumerate(segs):
-        argv, _ = strip_wrappers(s["argv"])
-        if argv[: len(toks)] == toks:
-            last = k == len(segs) - 1
-            if s["prev"] in (None, ";", "&&", "\n") and (s["next"] == "&&" or (last and s["next"] in (None, "\n"))):
-                return "counted"
+        argv = s["argv"]
+        if argv[: len(toks)] != toks:
+            continue
+        if argv != toks:
             found = "masked"
+            continue
+        later_ok = all(t["prev"] == "&&" for t in segs[k + 1:])
+        if s["prev"] in (None, ";", "&&", "\n") and later_ok and s["next"] in (None, "&&", "\n"):
+            return "counted"
+        found = "masked"
     return found
 
 
@@ -447,8 +486,12 @@ def on_prompt(data: dict) -> None:
     root = res["root"]
     if res["action"] == "existing":
         text = "\n".join(gt.render(root, t) for t in res["tasks"])
-        add_context("UserPromptSubmit", "[Groundwork task ledger] State of the task(s) this prompt names "
-                    "(authoritative; enforced by the task gate):\n" + text[:2500])
+        lead = ("[Groundwork task ledger] This prompt was not registered as a new task, because the task(s) below are "
+                "waiting on the owner: treat it as the owner's input to them (for example answers to the plan's missing "
+                "information). If it is separate work, ask the owner for a ticket key.\n"
+                if res.get("suppressed") else
+                "[Groundwork task ledger] State of the task(s) this prompt names (authoritative; enforced by the task gate):\n")
+        add_context("UserPromptSubmit", lead + text[:2500])
     t = res["tasks"][0]
     risk = t.get("risk") or {}
     checklist = "\n".join(f"  - {c}" for c in t.get("checklist", [])) or "  - (none)"
@@ -526,7 +569,12 @@ def on_pre(data: dict) -> None:
     # Owner commands are owner-only in every repository and every state (design D2).
     if tool == "Skill" and str(ti.get("skill", "")).lstrip("/").split(":")[-1].lower() in gt.OWNER_COMMANDS:
         deny("Groundwork: /gw-approve and /gw-cancel are owner-only commands; Claude cannot run them.")
-    if tool not in FILE_TOOLS and OWNER_CMD_RE.search(json.dumps(ti)):
+    # Text naming an owner command is harmless in a file edit, a subagent prompt (its own calls are gated) or a
+    # read-only command such as grep; anywhere else (a command that is not read-only, a scheduled prompt, a message
+    # to another session, an MCP call) it could deliver the command as if typed, so it is denied.
+    command = ti.get("command") if isinstance(ti.get("command"), str) else None
+    if tool not in FILE_TOOLS and tool not in ("Agent", "Task") and OWNER_CMD_RE.search(json.dumps(ti)) and not (
+            command is not None and tool != "PowerShell" and command_read_only(command) and len(ti) <= 6):
         deny("Groundwork: this call contains an owner-only command (/gw-approve or /gw-cancel). Claude must not run, "
              "send, schedule or script it; only the owner types it.")
     path = ""
@@ -580,7 +628,11 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
         scope = "; ".join(f"{t['key']}: {', '.join(t.get('plan', {}).get('scope', []))}" for t in approved)
         deny(f"Groundwork task gate: unauthorized change. {rel} is outside the approved scope ({scope}). Stay within "
              "the approved scope, or change the plan's Scope and get a new owner approval.")
-    if tool == "Bash":
+    if tool == "PowerShell":
+        deny(f"Groundwork task gate: PowerShell commands cannot be checked; use Bash while {keys} is gated.")
+    if tool == "Bash" or isinstance(ti.get("command"), str):
+        # Any tool that runs a shell command (Bash, Monitor, and tools added later) is checked the same way
+        # (found by independent review: Monitor's command ran unchecked).
         cmd = str(ti.get("command") or "")
         if pending:
             if command_read_only(cmd):
@@ -601,7 +653,9 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
         if any(u in cmd for u in UNSAFE_SUBSTRINGS) and re.search(
                 r"(?<![\w-])(?:" + "|".join(SENSITIVE_HEADS) + r")(?![\w-])", cmd):
             deny("Groundwork task gate: command substitution around a sensitive tool cannot be checked; run it directly.")
-        if any(m in cmd for m in PROTECTED_MARKERS) and not command_read_only(cmd):
+        cdir = str(gt.claude_dir())
+        markers = PROTECTED_MARKERS + (f"{cdir}/settings", f"{cdir}/hooks", f"{cdir}/commands/gw-")
+        if any(m in cmd for m in markers) and not command_read_only(cmd):
             deny(f"Groundwork: Groundwork's hooks, settings and task ledger cannot be changed while {keys} is gated.")
         return
     if tool.startswith("mcp__"):
@@ -613,18 +667,31 @@ def gate(tool: str, ti: dict, path: str, root: str, tasks: list[dict], data: dic
 
 
 MCP_READ_FIRST = {"get", "list", "search", "read", "query", "fetch", "describe", "show", "view", "find", "lookup",
-                  "check", "validate", "resolve", "count", "whoami", "status", "download", "retrieve", "inspect",
-                  "preview", "browse", "explain", "diff"}
+                  "check", "validate", "count", "whoami", "status", "download", "retrieve", "inspect", "preview",
+                  "browse", "explain", "diff"}
 MCP_READ_LAST = {"read", "get", "list", "search", "query", "view", "status", "info", "details", "fetch"}
+MCP_WRITE_WORDS = {"create", "update", "set", "delete", "remove", "add", "put", "post", "send", "run", "execute",
+                   "write", "patch", "merge", "close", "assign", "move", "upload", "publish", "trigger", "cancel",
+                   "approve", "start", "stop", "restart", "enable", "disable", "push", "apply", "deploy", "edit",
+                   "insert", "drop", "archive", "resolve", "invite", "share", "spawn", "fork", "rename", "label",
+                   "mark", "trash", "submit", "subscribe", "unsubscribe", "reply", "comment"}
 
 
 def mcp_read_only(tool: str) -> bool:
+    """Read-only by its verb: leading read verb, or a trailing read word with no write verb anywhere in the name
+    (found by independent review: `update_status` and `run_query` were read as read-only)."""
     parts = tool.split("__")
     server = parts[1].lower() if len(parts) > 2 else ""
     words = [w for w in re.split(r"[^a-z0-9]+", parts[-1].lower()) if w]
     if words and words[0] in re.split(r"[^a-z0-9]+", server):
         words = words[1:]
-    return bool(words) and (words[0] in MCP_READ_FIRST or words[-1] in MCP_READ_LAST)
+    if not words:
+        return False
+    if words[0] in MCP_READ_FIRST:
+        return True
+    if any(w in MCP_WRITE_WORDS for w in words):
+        return False
+    return words[-1] in MCP_READ_LAST
 
 
 def _response_text(resp) -> str:
@@ -657,29 +724,38 @@ def on_post(data: dict) -> None:
     ti = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
     notes = []
     approved = [t for t in tasks if gt.approval_valid(root, t)]
-    if tool == "Bash" and not ti.get("run_in_background"):
-        segs = split_segments(str(ti.get("command") or "")) or []
+    if isinstance(ti.get("command"), str):
+        segs = split_segments(ti["command"]) or []
         resp = data.get("tool_response") if isinstance(data.get("tool_response"), dict) else {}
         ok = event == "PostToolUse" and not resp.get("interrupted")
         detail = str(data.get("error") or "").splitlines()[0] if not ok and data.get("error") else ""
+        # A background command has only started when this fires: its approved operation still counts (it may change
+        # things), but it is never evidence of a verification result.
+        evidence = tool == "Bash" and not ti.get("run_in_background")
         for t in approved:
-            for v in t.get("plan", {}).get("verify", []):
+            for v in t.get("plan", {}).get("verify", []) if evidence else []:
                 status = verification_status(segs, v)
                 if status == "counted":
                     gt.record_verification(root, t["key"], v, ok, detail)
                     notes.append(f"{t['key']}: verification `{v}` recorded as {'PASSED' if ok else 'FAILED'}.")
                 elif status == "masked":
-                    notes.append(f"{t['key']}: `{v}` ran piped or chained, so its exit status was not observed; "
-                                 "it is not counted. Run it on its own.")
+                    notes.append(f"{t['key']}: `{v}` ran with extra arguments, piped or chained, so it does not count as "
+                                 "the declared verification. Run it exactly as declared, on its own.")
             ops = t.get("plan", {}).get("operations", [])
             for s in segs:
                 if segment_sensitive(s["argv"], cwd) and matches_operation(s["argv"], ops):
                     gt.record_operation(root, t["key"], " ".join(s["argv"]))
                     notes.append(f"{t['key']}: approved operation recorded; verification must run after it.")
+    if tool.startswith("mcp__"):
+        for t in approved:
+            if tool in t.get("plan", {}).get("operations", []):
+                gt.record_operation(root, t["key"], tool)
+                notes.append(f"{t['key']}: approved operation {tool} recorded; verification must run after it.")
     if tool in ("Agent", "Task") and is_review_call(tool, ti) and approved:
         resp = data.get("tool_response")
-        if isinstance(resp, dict) and resp.get("status") == "async_launched":
-            notes.append("A background review is not captured as evidence; run the review in the foreground.")
+        if isinstance(resp, dict) and resp.get("status") not in (None, "completed"):
+            notes.append(f"A review that has not finished ({resp.get('status')}) is not captured as evidence; run the "
+                         "review in the foreground so its result is returned.")
         else:
             result = parse_review_result(_response_text(resp))
             reviewer = str(ti.get("subagent_type") or ti.get("name") or "reviewer")
@@ -688,7 +764,7 @@ def on_post(data: dict) -> None:
             mf = result.get("must_fix", 0 if result.get("verdict") == "approve" else None)
             notes.append(f"Review by {reviewer} recorded: " + ("no REVIEW RESULT block found, so it cannot count "
                          "toward completion." if mf is None else f"{mf} MUST FIX finding(s)."))
-    bad = gt.scope_violations(root, tasks) if (tool in ("Bash", "Agent", "Task") or tool.startswith("mcp__")) else []
+    bad = gt.scope_violations(root, tasks)  # after every tool that can act (read and edit tools returned above)
     if bad:
         notes.insert(0, "UNAUTHORIZED CHANGE: " + ", ".join(bad[:10]) + (" …" if len(bad) > 10 else "") +
                      " changed outside the approved scope of " + ", ".join(t["key"] for t in tasks) +

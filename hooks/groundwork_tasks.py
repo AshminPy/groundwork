@@ -414,16 +414,30 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
     if cls is None and (text or "").strip()[:1] in ("/", "<", "!"):
         return None
     existing = [t for t in (load_task(root, k) for k in find_keys(text or "")) if t]
-    if existing:
+    is_task = bool(cls) and cls["kind"] == "task"
+    reopen = is_task and bool(existing) and existing[0]["key"] == cls["keys"][0] and \
+        existing[0].get("state") in (COMPLETE, CANCELLED)
+    if existing and not reopen:
         return {"action": "existing", "tasks": existing, "root": root}
-    if not cls or cls["kind"] != "task":
+    if not is_task:
         return None
     if cls["tier"] == STANDARD and not cls["keys"]:
         return None  # untracked STANDARD work stays lightweight; a ticket key is what asks for tracking
+    if not cls["keys"]:
+        # A keyless engineering prompt while a task waits on the owner is almost always the owner answering that
+        # task's questions (found by independent review: the reply opened a duplicate MATERIAL task).
+        waiting = [t for t in gated_tasks(root) if t.get("state") in (PLANNING, AWAITING)]
+        if waiting:
+            return {"action": "existing", "tasks": waiting, "root": root, "suppressed": True}
     with locked(root):
         key = cls["keys"][0] if cls["keys"] else next_gw_key(root)
-        if load_task(root, key):  # created concurrently
-            return {"action": "existing", "tasks": [load_task(root, key)], "root": root}
+        current = load_task(root, key)
+        if current and current.get("state") in (COMPLETE, CANCELLED):
+            # Follow-up work on a closed ticket is a new task: keep the old record, under a name the ledger never
+            # loads as a task (found by independent review: a closed key stayed ungated forever).
+            os.replace(task_file(root, key), ledger_dir(root) / f"{key}.closed-{int(now())}.json")
+        elif current:  # created concurrently
+            return {"action": "existing", "tasks": [current], "root": root}
         title = title_of(text, cls["keys"])
         task = {
             "schema": SCHEMA, "key": key, "title": title, "mission": clip(text, MAX_MISSION),
@@ -436,12 +450,19 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
         }
         status = None
         if cls["tier"] == MATERIAL:
-            task["change"] = change_name(key, title)
+            name, n = change_name(key, title), 1
+            while (Path(root) / "openspec" / "changes" / (name if n == 1 else f"{name}-{n}")).exists():
+                n += 1  # never adopt a directory an earlier (closed) task or another change already owns
+            task["change"] = name if n == 1 else f"{name}-{n}"
             status = ensure_openspec_change(root, task["change"])
             task["openspec_intake"] = status
         head = (git(root, "rev-parse", "HEAD") or "").strip()
         task["base_commit"] = head or EMPTY_TREE
-        task["baseline"] = {rel: _file_digest(Path(root) / rel) for rel in _status_paths(root)[:MAX_BASELINE]}
+        dirty = _status_paths(root)
+        # Paths beyond the cap are recorded without a digest: excluded from the audit whatever their content
+        # (found by independent review: they became permanent violations).
+        task["baseline"] = {rel: (_file_digest(Path(root) / rel) if i < MAX_BASELINE else None)
+                            for i, rel in enumerate(dirty)}
         add_history(task, "intake", f"{task['tier']} task registered from a prompt")
         save_task(root, task)
     return {"action": "created", "tasks": [task], "root": root, "openspec": status}
@@ -464,6 +485,9 @@ BACKTICK = re.compile(r"`([^`\n]+)`")
 # `<name>` / `{zone}` placeholders: a command containing one can never be run as written, so evidence could never
 # match it (found in the live acceptance run: a plan declared `gcloud compute instances describe <name> --zone <zone>`).
 PLACEHOLDER = re.compile(r"<[A-Za-z_][^<>\s]*>|\{[A-Za-z_][^{}\s]*\}")
+# A Verification or Approved Operations entry must be ONE simple command: evidence is matched against a single command
+# exactly as declared (found by independent review: `make lint && pytest` was approved but could never be recorded).
+COMPOUND = re.compile(r"&&|\|\||;|\||[<>]|`|\$\(|\n")
 
 
 def _canonical(heading: str) -> str | None:
@@ -537,6 +561,9 @@ def read_plan(root: str, task: dict) -> dict:
             if PLACEHOLDER.search(cmd):
                 problems.append(f"'## {section.title()}' command `{cmd}` contains a placeholder; write the exact "
                                 "command that will be run (evidence is matched against it)")
+            elif COMPOUND.search(cmd):
+                problems.append(f"'## {section.title()}' entry `{cmd}` must be one simple command (no &&, ||, ;, |, "
+                                "redirection or command substitution); list each command as its own entry")
             elif len(cmd) >= 3 and cmd not in found:
                 found.append(cmd)
     if sections.get("verification") and not verify and not any("Verification" in p for p in problems):
@@ -648,7 +675,7 @@ def changed_paths(root: str, task: dict) -> list[str]:
     paths |= {p for p in (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0") if p}
     baseline = task.get("baseline") or {}
     return [rel for rel in sorted(paths) if not _generated(rel)
-            and not (rel in baseline and baseline[rel] == _file_digest(Path(root) / rel))]
+            and not (rel in baseline and baseline[rel] in (None, _file_digest(Path(root) / rel)))]
 
 
 def scope_violations(root: str, tasks: list[dict] | None = None) -> list[str]:
@@ -665,7 +692,10 @@ def fingerprint(root: str, task: dict) -> str:
     excl = f":(exclude){plan_rel(task)}"
     diff = git_bytes(root, "diff", "--binary", "--no-renames", base, "--", ".", excl, timeout=15)
     if diff is None:
-        diff = b"<diff unavailable>"
+        diff = git_bytes(root, "diff", "--binary", "--no-renames", "HEAD", "--", ".", excl, timeout=15)
+    if diff is None:
+        # Never a constant: an unreadable tree must not let earlier evidence match (found by independent review).
+        return "unavailable-" + os.urandom(8).hex()
     elif len(diff) > FINGERPRINT_DIFF_CAP:
         diff = (git_bytes(root, "diff", "--stat", base, "--", ".", excl) or b"") + b"<large>"
     h = hashlib.sha256(diff + b"\0")
@@ -793,13 +823,16 @@ def completion_problems(root: str, task: dict) -> list[str]:
                                                 "not re-run since the working tree or an operation changed")
             problems.append(f"verification `{cmd}` has no successful run on the current working tree ({why})")
     current = [r for r in ev.get("reviews", []) if r.get("fp") == fp]
+    # The latest review that reported a result decides; one without a REVIEW RESULT block neither approves nor masks
+    # an earlier result (found by independent review).
+    reported = [r for r in current if r.get("must_fix") is not None]
     if not current:
         problems.append("no independent review of the current working tree (dispatch a foreground review subagent "
                         "whose response ends with a REVIEW RESULT block: Verdict / Must-fix)")
-    elif current[-1].get("must_fix") is None:
-        problems.append("the latest review has no parseable REVIEW RESULT block (Verdict / Must-fix)")
-    elif current[-1]["must_fix"] > 0:
-        problems.append(f"the latest review reported {current[-1]['must_fix']} MUST FIX finding(s); fix them and get a fresh review")
+    elif not reported:
+        problems.append("no review of the current working tree has a parseable REVIEW RESULT block (Verdict / Must-fix)")
+    elif reported[-1]["must_fix"] > 0:
+        problems.append(f"the latest review reported {reported[-1]['must_fix']} MUST FIX finding(s); fix them and get a fresh review")
     return problems
 
 
@@ -943,6 +976,9 @@ def open_task_lines(cwd: str, limit: int = 700) -> list[str]:
     tasks = [t for t in load_tasks(root) if t.get("state") in OPEN_STATES]
     if not tasks:
         return []
+    # Gated tasks first, newest first within each group: the task waiting on the owner must never be crowded out by
+    # older STANDARD tasks (found by independent review).
+    tasks.sort(key=lambda t: (t.get("state") not in GATED_STATES or t.get("tier") != MATERIAL, -float(t.get("created_at", 0))))
     lines = [f"open tasks (Groundwork task ledger, enforced by the task gate; details: {task_cli()} show <KEY>):"]
     used = len(lines[0])
     for i, t in enumerate(tasks):

@@ -290,6 +290,23 @@ def test_shell_classifier() -> None:
     check("verification after || is masked", vs("true || python3 -m pytest tests -q") == "masked")
     check("verification then ; echo is masked", vs("python3 -m pytest tests -q; echo done") == "masked")
     check("different command is not a verification", vs("python3 -m pytest other -q") is None)
+    check("review MUST FIX 3: `cmd && echo PASS || echo FAIL` is masked (exit 0 even when cmd fails)",
+          vs("python3 -m pytest tests -q && echo PASS || echo FAIL") == "masked")
+    check("verification followed only by && counts", vs("python3 -m pytest tests -q && echo done") == "counted")
+    check("review MUST FIX 4: a narrowed run is not the declared verification",
+          vs("python3 -m pytest tests -q -k nonexistent") == "masked" and vs("python3 -m pytest tests -q --collect-only") == "masked")
+    check("an environment override is not the declared verification", vs("PYTEST_ADDOPTS=-x python3 -m pytest tests -q") is None)
+    check("review: wrappers are unwrapped before the sensitivity check",
+          all(sens(c) for c in ("sudo gcloud compute instances delete vm-1 --quiet", "eval gcloud compute instances delete vm-1",
+                                "bash -lc 'gcloud compute instances delete vm-1'", "sh -ec 'kubectl delete ns x'",
+                                "watch -n 5 kubectl delete pod x", "setsid terraform destroy -auto-approve",
+                                "ionice -c 3 terraform destroy", "sudo docker rm -f x")))
+    check("a nested Claude Code session is sensitive", sens("claude -p hello") is not None)
+    check("an approval of `cmd` does not cover `sudo cmd`",
+          not gate.matches_operation("sudo gcloud compute instances create gg-vm-1".split(), ["gcloud compute instances create gg-vm-1"]))
+    check("review: MCP update_status / run_query are not read-only; resolve_review_thread is not read-only",
+          not gate.mcp_read_only("mcp__x__update_status") and not gate.mcp_read_only("mcp__x__run_query")
+          and not gate.mcp_read_only("mcp__github__resolve_review_thread"))
     check("MCP read verbs", gate.mcp_read_only("mcp__github__get_me") and gate.mcp_read_only("mcp__github__pull_request_read")
           and gate.mcp_read_only("mcp__Notion__notion-search") and gate.mcp_read_only("mcp__Notion__notion-get-comments"))
     check("MCP write verbs", not gate.mcp_read_only("mcp__github__push_files") and not gate.mcp_read_only("mcp__github__create_or_update_file")
@@ -343,6 +360,10 @@ def test_full_lifecycle() -> None:
         check("before approval: mutating MCP denied, read MCP allowed",
               denied(e.pre(repo, "mcp__github__push_files", {"files": []})) != "" and denied(e.pre(repo, "mcp__github__get_me", {})) == "")
         check("before approval: worktree escape denied", denied(e.pre(repo, "EnterWorktree", {})) != "")
+        check("review MUST FIX 1: any tool that runs a command (Monitor) is gated like Bash; PowerShell is denied",
+              denied(e.pre(repo, "Monitor", {"command": "touch infra.txt", "description": "x"})) != ""
+              and denied(e.pre(repo, "Monitor", {"command": "git status", "description": "x"})) == ""
+              and denied(e.pre(repo, "PowerShell", {"command": "Get-ChildItem"})) != "")
         check("read tools are never gated", e.pre(repo, "Read", {"file_path": str(repo / "README.md")}) is None)
 
         # ---- plan gate
@@ -358,6 +379,10 @@ def test_full_lifecycle() -> None:
         r = e.cli(repo, "request-approval", key)
         check("plan gate: verification command with a placeholder refused (found in the live run)",
               r.returncode == 1 and "placeholder" in r.stderr, r.stderr[:300])
+        (d / "proposal.md").write_text(PLAN_PROPOSAL.replace("`python3 -m pytest tests -q`", "`make lint && python3 -m pytest tests -q`"))
+        r = e.cli(repo, "request-approval", key)
+        check("review MUST FIX 5: a compound verification entry is refused (it could never be recorded)",
+              r.returncode == 1 and "one simple command" in r.stderr, r.stderr[:300])
         write_plan(repo, change)
         r = e.cli(repo, "request-approval", key)
         check("plan gate: complete plan accepted, prints the owner's /gw-approve line", r.returncode == 0 and "/gw-approve COR-123 " in r.stdout, r.stdout + r.stderr)
@@ -371,10 +396,14 @@ def test_full_lifecycle() -> None:
         out = e.prompt(repo, f"approve COR-123 {code}")
         check("plain-text approval is NOT recorded", "NOT a recorded approval" in context(out) and e.task(repo, key)["state"] == "awaiting-approval", context(out)[:200])
         check("Claude cannot invoke /gw-approve through the Skill tool", "owner-only" in denied(e.pre(repo, "Skill", {"skill": "gw-approve", "args": f"COR-123 {code}"})))
-        check("Claude cannot run, schedule or send it",
-              all(denied(e.pre(repo, tool, ti)) for tool, ti in (("Bash", {"command": f"echo /gw-approve COR-123 {code}"}),
+        check("Claude cannot run, schedule or send it (nested claude session, cron, message, Monitor)",
+              all(denied(e.pre(repo, tool, ti)) for tool, ti in (("Bash", {"command": f"claude -p '/gw-approve COR-123 {code}'"}),
                                                                 ("CronCreate", {"prompt": f"/gw-approve COR-123 {code}", "cron": "* * * * *"}),
-                                                                ("SendMessage", {"to": "x", "message": f"/gw-approve COR-123 {code}"}))))
+                                                                ("SendMessage", {"to": "x", "message": f"/gw-approve COR-123 {code}"}),
+                                                                ("Monitor", {"command": f"claude -p '/gw-approve COR-123 {code}'"}))))
+        check("text naming the command is harmless in read-only commands and subagent prompts",
+              denied(e.pre(repo, "Bash", {"command": "grep -rn gw-approve docs"})) == ""
+              and denied(e.pre(repo, "Agent", {"subagent_type": "Explore", "prompt": "explain how /gw-approve works"})) == "")
         check("Claude cannot write the ledger or the owner command",
               denied(e.pre(repo, "Write", {"file_path": str(e.cfg / "groundwork" / "tasks" / "x" / "COR-123.json"), "content": "{}"})) != ""
               and denied(e.pre(repo, "Write", {"file_path": str(e.cfg / "commands" / "gw-approve.md"), "content": "x"})) != "")
@@ -417,6 +446,10 @@ def test_full_lifecycle() -> None:
         check("approved: ordinary command allowed", denied(e.pre(repo, "Bash", {"command": "python3 -m pytest tests -q"})) == "")
         check("approved: Groundwork settings protected", denied(e.pre(repo, "Write", {"file_path": str(e.cfg / "settings.json"), "content": "{}"})) != ""
               and denied(e.pre(repo, "Bash", {"command": f"sed -i s/a/b/ {e.cfg}/settings.json"})) != "")
+        check("approved: an unrelated settings.json (e.g. .vscode) is not mistaken for Groundwork's",
+              denied(e.pre(repo, "Bash", {"command": "git add .vscode/settings.json"})) == "")
+        check("approved: Monitor running an unapproved sensitive command is denied",
+              "not an Approved Operation" in denied(e.pre(repo, "Monitor", {"command": "gcloud compute instances delete vm-1", "description": "x"})))
         check("approved: project settings protected (disableAllHooks)", denied(e.pre(repo, "Write", {"file_path": str(repo / ".claude/settings.json"), "content": "{}"})) != "")
         (d / "proposal.md").write_text(PLAN_PROPOSAL.replace("infra/goldengate/**", "infra/**"))
         r = denied(e.pre(repo, "Write", {"file_path": str(repo / "infra/goldengate/vm.json"), "content": "{}"}))
@@ -431,7 +464,7 @@ def test_full_lifecycle() -> None:
         check("completion refused before any evidence; lists each gap",
               r.returncode == 1 and "tasks.md: 0/2" in r.stderr and "never run" in r.stderr and "no independent review" in r.stderr, r.stderr)
         out = e.post(repo, "Bash", {"command": "python3 -m pytest tests -q | tail -3"}, tool_response={"stdout": "1 passed", "interrupted": False})
-        check("piped verification not counted", "not counted" in context(out), context(out))
+        check("piped verification not counted", "does not count" in context(out), context(out))
         out = e.post(repo, "Bash", {"command": "python3 -m pytest tests -q"}, event="PostToolUseFailure", error="Exit code 1\nFAILED")
         check("failed verification recorded as FAILED", "FAILED" in context(out), context(out))
         out = e.post(repo, "Bash", {"command": "gcloud compute instances create gg-vm-1 --zone=z"}, tool_response={"stdout": "", "interrupted": False})
@@ -459,15 +492,16 @@ def test_full_lifecycle() -> None:
         r = e.cli(repo, "complete", key)
         check("completion refused: latest review reported MUST FIX", r.returncode == 1 and "MUST FIX" in r.stderr, r.stderr)
         (repo / "infra" / "goldengate" / "vm.json").write_text('{"name": "gg-vm-1", "disk_gb": 100}\n')
-        e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer", "prompt": "review"}, tool_response=review(REVIEW_OK))
-        r = e.cli(repo, "complete", key)
-        check("completion refused: verification is stale after the fix", r.returncode == 1 and "not re-run" in r.stderr, r.stderr)
-        e.post(repo, "Bash", {"command": "python3 -m pytest tests -q"}, tool_response={"stdout": "1 passed", "interrupted": False})
         out = e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer"}, tool_response=review("fine, no block"))
         check("review without REVIEW RESULT recorded but cannot count", "cannot count" in context(out), context(out))
         r = e.cli(repo, "complete", key)
-        check("completion refused: latest review has no REVIEW RESULT", r.returncode == 1 and "no parseable REVIEW RESULT" in r.stderr, r.stderr)
+        check("completion refused: verification stale after the fix, and no review with a REVIEW RESULT on this tree",
+              r.returncode == 1 and "not re-run" in r.stderr and "parseable REVIEW RESULT" in r.stderr, r.stderr)
+        e.post(repo, "Bash", {"command": "python3 -m pytest tests -q"}, tool_response={"stdout": "1 passed", "interrupted": False})
         e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer"}, tool_response=review(REVIEW_OK))
+        e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer"}, tool_response=review("a later note without a block"))
+        out = e.post(repo, "Agent", {"subagent_type": "ecc:code-reviewer"}, tool_response={"status": "teammate_spawned"})
+        check("an unfinished (teammate/background) review is not recorded", "not captured" in context(out), context(out))
         check("non-review agent is not counted as a review",
               context(e.post(repo, "Agent", {"subagent_type": "Explore", "description": "review files"}, tool_response=review(REVIEW_OK))) == "")
 
@@ -518,16 +552,34 @@ def test_separation_and_failure_modes() -> None:
         check("kill switch GROUNDWORK_TASK_GATE=off disables the gate",
               e.hook({"hook_event_name": "PreToolUse", "cwd": str(a), "tool_name": "Write", "tool_input": {"file_path": str(a / "x.py")}},
                      {"GROUNDWORK_TASK_GATE": "off"}) is None)
+        out = e.prompt(a, "Use the dev project and create the VM in us-central1 with a 100GB disk.")
+        check("review: a keyless reply while COR-1 waits on the owner is input to COR-1, not a new task",
+              "not registered as a new task" in context(out) and "COR-1" in context(out)
+              and not list((e.cfg / "groundwork" / "tasks").rglob("GW-*.json")), context(out)[:200])
         out = e.expand(a, "gw-cancel", "COR-1")
         check("owner /gw-cancel ungates the repository", "cancelled COR-1" in context(out)
               and denied(e.pre(a, "Write", {"file_path": str(a / "x.py"), "content": "x"})) == "", str(out))
+        out = e.prompt(a, "COR-1: redo it in europe-west1 and delete the old VM")
+        t = e.task(a, "COR-1")
+        check("review MUST FIX 2: new work on a cancelled key opens a fresh gated task (old record kept)",
+              "registered as a MATERIAL" in context(out) and t["state"] == "planning"
+              and len(list((e.cfg / "groundwork" / "tasks").rglob("COR-1.closed-*.json"))) == 1
+              and denied(e.pre(a, "Write", {"file_path": str(a / "x.py"), "content": "x"})) != "", context(out)[:200])
+        check("the fresh task gets its own plan directory", t["change"] != "cor-1-deploy-payments-service-production", t["change"])
+        e.expand(a, "gw-cancel", "COR-1")
         check("untracked STANDARD work (no ticket key) records no task", e.prompt(a, "fix the typo in the README") is None
               and not list((e.cfg / "groundwork" / "tasks").rglob("GW-*.json")))
         out = e.prompt(a, "COR-77: fix the typo in the README")
         check("ticketed STANDARD task tracked without a gate", "COR-77 is tracked as a STANDARD" in context(out)
               and denied(e.pre(a, "Write", {"file_path": str(a / "README.md"), "content": "x"})) == "", context(out)[:200])
+        for n in range(5):
+            e.prompt(a, f"COR-9{n}: fix the typo number {n} in the README")
         out = e.prompt(a, "Provision a new GKE node pool for the batch cluster")
         check("MATERIAL work without a key gets a generated GW-n key", "GW-1 is registered as a MATERIAL" in context(out), context(out)[:200])
+        snap = subprocess.run([sys.executable, str(SNAPSHOT)], input=json.dumps({"cwd": str(a)}), capture_output=True, text=True, env=e.env, timeout=60)
+        add = json.loads(snap.stdout)["hookSpecificOutput"]["additionalContext"]
+        check("review: the gated task is listed first in the snapshot, ahead of older STANDARD tasks",
+              add.index("GW-1 MATERIAL planning") < add.index("COR-9"), add[:900])
 
         def corrupt():  # an approved task whose scope is not a list makes the gate raise
             root = gt.repo_root(b)
