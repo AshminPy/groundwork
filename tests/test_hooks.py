@@ -463,6 +463,7 @@ def test_push_guard() -> None:
             ("false && git checkout -b feature/q; git push origin HEAD", True),
             ('if [ -n "$NOPE" ]; then git checkout -b feature/q; fi; git push origin HEAD', True),
             ("true || git checkout -b feature/q && git push origin HEAD", True),
+            ("git branch feature/y; ! git checkout -q -b feature/y && git push origin HEAD", True),  # fourth review
         ]
         for cmd, expect_denied in cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
@@ -473,6 +474,10 @@ def test_push_guard() -> None:
         # 2.4.0 guard. The session sits in a worktree on feature/x, so only the command itself can reach main.
         feat = Path(tmpdir) / "feat"
         git(repo, "worktree", "add", "-q", "-b", "feature/x", str(feat))
+        # for the subshell-cd cases: sub2 is a nested repository on main, sub1/sub2 a plain directory on feature/x
+        (feat / "sub1" / "sub2").mkdir(parents=True)
+        git(feat, "init", "-q", "-b", "main", "sub2")
+        git(feat / "sub2", "commit", "-q", "--allow-empty", "-m", "init")
         security_cases = [
             # F4: separators that touch a word, newlines, subshells, groups, compound commands, substitutions
             ("git status\ngit push origin main", True),
@@ -610,6 +615,34 @@ def test_push_guard() -> None:
             ("shopt -s expand_aliases\nalias gp='git push origin main'\ngp", True),
             ("rbash -c 'git push origin main'", True),
             ("((" * 10000 + "\ngit push origin main", True),    # a long command is checked, not timed out
+            # fourth confirmation review (M1)
+            ("git push origin main>()", True),                   # an empty process substitution is a redirection
+            ("git push origin main<()", True),
+            (">()git push origin main", True),
+            ("<( )git push origin main", True),
+            ("cat <<EOF\n'$(git push origin main)'", True),      # unquoted body: its substitutions run
+            ("cat <<EOF\n'`git push origin main`'", True),
+            ("bash <<EOF\necho '$(git push origin main)'\nEOF", True),
+            ("cat <<EOF | sh\necho '$(git push origin main)'\nEOF", True),
+            ("bash<<EOF\ngit push origin main\nEOF", True),      # other ways a shell reads the here-document
+            (">/dev/null bash <<EOF\ngit push origin main\nEOF", True),
+            ("<<EOF bash\ngit push origin main\nEOF", True),
+            ("timeout 5s bash <<EOF\ngit push origin main\nEOF", True),
+            ("env -u FOO bash <<EOF\ngit push origin main\nEOF", True),
+            ('"bash" <<EOF\ngit push origin main\nEOF', True),
+            ('cat <<EOF | "bash"\ngit push origin main\nEOF', True),
+            ("echo $(( '$(git push origin main)' ))", True),     # arithmetic reads quotes as text
+            ("echo $[ '$(git push origin main)' ]", True),
+            ("(( '$(git push origin main)' ))", True),
+            ("a['$(git push origin main)']=1", True),
+            ("gi\"\"t pu\"\"sh origin main\necho '", True),      # cannot be parsed and names push
+            ("g\\it p\\ush origin main\necho '", True),
+            ("[x " * 5000 + "\ngit push origin feature/x", True),  # too long to check in time
+            ("(cd sub1); cd sub2 && git push origin HEAD", True),  # a subshell's cd does not move the shell
+            ("x=$(cd sub1 && true); cd sub2 && git push origin HEAD", True),
+            ("/usr/lib/git-core/git-push origin main", True),    # other entry points to the same push
+            ("git send-pack origin main", True),
+            ("git subtree push --prefix=x origin main", True),
             # existing behaviour kept: ordinary work is not denied
             ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
             ("git push \\\n  origin feature/x", False),
@@ -646,6 +679,8 @@ def test_push_guard() -> None:
             ("git add . && git commit -F - <<'EOF'\nfix: don't let git push to main\nEOF", False),
             ("cd . && cat > docs.md <<'EOF'\ngit push origin main\nEOF", False),
             ("echo $((1 << 2)) && git push origin feature/x", False),
+            ("diff <(git log -1) <(git log -2); git push origin feature/x", False),
+            ("docker run -i img bash <<EOF\necho hi\nEOF\ngit push origin feature/x", False),
         ]
         for cmd, expect_denied in security_cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})

@@ -17,14 +17,16 @@
     one after `git checkout -b <name> && …` is checked against `<name>`. A here-document is read as data unless it
     feeds a shell or has no terminator line, so an apostrophe in a commit message no longer blocks the push after
     it. A command taken from a variable that holds git or push (`C='git push origin main'; $C`), a shell alias that
-    pushes, `find -execdir git push`, and a `cd` while CDPATH is set are denied; a check that would take longer
-    than 20 seconds denies a command that mentions push instead of timing out.
+    pushes, `find -execdir git push`, and a `cd` while CDPATH is set are denied; `git send-pack` and the
+    `git-push` program count as pushes. A command over 10 KB that mentions push, or one whose check would take
+    longer than 20 seconds, is denied instead of timing out.
   - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
     directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
     the Claude config directory through earlier `cd`s or assignments, also after a `cd` the gate cannot compute
     (`cd "$X" && cd .claude`, a glob, CDPATH), now asks before settings or hooks change. Relative paths are
     resolved against every directory the command may be in (`cd ~ && rm .claude/hooks/x`, a session started in
-    the config directory, `env -C`, `of=PATH`), `sh -c` / `eval` strings are checked the same way, and removing or
+    the config directory, `env -C`, `of=PATH`, `-t.claude/hooks`), `sh -c` / `eval` strings are checked the same
+    way, and removing or
     moving the config directory itself asks.
   - Settings (F13): merging or unmerging `settings.json` keeps its file mode, so an owner-only file stays 0600.
   - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`

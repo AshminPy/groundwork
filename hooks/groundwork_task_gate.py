@@ -1275,8 +1275,11 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> 
                    for p, q in zip(parts, parts[1:]))
 
     def resolves_protected(word: str, where: list[str]) -> bool:
-        # the word, or the path after `=` in `of=PATH` / `--target-directory=PATH` (independent review)
-        for w in [word] + ([word.split("=", 1)[1]] if "=" in word else []):
+        # the word, the path after `=` in `of=PATH` / `--target-directory=PATH`, or a value glued to a short option
+        # (`cp -t.claude/hooks x`, `tar -C.claude/hooks`; independent review)
+        letters = re.match(r"^-([A-Za-z]+)", word)
+        glued = [word[p:] for p in range(2, 2 + len(letters.group(1)))] if letters and len(word) > 2 else []
+        for w in [word] + ([word.split("=", 1)[1]] if "=" in word else []) + glued:
             w = _expand_literal(w, assigns)
             if not w or w.startswith("-") or "$" in w or "`" in w:
                 continue
