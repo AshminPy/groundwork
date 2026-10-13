@@ -26,18 +26,27 @@ security reviews reproduced against earlier versions:
     yet), denies a push that depends on it;
   - a push the shell or git computes fails closed: an argument with `$`, a substitution, a glob or
     a brace expansion (`origin $B`, `HEAD:$(…)`, `{main,}`), arguments xargs appends, a computed
-    `git` or subcommand, and a `-c alias.*` (`$(git branch --show-current)` is read as `HEAD`).
-    `$'…'` is decoded as bash 5.2 decodes it, cut at a NUL.
+    `git` or subcommand, any computed word before `push`, and a `-c alias.*` that runs a shell
+    (`$(git branch --show-current)` is read as the current branch). `$'…'` is decoded as bash 5.2
+    decodes it, cut at a NUL;
+  - substitutions inside double quotes, `${…}` and unquoted here-documents are checked; a here-document
+    body is otherwise data, unless it feeds a shell (`bash <<EOF`);
+  - a branch switch earlier in the command (`git switch main`, `git checkout -`, `git branch -m`,
+    `git init`) makes a later bare or `HEAD` push unknown; after `git checkout -b <name>` it is <name>.
 
 Known limits (deliberate — full shell parsing is out of scope): the protected set is an
 exact, case-sensitive match (`main`, `master`, `production`, `prod`, `release`); a push
-run by another program (`python -c`, a script file that itself pushes) is not seen, nor a
-destination or alias set in a git config file (`.git/config`, `~/.gitconfig`); a computed
-git subcommand is denied even when it is not a push (`git $c` in a loop);
-quoted text such as `echo "git push origin main"` is correctly NOT treated as a push, but
-unquoted text (`echo git push origin main`) and here-document lines that read like a
-protected push are denied. Every push still goes through Claude Code's normal Bash
-permission model, which is the backstop for anything this parser cannot see.
+run by another program (`python -c`, a script file that itself pushes) or fed to a shell on
+stdin (`echo … | bash`) is not seen, nor a destination or alias set in a git config file
+(`.git/config`, `~/.gitconfig`), nor a push whose run order differs from its text order
+(a function or trap defined before a `cd`); a computed git subcommand is denied even when it
+is not a push (`git $c` in a loop), and so is a computed word before the word `push`
+(`echo $(date) push`). Quoted text such as `echo "git push origin main"` is correctly NOT
+treated as a push, but unquoted text (`echo git push origin main`) is denied. Because a
+program can push without any of this text, the guard stops mistakes rather than a determined
+adversary: branch protection on the server is the control for that. Every push still goes
+through Claude Code's normal Bash permission model, which is the backstop for anything this
+parser cannot see.
 
 Fail-open on unreadable hook input — a broken guard must never become a session-wide
 bypass of Claude's normal permission prompts. A command it cannot parse is denied only
@@ -53,7 +62,6 @@ import sys
 PROTECTED = {"main", "master", "production", "prod", "release"}
 FORCE_FLAGS = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
 FORCE_CLUSTER_RE = re.compile(r"^-[A-Za-z0-9]*f[A-Za-z0-9]*$")  # -f inside a short-flag cluster: -uf, -fu
-SHELL_C_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c inside a short-flag cluster: -lc, -ec, -xc
 ALL_BRANCH_FLAGS = {"--all", "--mirror", "--branches"}
 # push options that consume the next token when not written as --opt=value
 # (`--signed` takes a value only as `--signed=…`, so it never consumes the next word; independent review)
@@ -73,13 +81,21 @@ UNKNOWN_DIR = "<unknown directory>"
 MAX_DEPTH = 3
 # characters that make the shell compute a word: an expansion, a substitution, a glob or a brace expansion
 COMPUTED_CHARS = "$`{*?["
-# `$(git branch --show-current)` and its equivalents name the current branch, exactly like the refspec `HEAD`
+# `$(git branch --show-current)` and its equivalents name the current branch. They are replaced by CURRENT, which
+# is resolved like `HEAD` when it is a whole destination (`origin "$(…)"`, `HEAD:refs/heads/$(…)`) and is computed
+# anywhere else (`main$(…)`; independent review).
+CURRENT = "__groundwork_current_branch__"
 CURRENT_BRANCH_RE = re.compile(
     r"\$\(\s*(?P<a>git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+(?:HEAD|@)|symbolic-ref\s+--short\s+HEAD))"
     r"\s*\)|`\s*(?P<b>git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+(?:HEAD|@)|symbolic-ref\s+--short\s+HEAD))\s*`")
 # `-c <key>=…` keys that pick a push's repository or destination (others, such as push.autoSetupRemote, do not)
 PUSH_CONFIG_RE = re.compile(r"^(?:push\.default|remote\.pushdefault|remote\..+\.(?:push|mirror)"
                             r"|branch\..+\.(?:merge|remote|pushremote)|include\.path|includeif\..+\.path)$")
+# GIT_DIR / GIT_WORK_TREE pick another repository; GIT_CONFIG* (files, GIT_CONFIG_COUNT/KEY/VALUE,
+# GIT_CONFIG_PARAMETERS) can set push.default or remote.*.push
+GIT_ENV_RE = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE|GIT_CONFIG\w*)=")
+# `git checkout -b NAME` / `git switch -c NAME` make NAME the current branch
+CREATE_FLAGS = {"checkout": ("-b", "-B", "--orphan"), "switch": ("-c", "-C", "--create", "--force-create", "--orphan")}
 ANSI_C_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
                  "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
 ANSI_C_HEX = {"x": 2, "u": 4, "U": 8}
@@ -106,7 +122,11 @@ def _ansi_c(body: str) -> str:
             i += 2 + len(m.group(0))
         elif e == "c" and i + 2 < n:
             ch = body[i + 2]
-            out.append(chr(0x7F if ch == "?" else ord(ch.upper()) & 0x1F))  # `\c@` is NUL
+            if ch == "?":
+                out.append("\x7f")
+            else:  # `\c@` is NUL; bash takes a non-ASCII character's first byte (independent review: `\cß` crashed)
+                code = ord(ch.upper()) if ch.isascii() else ch.encode("utf-8", "surrogatepass")[0]
+                out.append(chr(code & 0x1F))
             i += 3
         else:
             out.append(c)  # an escape bash does not know keeps its backslash (`\N`, `\z`, a bare `\x`)
@@ -114,16 +134,165 @@ def _ansi_c(body: str) -> str:
     return "".join(out).split("\0", 1)[0]
 
 
-def _strip_comments(cmd: str) -> str:
-    """Prepare the text the way bash reads it before shlex sees it:
+def _heredoc_delimiter(cmd: str, j: int):
+    """(delimiter, index after it, quoted) for the word after `<<` / `<<-` at j, or None when it is not one
+    (it must start with a letter, `_`, a quote or a backslash; `1<<2` is a shift). Same rules as the task gate."""
+    n = len(cmd)
+    while j < n and cmd[j] in " \t":
+        j += 1
+    if j >= n or not (cmd[j].isalpha() or cmd[j] in "_'\"\\"):
+        return None
+    word, quoted = [], False
+    while j < n and cmd[j] not in " \t\r" and cmd[j] not in OPERATOR_CHARS:
+        if cmd[j] in "'\"":
+            k = cmd.find(cmd[j], j + 1)
+            if k < 0:
+                return None
+            word.append(cmd[j + 1:k])
+            j, quoted = k + 1, True
+        elif cmd[j] == "\\":
+            word.append(cmd[j + 1:j + 2])
+            j, quoted = j + 2, True
+        else:
+            word.append(cmd[j])
+            j += 1
+    return ("".join(word), j, quoted) if word else None
+
+
+def _scan_braced(cmd: str, j: int):
+    """Index just past the `}` closing a `${` whose body starts at j (quotes honoured), or None when unclosed."""
+    n, depth = len(cmd), 1
+    while j < n and depth:
+        ch = cmd[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch in "'\"":
+            k = j + 1
+            while k < n and cmd[k] != ch:
+                k += 2 if ch == '"' and cmd[k] == "\\" else 1
+            if k >= n:
+                return None
+            j = k + 1
+            continue
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        j += 1
+    return j if depth == 0 else None
+
+
+def _scan_arithmetic(cmd: str, j: int):
+    """Index just past the `))` closing an arithmetic `((` whose body starts at j, or None when the parentheses do
+    not close as `))` (then they are nested subshells, `((cd a); ls)`)."""
+    n, depth, first_close = len(cmd), 2, None
+    while j < n and depth:
+        if cmd[j] == "(":
+            depth += 1
+        elif cmd[j] == ")":
+            depth -= 1
+            if depth == 1 and first_close is None:
+                first_close = j
+        j += 1
+    return j if depth == 0 and first_close == j - 2 else None
+
+
+def _matching_paren(text: str, j: int):
+    """Index of the `)` closing a group whose body starts at j, honouring quotes, escapes and here-document bodies
+    inside it (`"$(cat <<'EOF' … don't … EOF)"`, the usual commit-message form), or None when unclosed."""
+    n, depth, pending = len(text), 1, []
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            k = j + 1
+            while k < n and text[k] != ch:
+                k += 2 if ch == '"' and text[k] == "\\" else 1
+            if k >= n:
+                return None
+            j = k + 1
+        elif text.startswith("<<", j) and not text.startswith("<<<", j):
+            strip = text.startswith("<<-", j)
+            found = _heredoc_delimiter(text, j + (3 if strip else 2))
+            if found:
+                pending.append((found[0], strip))
+                j = found[1]
+            else:
+                j += 2
+        elif ch == "\n" and pending:
+            j += 1
+            for delim, strip in pending:  # skip each body up to its terminator line
+                while True:
+                    if j >= n:
+                        return None
+                    k = text.find("\n", j)
+                    k = n if k < 0 else k
+                    line = text[j:k]
+                    j = min(k + 1, n)
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        break
+            pending = []
+        else:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return j
+            j += 1
+    return None
+
+
+def _substitutions_in(text: str, subs: list, single_quotes: bool) -> bool:
+    """Add the body of every `$(…)` and backtick in text to subs (bash runs them); False when one is unclosed.
+    `single_quotes`: whether `'…'` quotes here (not inside double quotes or a here-document)."""
+    k, n = 0, len(text)
+    while k < n:
+        ch = text[k]
+        if ch == "\\":
+            k += 2
+        elif ch == "'" and single_quotes:
+            e = text.find("'", k + 1)
+            if e < 0:
+                return False
+            k = e + 1
+        elif text.startswith("$(", k):
+            e = _matching_paren(text, k + 2)
+            if e is None:
+                return False
+            subs.append(text[k + 2:e])
+            k = e + 1
+        elif ch == "`":
+            e = k + 1
+            while e < n and text[e] != "`":
+                e += 2 if text[e] == "\\" else 1
+            if e >= n:
+                return False
+            subs.append(text[k + 1:e])
+            k = e + 1
+        else:
+            k += 1
+    return True
+
+
+def _prepare(cmd: str):
+    """Prepare the text the way bash reads it before shlex sees it. Returns (text, substitutions) — the bodies of
+    the `$(…)` / backticks shlex would keep inside one word, which bash runs — or None when the command cannot be
+    read (an unclosed quote, substitution or `${`).
     - remove `#` comments: only a `#` that starts a word, outside quotes, up to the newline; `a#b`, `$#`, `${x#y}`
       and `\\#` stay literal (shlex's own comment handling ends a word at any `#`);
     - join backslash-newline line continuations, outside single quotes (independent review: `ma\\⏎in` was the
       refspec `\\nmain`, not `main`);
     - decode ANSI-C `$'…'` quoting into an ordinary quoted word, and read `$"…"` as `"…"`;
-    - read `$(git branch --show-current)` (and its equivalents) as `HEAD`, the current branch."""
-    cmd = CURRENT_BRANCH_RE.sub("HEAD", cmd)
-    out, i, n, boundary = [], 0, len(cmd), True
+    - read `$(git branch --show-current)` (and its equivalents) as CURRENT;
+    - keep `${…}`, `$((…))` and `((…))` whole, so a `<<` in them is not a here-document;
+    - a here-document body is data for its command and is dropped, except that a body fed to a shell
+      (`bash <<EOF`) is returned as commands, and the substitutions in a body whose delimiter is unquoted are
+      returned (independent review: a body with an apostrophe made an ordinary push unparseable);
+    - the substitutions inside double quotes and `${…}` are returned (independent review:
+      `out="$(git push origin main 2>&1)"` was not seen)."""
+    cmd = CURRENT_BRANCH_RE.sub(CURRENT, cmd)
+    out, subs, heredocs = [], [], []
+    i, n, boundary, line_start = 0, len(cmd), True, 0
     while i < n:
         c = cmd[i]
         if c == "\\":
@@ -136,24 +305,102 @@ def _strip_comments(cmd: str) -> str:
             j = i + 2
             while j < n and cmd[j] != "'":
                 j += 2 if cmd[j] == "\\" else 1
+            if j >= n:
+                return None
             out.append("'" + _ansi_c(cmd[i + 2:j]).replace("'", "'\"'\"'") + "'")
             i, boundary = j + 1, False
         elif c == "$" and cmd[i + 1:i + 2] == '"':
             i += 1  # `$"…"` is a locale-translated "…": the same words
-        elif c in "'\"":
+        elif c == "$" and cmd[i + 1:i + 2] == "{":
+            j = _scan_braced(cmd, i + 2)
+            if j is None or not _substitutions_in(cmd[i + 2:j - 1], subs, True):
+                return None
+            out.append(cmd[i:j])
+            i, boundary = j, False
+        elif (c == "$" and cmd.startswith("$((", i) and _scan_arithmetic(cmd, i + 3)) or \
+                (c == "(" and boundary and cmd.startswith("((", i) and _scan_arithmetic(cmd, i + 2)):
+            start = i + (3 if c == "$" else 2)
+            j = _scan_arithmetic(cmd, start)
+            if not _substitutions_in(cmd[start:j - 2], subs, True):
+                return None
+            out.append(cmd[i:j])  # arithmetic: `<<` is a shift, not a here-document
+            i, boundary = j, False
+        elif c == '"':
             j = i + 1
-            while j < n and cmd[j] != c:
-                j += 2 if c == '"' and cmd[j] == "\\" else 1
-            quoted = cmd[i:j + 1]
-            out.append(quoted.replace("\\\n", "") if c == '"' else quoted)
+            while j < n and cmd[j] != '"':
+                if cmd[j] == "\\":
+                    j += 2
+                elif cmd.startswith("$(", j) and not cmd.startswith("$((", j):  # "$(echo ")")" stays one word
+                    k = _matching_paren(cmd, j + 2)
+                    if k is None:
+                        return None
+                    j = k + 1
+                elif cmd[j] == "`":
+                    k = j + 1
+                    while k < n and cmd[k] != "`":
+                        k += 2 if cmd[k] == "\\" else 1
+                    j = k + 1
+                else:
+                    j += 1
+            if j >= n:
+                return None
+            body = cmd[i + 1:j].replace("\\\n", "")
+            if not _substitutions_in(body, subs, False):
+                return None
+            # a body with a substitution becomes one literal word (its `$` keeps it computed); its commands are checked
+            # from subs, and quotes inside it cannot end the word early for shlex
+            out.append("'" + body.replace("'", "'\"'\"'") + "'" if "$(" in body or "`" in body else '"' + body + '"')
+            i, boundary = j + 1, False
+        elif c == "'":
+            j = cmd.find("'", i + 1)
+            if j < 0:
+                return None
+            out.append(cmd[i:j + 1])
             i, boundary = j + 1, False
         elif c == "#" and boundary:
             j = cmd.find("\n", i)
             i = n if j < 0 else j
+        elif cmd.startswith("<<<", i):
+            out.append("<<<")  # a here-string, not a here-document
+            i, boundary = i + 3, True
+        elif cmd.startswith("<<", i):
+            strip = cmd.startswith("<<-", i)
+            found = _heredoc_delimiter(cmd, i + (3 if strip else 2))
+            if found:
+                heredocs.append((found[0], strip, found[2]))
+                out.append(cmd[i:found[1]])
+                i, boundary = found[1], False
+            else:
+                out.append(cmd[i:i + 2])
+                i, boundary = i + 2, True
+        elif c == "\n":
+            out.append(c)
+            i, boundary = i + 1, True
+            if heredocs:
+                line = "".join(out[line_start:])
+                feeds_shell = any(os.path.basename(w) in SHELLS or w in ("source", ".")
+                                  for w in re.findall(r"[^\s;&|()<>]+", line))
+                for delim, strip, quoted in heredocs:  # the bodies start after this newline, one after another
+                    lines = []
+                    while i < n:
+                        k = cmd.find("\n", i)
+                        k = n if k < 0 else k
+                        text = cmd[i:k]
+                        i = min(k + 1, n)
+                        if (text.lstrip("\t") if strip else text) == delim:
+                            break
+                        lines.append(text)  # without its terminator, bash reads the body to the end
+                    body = "\n".join(lines)
+                    if feeds_shell:
+                        subs.append(body)
+                    elif not quoted and not _substitutions_in(body, subs, False):
+                        return None
+                heredocs = []
+            line_start = len(out)
         else:
             out.append(c)
             i, boundary = i + 1, c in COMMENT_AFTER
-    return "".join(out)
+    return "".join(out), subs
 
 
 def _split_operators(tok: str):
@@ -169,9 +416,14 @@ def _split_operators(tok: str):
 
 
 def segments(cmd: str):
-    """Token lists for each simple command, or None when the command cannot be tokenized (unbalanced quotes)."""
+    """(token lists for each simple command, substitution bodies to check), or None when the command cannot be
+    tokenized (unbalanced quotes)."""
+    prepared = _prepare(cmd)
+    if prepared is None:
+        return None
+    text, subs = prepared
     try:
-        lex = shlex.shlex(_strip_comments(cmd), posix=True, punctuation_chars=OPERATOR_CHARS)
+        lex = shlex.shlex(text, posix=True, punctuation_chars=OPERATOR_CHARS)
         lex.whitespace = " \t\r"
         lex.whitespace_split = True
         lex.commenters = ""
@@ -211,7 +463,7 @@ def segments(cmd: str):
     for pending in [seg, tick] + outer:  # an unclosed substitution still shows the command around it
         if pending:
             segs.append(pending)
-    return segs
+    return segs, subs
 
 
 def current_branch(cwd: str):
@@ -234,9 +486,35 @@ def _resolve_dir(target: str, base):
 
 
 def _command_position(seg, k) -> bool:
-    """True when seg[k] is where bash looks for the command name (after reserved words, assignments, and `builtin` /
-    `command`, which run the word after them; independent review: `builtin cd ../repo` was not followed)."""
-    return all(t in RESERVED_WORDS or t in ("builtin", "command") or ASSIGNMENT_RE.match(t) for t in seg[:k])
+    """True when seg[k] is where bash looks for the command name: after reserved words, assignments, and `builtin` /
+    `command` (also `command -p`, `builtin --`), which run the word after them (independent review)."""
+    for x, t in enumerate(seg[:k]):
+        if t in RESERVED_WORDS or t in ("builtin", "command") or ASSIGNMENT_RE.match(t):
+            continue
+        if t in ("-p", "--") and x > 0 and seg[x - 1] in ("builtin", "command", "-p", "--"):
+            continue
+        return False
+    return True
+
+
+def _shell_command(args):
+    """The command string of `sh ARGS` when it has `-c` (also `-lc`, `-c -x CMD`, `-o pipefail -c CMD`, `-c -- CMD`:
+    -c makes the first operand the command string), else None. Same rules as the task gate."""
+    i, has_c = 0, False
+    while i < len(args):
+        a = args[i]
+        if a in ("--", "-"):
+            i += 1
+            break
+        if a.startswith("--"):
+            i += 2 if a in ("--rcfile", "--init-file") else 1
+            continue
+        if re.match(r"^[-+][a-zA-Z]+$", a):
+            has_c = has_c or (a[0] == "-" and "c" in a)
+            i += 1 + sum(ch in "oO" for ch in a[1:])  # each o/O takes the next argument as its option name
+            continue
+        break
+    return args[i] if has_c and i < len(args) else None
 
 
 def push_positionals(push):
@@ -255,18 +533,26 @@ def push_positionals(push):
     return args
 
 
-def target_branches(push, dirs, home=None):
+def _branch_name(name: str) -> str:
+    name = name.replace("refs/heads/", "")
+    return name[len("heads/"):] if name.startswith("heads/") else name  # git reads `heads/main` as main
+
+
+def target_branches(push, dirs, home=None, created=None, single=False):
     """Every destination branch a `git push` invocation would update (or delete). A destination that depends on the
     current branch is checked in every directory the push may run in; a None directory, or one whose current branch
     cannot be read (it does not exist yet, or git fails on it), is reported as unknown — except the session's own
     directory (`home`) outside any repository, where a push fails anyway (independent review: a path git could not
-    open let the push through)."""
+    open let the push through). `created`: a branch `git checkout -b` made current earlier in the command; it
+    replaces the session directory's branch when the command never left that directory (`single`)."""
     def current():
+        if created and single and None not in dirs:
+            return [created]
         found = []
         for d in dirs:
             branch = current_branch(d) if d is not None else None
             found.append(branch or (None if d is not None and d == home else UNKNOWN_DIR))
-        return found
+        return found + ([created] if created else [])
 
     args = push_positionals(push)
     if len(args) < 2:
@@ -274,28 +560,23 @@ def target_branches(push, dirs, home=None):
     targets = []
     for refspec in args[1:]:
         src, sep, dst = refspec.lstrip("+").partition(":")
-        name = dst if sep else src
-        if name in ("", "HEAD", "@"):
+        name = _branch_name(dst if sep else src)
+        if name in ("", "HEAD", "@", CURRENT):
             targets.extend(current())
             continue
-        name = name.replace("refs/heads/", "")
-        targets.append(name[len("heads/"):] if name.startswith("heads/") else name)  # git reads `heads/main` as main
+        targets.append(name)
     return targets
 
 
-# GIT_DIR / GIT_WORK_TREE pick another repository; GIT_CONFIG* (files, GIT_CONFIG_COUNT/KEY/VALUE,
-# GIT_CONFIG_PARAMETERS) can set push.default or remote.*.push
-GIT_ENV_RE = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE|GIT_CONFIG\w*)=")
-
-
-def _git_push(seg, k):
-    """(push argv, `-C` dirs, unknown, computed) when seg[k] is `git` running `push`, else None.
-    - `unknown` names a global option that picks the repository (`--git-dir`, `--work-tree`) or the destination
-      (`-c push.default=…`, `-c remote.<name>.push=…`, `--config-env …`) in a way the guard does not follow
-      (independent review of the F10 fix); other keys, such as push.autoSetupRemote, change neither.
-    - `computed` names a part the shell or git computes, so the guard cannot know what runs: a subcommand or global
-      option with `$`, a substitution, a glob or a brace expansion (`git $C origin main`, `git {push,} …`), or a git
-      alias defined with `-c alias.<name>=…` that runs a shell command."""
+def _git_invocation(seg, k):
+    """(argv from the subcommand on, `-C` dirs, unknown, computed) for the `git` at seg[k], or None when no
+    subcommand follows. `-c alias.<name>=…` is expanded as git expands it, except an alias that shadows `push`, which
+    git ignores (independent review).
+    - `unknown` says how a global option picks the repository (`--git-dir`, `--work-tree`) or the destination
+      (`-c push.default=…`, `-c remote.<name>.push=…`, `--config-env …`) in a way the guard does not follow;
+      other keys, such as push.autoSetupRemote, change neither.
+    - `computed` names a part the shell or git computes, so the guard cannot know what runs: a global option with
+      `$` or a substitution, or a git alias that runs a shell command."""
     j, cdirs, unknown, computed, aliases = k + 1, [], None, None, {}
     while j < len(seg) and seg[j].startswith("-"):
         opt = seg[j]
@@ -313,13 +594,13 @@ def _git_push(seg, k):
             if key.startswith("alias."):
                 aliases[key[len("alias."):]] = setting if opt == "-c" else "!"  # --config-env: value in a variable
             elif PUSH_CONFIG_RE.match(key):
-                unknown = f"{opt.split('=')[0]} {key}"
+                unknown = f"sets `{opt.split('=')[0]} {key}`"
         elif opt.split("=")[0] in ("--git-dir", "--work-tree"):
-            unknown = opt.split("=")[0]
+            unknown = f"sets `{opt.split('=')[0]}`"
         j += 2 if opt in GIT_VALUE_OPTIONS else 1
     argv = seg[j:]
     for _ in range(8):  # git expands an alias, also one that names another alias
-        if not argv or argv[0].lower() not in aliases:
+        if not argv or argv[0] == "push" or argv[0].lower() not in aliases:
             break
         setting = aliases.pop(argv[0].lower())
         if setting.startswith("!"):
@@ -328,29 +609,70 @@ def _git_push(seg, k):
             argv = shlex.split(setting) + argv[1:]
         except ValueError:
             return ["push"] + argv[1:], cdirs, unknown, f"git alias `{argv[0]}`"
-    if argv and any(ch in argv[0] for ch in COMPUTED_CHARS):
-        return argv, cdirs, unknown, f"git subcommand `{argv[0]}`"
-    if argv and argv[0] == "push":
-        return argv, cdirs, unknown, computed
+    return (argv, cdirs, unknown, computed) if argv else None
+
+
+def _branch_change(argv):
+    """("created", NAME) when `git checkout -b NAME` / `git switch -c NAME` makes NAME the current branch;
+    ("moved", what) when the command may switch to another branch (`git switch main`, `git checkout -`,
+    `git branch -m`, `git init`, `git clone`, `git symbolic-ref HEAD …`, `git rebase <base> <branch>`,
+    `git stash branch`), so a later `git push` / `git push origin HEAD` cannot be resolved from the repository as it
+    is now (independent review: `git switch main && git merge … && git push origin HEAD`); else None."""
+    sub, args = argv[0], argv[1:]
+    positional = [a for a in args if not a.startswith("-")]
+    moved = ("moved", f"git {sub}")
+    if sub in CREATE_FLAGS:
+        flags = CREATE_FLAGS[sub]
+        letters = "".join(f[1] for f in flags if len(f) == 2)
+        for x, a in enumerate(args):
+            name = None
+            if a in flags or (a.startswith("--") and a.split("=", 1)[0] in flags):
+                name = a.split("=", 1)[1] if "=" in a else (args[x + 1] if x + 1 < len(args) else "")
+            elif re.match(r"^-[A-Za-z]+", a) and not a.startswith("--") and any(ch in letters for ch in a[1:]):
+                at = next(p for p, ch in enumerate(a[1:], 1) if ch in letters)  # -qb NAME, -bNAME
+                name = a[at + 1:] or (args[x + 1] if x + 1 < len(args) else "")
+            if name is not None:
+                return ("created", name) if name and not any(ch in name for ch in COMPUTED_CHARS) else moved
+        if "--" in args:
+            return None  # `git checkout -- file` / `git checkout main -- file` restore files
+        return moved if positional or "-" in args else None
+    if sub == "branch" and any(a in ("-m", "-M", "--move") or re.match(r"^-[A-Za-z]*[mM]$", a) for a in args):
+        return moved
+    if sub in ("init", "clone") or (sub in ("symbolic-ref", "rebase") and len(positional) >= 2) or \
+            (sub == "stash" and positional[:1] == ["branch"]):
+        return moved
     return None
 
 
-def _env_chdirs(seg, k):
-    """Directories `env -C DIR` / `env --chdir=DIR` before seg[k] moves the command into."""
+def _wrapper_chdirs(seg, k):
+    """Directories `env -C DIR` / `env --chdir=DIR` (also clustered, `-iC DIR`) or `sudo -D DIR` before seg[k] move
+    the command into."""
     found = []
     for e in range(k):
-        if os.path.basename(seg[e]) != "env":
+        prog = os.path.basename(seg[e])
+        if prog not in ("env", "sudo"):
             continue
+        letter, takes_value = ("C", "uS") if prog == "env" else ("D", "ugpCrtUTh")
         x = e + 1
-        while x < k:
+        while x < k and seg[x].startswith("-") and seg[x] != "--":
             t = seg[x]
-            if t in ("-C", "--chdir") and x + 1 < k:
+            if t == "--chdir" and x + 1 < k:
                 found.append(seg[x + 1])
                 x += 1
             elif t.startswith("--chdir="):
                 found.append(t.split("=", 1)[1])
-            elif t.startswith("-C") and len(t) > 2:
-                found.append(t[2:])
+            elif not t.startswith("--"):
+                for p, ch in enumerate(t[1:], 1):
+                    if ch == letter:
+                        if t[p + 1:]:
+                            found.append(t[p + 1:])
+                        elif x + 1 < k:
+                            found.append(seg[x + 1])
+                            x += 1
+                        break
+                    if ch in takes_value:
+                        x += 0 if t[p + 1:] else 1  # the value is the rest of the cluster or the next word
+                        break
             x += 1
     return found
 
@@ -361,7 +683,23 @@ def _computed_reason(what):
             "`git push origin HEAD`) or push yourself.")
 
 
-def _push_reason(push, dirs, unknown=None, computed=None, home=None):
+def _computed_word(push):
+    """The first push word the shell computes (`$B`, `$(…)`, a glob or a brace expansion), or a destination that
+    has `$(git branch --show-current)` inside a longer name; None when there is none. A value of `-o` and the like
+    is checked for expansions only: a push option such as `x [WIP]` is text."""
+    value_next = False
+    for t in push:
+        is_value = value_next or t.startswith(("--push-option=", "--receive-pack=", "--exec=", "--repo=")) or \
+            (t.startswith("-o") and len(t) > 2)
+        value_next = t in VALUE_FLAGS
+        if any(ch in t for ch in ("$`{" if is_value else COMPUTED_CHARS)):
+            return t
+        if CURRENT in t and any(CURRENT in p and _branch_name(p) != CURRENT for p in t.lstrip("+").split(":")):
+            return t.replace(CURRENT, "$(git branch --show-current)")
+    return None
+
+
+def _push_reason(push, dirs, unknown=None, computed=None, home=None, created=None, single=False):
     refspecs = push_positionals(push)[1:]
     if (any(t in FORCE_FLAGS or t.startswith("--force") or FORCE_CLUSTER_RE.match(t) for t in push[1:])
             or any(r.startswith("+") for r in refspecs)):  # `+refspec` force-updates that branch
@@ -373,14 +711,13 @@ def _push_reason(push, dirs, unknown=None, computed=None, home=None):
                 "explicitly.")
     if computed:
         return _computed_reason(computed)
-    expanded = next((t for t in push if any(ch in t for ch in COMPUTED_CHARS)), None)
+    expanded = _computed_word(push)
     if expanded is not None:  # `git push origin $B`, `HEAD:$(…)`, `{main,}`, a glob (independent review)
         return _computed_reason(f"`{expanded}`")
-    for target in target_branches(push, dirs, home):
+    for target in target_branches(push, dirs, home, created, single):
         if target == UNKNOWN_DIR:
-            how = (f"sets `{unknown}`" if unknown else
-                   "runs where the guard cannot read the current branch (a computed `cd`, or a directory that does "
-                   "not exist yet)")
+            how = unknown or ("runs where the guard cannot read the current branch (a computed `cd`, or a directory "
+                              "that does not exist yet)")
             return (f"block_protected_push: this push {how}, so the guard cannot check which branch it updates. "
                     "Name the branch explicitly (`git push origin <branch>`) or push yourself.")
         if target in PROTECTED:
@@ -391,60 +728,71 @@ def _push_reason(push, dirs, unknown=None, computed=None, home=None):
 
 def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
     """Return a denial reason for the first violating `git push`, else None. `state` is shared with nested
-    `eval` / `sh -c` commands so a `cd` or a GIT_DIR assignment in them counts for later pushes: dirs are the
-    directories the command may be running in (the session's, plus every `cd` target seen so far)."""
+    `eval` / `sh -c` commands and substitutions, so a `cd`, a GIT_DIR assignment or a branch switch in them counts
+    for later pushes: dirs are the directories the command may be running in (the session's, plus every `cd`
+    target seen so far); head is a branch change seen so far (see _branch_change)."""
     if depth > MAX_DEPTH:
         return ("block_protected_push: too many nested shells to check this git push; run it yourself."
                 if PUSH_LIKE_RE.search(cmd) else None)
-    segs = segments(cmd)
-    if segs is None:
+    parsed = segments(cmd)
+    if parsed is None:
         return ("block_protected_push: this command could not be parsed (unbalanced quotes) and looks like a git "
                 "push; run the push yourself or simplify the command." if PUSH_LIKE_RE.search(cmd) else None)
+    segs, subs = parsed
     if state is None:
-        state = {"dirs": [cwd], "git_env": None}
+        state = {"dirs": [cwd], "git_env": None, "head": None}
     dirs = state["dirs"]
     for seg in segs:
+        if "push" in seg:
+            before = seg[:seg.index("push")]
+            word = next((t for t in before if any(ch in t for ch in "$`") and not ASSIGNMENT_RE.match(t)), None)
+            if word is not None:
+                # a word the shell computes before `push` can be the command itself, or split into words that run
+                # another push first: `$G push`, `timeout 5 $(echo git) push`, `sudo -u $U git push`, `git -C $D push`
+                return _computed_reason(f"`{word}` before `push`")
         for k, tok in enumerate(seg):
             name = os.path.basename(tok)
-            if (_command_position(seg, k) and any(ch in tok for ch in "$`") and not ASSIGNMENT_RE.match(tok)
-                    and "push" in seg[k:]):
-                # a computed command name running `push`: `$G push origin main`, `$(echo git) push origin main`
-                return _computed_reason(f"a computed command (`{tok} … push`)")
             if GIT_ENV_RE.match(tok):
-                state["git_env"] = tok.split("=")[0]  # GIT_DIR=… / export GIT_WORK_TREE=… picks another repository
+                key, value = tok.split("=", 1)
+                state["git_env"] = f"sets `{key}`"  # GIT_DIR=… / export GIT_WORK_TREE=… picks another repository
+                if key.startswith("GIT_CONFIG") and re.search(r"push|!|[$`]", value):
+                    return _computed_reason(f"`{key}` (git configuration set through the environment)")
             elif name in ("cd", "pushd") and _command_position(seg, k):
                 args = [a for a in seg[k + 1:] if not a.startswith("-") or a == "-"]
                 dirs.append(os.path.expanduser("~") if not args else _resolve_dir(args[0], dirs[-1]))
             elif name in SHELLS:
-                # Recurse into nested shells so `bash -c "…"` and `bash -lc "…"` are seen.
-                for j in range(k + 1, len(seg) - 1):
-                    if SHELL_C_RE.match(seg[j]):
-                        reason = inspect_command(seg[j + 1], cwd, depth + 1, state)
-                        if reason:
-                            return reason
-                        break
+                script = _shell_command(seg[k + 1:])  # `bash -c "…"`, `bash -lc "…"`, `sh -c -- "…"`
+                if script is not None:
+                    reason = inspect_command(script, cwd, depth + 1, state)
+                    if reason:
+                        return reason
             elif name == "eval":
                 reason = inspect_command(" ".join(seg[k + 1:]), cwd, depth + 1, state)
                 if reason:
                     return reason
+            elif name == "gh" and seg[k + 1:k + 3] in (["pr", "checkout"], ["repo", "clone"]):
+                state["head"] = ("moved", "gh " + " ".join(seg[k + 1:k + 3]))
             elif name == "git":
-                found = _git_push(seg, k)
+                found = _git_invocation(seg, k)
                 if not found:
-                    rest = seg[k + 1:]
-                    if "push" in rest and any(ch in t for t in rest[:rest.index("push")] for ch in "$`"):
-                        # a computed word before `push` can be the whole subcommand position (`git -C $(…)/x push`)
-                        return _computed_reason(f"a computed word before `push` (`{' '.join(seg[k:k + 4])} …`)")
                     continue
-                push, cdirs, unknown, computed = found
+                argv, cdirs, unknown, computed = found
+                if any(ch in argv[0] for ch in COMPUTED_CHARS):  # `git $C origin main`, `git {push,} origin main`
+                    return _computed_reason(f"git subcommand `{argv[0]}`")
+                cdirs = _wrapper_chdirs(seg, k) + cdirs
+                unknown = unknown or state["git_env"]
+                if argv[0] != "push":
+                    change = _branch_change(argv)
+                    if change and change[0] == "created" and (cdirs or unknown or dirs != [cwd]):
+                        change = ("moved", f"git {argv[0]}")  # made in a directory other than the session's
+                    if change:
+                        state["head"] = change
+                    continue
                 if any(os.path.basename(t) == "xargs" for t in seg[:k]):
                     computed = computed or "arguments xargs appends"  # `echo main | xargs git push origin`
-                split = next((t for t in seg[:k] if any(ch in t for ch in "$`") and not ASSIGNMENT_RE.match(t)), None)
-                if split:
-                    # an unquoted `$U` before git can split into words that run another push first
-                    # (`sudo -u $U git push origin feature/x` with U="root git push origin main")
-                    computed = computed or f"`{split}` before git"
-                cdirs = _env_chdirs(seg, k) + cdirs
-                unknown = unknown or state["git_env"]
+                head = state["head"]
+                if head and head[0] == "moved":
+                    unknown = unknown or f"follows `{head[1]}` in the same command"
                 push_dirs = list(dirs)
                 for c in cdirs:  # each -C is relative to the previous one, as in git
                     push_dirs = [_resolve_dir(c, d) for d in push_dirs]
@@ -453,9 +801,15 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
                     push_dirs = push_dirs + list(dirs)
                 if unknown:
                     push_dirs = [None]
-                reason = _push_reason(push, push_dirs, unknown, computed, cwd)
+                created = head[1] if head and head[0] == "created" else None
+                reason = _push_reason(argv, push_dirs, unknown, computed, cwd, created,
+                                      single=not cdirs and dirs == [cwd])
                 if reason:
                     return reason
+    for body in subs:  # after the commands around them, so a branch switch in a substitution counts conservatively
+        reason = inspect_command(body, cwd, depth + 1, state)
+        if reason:
+            return reason
     return None
 
 
@@ -480,7 +834,9 @@ def main():
     try:
         reason = inspect_command(cmd, cwd)
     except Exception:
-        reason = None
+        # a fault in the guard must not let a push through (independent review: an exception allowed one)
+        reason = ("block_protected_push: the guard could not check this command and it mentions push; run the push "
+                  "yourself or simplify the command." if re.search(r"\bpush\b", cmd) else None)
     if reason:
         deny(reason)
     sys.exit(0)

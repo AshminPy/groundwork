@@ -447,6 +447,13 @@ def test_push_guard() -> None:
             ("git push -o ci.skip origin feature/x", False),     # option value is not a refspec
             ('sh -c "git push origin feature/x"', False),        # nested shell, safe target
             ("git push origin feature/x feature/y", False),      # multiple safe refspecs
+            # independent review (M1): `$(git branch --show-current)` inside a destination is the current branch
+            ('git push origin "refs/heads/$(git branch --show-current)"', True),
+            ('git push origin "HEAD:refs/heads/$(git branch --show-current)"', True),
+            ('git push origin "main$(git branch --show-current)"', True),  # computed: empty in a detached HEAD
+            # a branch created earlier in the same command is the one pushed
+            ("git checkout -b feature/new && git push -u origin HEAD", False),
+            ("git switch -c fix/y && git push -u origin HEAD", False),
         ]
         for cmd, expect_denied in cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
@@ -538,6 +545,32 @@ def test_push_guard() -> None:
             (f"env --chdir={repo} git push origin HEAD", True),
             ("sudo -u $U git push origin feature/x", True),      # word splitting can put another push first
             ("git -C $D push origin feature/x", True),           # ... also inside git's own options
+            # second confirmation review (M1)
+            ("git -c alias.push=status push origin main", True),  # git ignores an alias that shadows push
+            ("git -c alias.push=log push origin HEAD:main", True),
+            ("git push origin main $'\\c\u00df'", True),          # was a parser crash that allowed the push
+            ("G=git; timeout 5 $G push origin main", True),      # a computed git behind a wrapper
+            ("timeout 5 $(echo git) push origin main", True),
+            ("nohup `echo git` push origin main", True),
+            ('result="$(git push origin main 2>&1)"', True),     # substitutions inside double quotes run
+            ('echo "$(git push origin main)"', True),
+            ('echo "`git push origin main`"', True),
+            ('echo "${x:-$(git push origin main)}"', True),
+            ('echo "$(echo $(git push origin main))"', True),
+            ("cat <<EOF\n$(git push origin main)\nEOF", True),   # ... and in an unquoted here-document
+            ("bash <<'EOF'\ngit push origin main\nEOF", True),   # a here-document fed to a shell is commands
+            ("git switch main && git merge --ff-only feature/y && git push origin HEAD", True),  # branch switched
+            ("git checkout main && git push", True),
+            ("git branch -m main && git push origin HEAD", True),
+            ("git checkout - && git push", True),
+            ("git init -q -b main && git push -u origin HEAD", True),
+            ("bash -c -- 'git push origin main'", True),         # `-c` takes the first operand as the command
+            ("sh -c -e 'git push origin main'", True),
+            (f"command -p cd {repo} && git push", True),
+            (f"env -iC {repo} git push", True),
+            (f"sudo -D {repo} git push", True),
+            ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main", True),
+            ("echo $(date) push", True),                         # fail closed: a computed word before `push`
             # existing behaviour kept: ordinary work is not denied
             ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
             ("git push \\\n  origin feature/x", False),
@@ -560,9 +593,15 @@ def test_push_guard() -> None:
             ('git commit -m "$(cat msg)" && git push origin feature/x', False),
             ("git stash push -m wip", False),
             ("git commit -F- <<'EOF'\npush guard: fix\nEOF", False),  # a here-document line starting with push
-            ("echo $(date) push", False),
             (f"env -C {feat} git push", False),
             ('GIT_SSH_COMMAND="ssh -i $KEY" git push origin feature/x', False),  # an assignment is not split
+            # a here-document is data: an apostrophe in it no longer makes the push unparseable
+            ("cat > n.md <<'EOF'\nIt's a note\nEOF\ngit add . && git commit -m x && git push origin feature/x", False),
+            ("git commit -F - <<'EOF'\nfix: don't crash\nEOF\ngit push origin feature/x", False),
+            ("git commit -m \"$(cat <<'EOF'\nIt's fine\nEOF\n)\" && git push origin feature/x", False),
+            ("cat <<'EOF'\ngit push origin main\nEOF", False),   # a quoted here-document is text
+            ("git checkout -- notes.md && git push", False),     # restoring a file keeps the branch
+            ("git push -o 'merge_request.title=x [WIP]' origin feature/x", False),  # a push option value is text
         ]
         for cmd, expect_denied in security_cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})

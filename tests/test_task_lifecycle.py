@@ -866,13 +866,32 @@ def test_security_scan_regressions() -> None:
                     f'cd "$(echo {parent})" && cd {name} && rm hooks/groundwork_task_gate.py',
                     f'cd "$X" && cd {name}/hooks && : > groundwork_task_gate.py',
                     f"cd {parent} && cd {name[:3]}* && rm hooks/groundwork_task_gate.py",
-                    f"CDPATH={parent} cd {name} && rm hooks/groundwork_task_gate.py"):
+                    f"CDPATH={parent} cd {name} && rm hooks/groundwork_task_gate.py",
+                    # second confirmation review: relative paths, nested shells and env -C
+                    f"cd {parent} && rm {name}/hooks/groundwork_task_gate.py",
+                    f"cd {parent} && : > {name}/hooks/groundwork_task_gate.py",
+                    f'cd "$(echo {parent})" && sed -i s/a/b/ {name}/hooks/groundwork_task_gate.py',
+                    f"bash -c 'cd {e.cfg} && rm hooks/groundwork_task_gate.py'",
+                    f"eval 'cd {e.cfg} && rm hooks/groundwork_task_gate.py'",
+                    f"env -C {e.cfg} rm hooks/groundwork_task_gate.py"):
             check(f"F11: {cmd.replace(str(tmp), '<tmp>')!r} asks", "settings" in asked(e.bash(repo, cmd)),
                   str(e.bash(repo, cmd)))
+        for cmd in ("rm hooks/groundwork_task_gate.py", "sed -i s/a/b/ settings.json"):
+            check(f"F11: {cmd!r} in a session started in the config directory asks",
+                  "settings" in asked(e.bash(e.cfg, cmd)), str(e.bash(e.cfg, cmd)))
         for cmd in ("cd build && make", 'cd "$X" && make', 'cd "$X" && cd build && make',
                     # independent review: a project's own .claude/ folder is not the Claude config directory
                     'cd "$REPO" && git add .claude/commands/foo.md && git commit -m x'):
             check(f"F11: ordinary {cmd!r} flows", asked(e.bash(repo, cmd)) == "", str(e.bash(repo, cmd)))
+        # with the usual `.claude` name, bash's `*` does not match it (independent review: a false ask)
+        dot = Env(tmp / "dot")
+        dot.cfg = tmp / "dot" / ".claude"
+        (dot.cfg / "hooks").mkdir(parents=True)
+        dot.env["CLAUDE_CONFIG_DIR"] = str(dot.cfg)
+        cmd = 'cd "$(git rev-parse --show-toplevel)" && cd packages/* && npm run build'
+        check(f"F11: ordinary {cmd!r} flows", asked(dot.bash(repo, cmd)) == "", str(dot.bash(repo, cmd)))
+        cmd = 'cd "$X" && cd .cl* && rm hooks/groundwork_task_gate.py'
+        check(f"F11: {cmd!r} asks", "settings" in asked(dot.bash(repo, cmd)), str(dot.bash(repo, cmd)))
     finish()
 
 

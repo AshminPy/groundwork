@@ -1220,7 +1220,27 @@ def _expand_literal(word: str, assigns: dict) -> str:
     return os.path.expanduser(os.path.expandvars(word))
 
 
-def _touches_protected(segs: list[dict], cmd: str, cwd: str) -> bool:
+def _wrapper_chdir(argv: list[str]) -> str | None:
+    """The directory `env -C DIR` / `env --chdir=DIR` (also `-iC DIR`) or `sudo -D DIR` runs its command in."""
+    for e, prog in enumerate(os.path.basename(a) for a in argv):
+        if prog not in ("env", "sudo"):
+            continue
+        letter = "C" if prog == "env" else "D"
+        for x in range(e + 1, len(argv)):
+            t = argv[x]
+            if not t.startswith("-") or t == "--":
+                break
+            if t == "--chdir" and x + 1 < len(argv):
+                return argv[x + 1]
+            if t.startswith("--chdir="):
+                return t.split("=", 1)[1]
+            if not t.startswith("--") and letter in t[1:]:
+                rest = t[t.index(letter, 1) + 1:]
+                return rest or (argv[x + 1] if x + 1 < len(argv) else None)
+    return None
+
+
+def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> bool:
     """A command that may change Claude Code settings, Groundwork's hooks or the task ledger: a segment that names
     one of them (in its words, redirect targets or here-document) and is not a plain reader or the task CLI. After
     `cd` into one of them, every later segment counts as naming it. A `cd` is followed from the session's directory
@@ -1229,16 +1249,40 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str) -> bool:
     `cd` while CDPATH is set), the shell may be anywhere, so a `cd` whose target names the config directory
     (`.claude`, also as a glob such as `.cl*`) counts as entering it (independent review: `cd "$(echo ~)" && cd
     .claude` was missed). A directory the gate cannot compute also counts as inside when the command names the
-    config directory's full path or `~/.claude`."""
+    config directory's full path or `~/.claude`. A relative word is resolved against every directory the command may
+    be in (`cd ~ && rm .claude/hooks/x`, a session started in the config directory, `env -C`), and `sh -c` / `eval`
+    strings are checked the same way (independent review)."""
     cdir = str(gt.claude_dir())
     markers = PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", cdir + "/groundwork", "~/.claude/settings",
                                 "~/.claude/hooks", ".claude/settings")
     config_name = os.path.basename(cdir.rstrip("/")) or ".claude"
+    protected = [os.path.join(cdir, "hooks"), os.path.join(cdir, "groundwork"), str(gt.tasks_root())]
+
+    def matches(name: str, part: str) -> bool:
+        # bash's `*` and `?` never match a leading dot (independent review: `cd packages/*` is not `.claude`)
+        return (part.startswith(".") or not name.startswith(".")) and fnmatch.fnmatchcase(name, part)
 
     def names_config(word: str) -> bool:
         if "$" in word or "`" in word:
             return config_name in word  # `"$HOME/.claude"`, `"$(echo ~/.claude)"`
-        return any(fnmatch.fnmatchcase(config_name, part) for part in word.split("/") if part)
+        return any(matches(config_name, part) for part in word.split("/") if part)
+
+    def names_protected(word: str) -> bool:
+        # `.claude/hooks/x` after a cd the gate cannot follow (a project's own `.claude/commands` is not it)
+        parts = [p for p in word.split("/") if p]
+        return any(matches(config_name, p) and any(matches(n, q) for n in ("hooks", "groundwork", "settings.json",
+                                                                            "settings.local.json"))
+                   for p, q in zip(parts, parts[1:]))
+
+    def resolves_protected(word: str, where: list[str]) -> bool:
+        w = _expand_literal(word, assigns)
+        if not w or w.startswith("-") or "$" in w or "`" in w:
+            return False
+        for d in where:
+            p = os.path.normpath(os.path.join(d, w))
+            if any(under(p, Path(b)) for b in protected) or os.path.realpath(p) in config_paths():
+                return True
+        return False
 
     bodies = heredoc_bodies(cmd)
     assigns = _literal_assignments(segs)
@@ -1265,8 +1309,22 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str) -> bool:
                 unknown = True
             inside = inside or named
             continue
-        if named and (s["writes"] or ((os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS
-                                      and not _task_cli(argv))):
+        chdir = _wrapper_chdir(s["argv"])
+        where = [os.path.normpath(os.path.join(d, os.path.expanduser(chdir))) for d in dirs] if chdir else dirs
+        words = argv[1:] + s["targets"]
+        named = (named or any(resolves_protected(w, where) for w in words)
+                 or (unknown and any(names_protected(w) for w in words)))
+        name = os.path.basename(argv[0]) if argv else ""
+        if depth < 3 and (name in SHELLS or name == "eval"):
+            inner = " ".join(argv[1:]) if name == "eval" else _shell_command_arg(argv[1:])
+            if inner:
+                inner_segs = split_segments(inner)
+                if inner_segs is None:
+                    if config_name in inner or any(m in inner for m in markers):
+                        return True
+                elif any(_touches_protected(inner_segs, inner, d, depth + 1) for d in where[:8]):
+                    return True
+        if named and (s["writes"] or (name not in PROTECTED_READERS and not _task_cli(argv))):
             return True
     return False
 

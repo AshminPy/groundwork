@@ -81,7 +81,11 @@ Set `"GROUNDWORK_TASK_GATE": "off"` in the `env` of `~/.claude/settings.json`. E
   assignments in the same command. After a `cd` the gate cannot compute (`cd "$(…)"`, `cd -`, a glob, or CDPATH
   set), a `cd` whose target names the config directory (`.claude`, also as a glob such as `.cl*`) counts as
   entering it; the computed directory itself counts as inside when the command names the config directory's full
-  path or `~/.claude` (2026-10-12 security scan, F7, F8, F11, F12).
+  path or `~/.claude`. A relative path is resolved against every directory the command may be in (`cd ~ && rm
+  .claude/hooks/x`, a session started in the config directory, `env -C`), and `sh -c` / `eval` strings are
+  checked the same way. Not followed: a path built at run time other than through a `cd`, and deleting a
+  directory above the config directory, which the delete checks cover (2026-10-12 security scan, F7, F8, F11,
+  F12).
 - **Reviews must run in the foreground** and end with a `REVIEW RESULT` block. Background reviews and background verification runs are not evidence.
 - **Evidence fingerprint.** Untracked files larger than 5 MB count by size and modification time, not content, so staging such a file changes the fingerprint once. A change inside a git submodule's working tree is not seen until the submodule's commit changes.
 - **Not verified:** how the `ask` decision behaves under `bypassPermissions` mode.

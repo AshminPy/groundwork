@@ -11,11 +11,17 @@
     (`--git-dir`, `GIT_DIR`, `GIT_CONFIG*`, `-c push.default`, `-c remote.<name>.push`) is denied. A push whose
     destination the shell or git computes (`origin $B`, `HEAD:$(…)`, a glob or brace expansion, xargs, a computed
     `git` or subcommand, a `-c alias.*`) is denied, and so is a `+refspec` force, the refspec `:`, and a bare push
-    where the current branch cannot be read. `$(git branch --show-current)` is read as `HEAD`.
+    where the current branch cannot be read. `$(git branch --show-current)` is read as the current branch.
+    Substitutions inside double quotes or an unquoted here-document are checked (`out="$(git push … 2>&1)"`), a
+    push after a branch switch in the same command (`git switch main && … && git push origin HEAD`) is denied, and
+    one after `git checkout -b <name>` is checked against `<name>`. A here-document is read as data unless it
+    feeds a shell, so an apostrophe in a commit message no longer blocks the push after it.
   - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
     directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
     the Claude config directory through earlier `cd`s or assignments, also after a `cd` the gate cannot compute
-    (`cd "$X" && cd .claude`, a glob, CDPATH), now asks before settings or hooks change.
+    (`cd "$X" && cd .claude`, a glob, CDPATH), now asks before settings or hooks change. Relative paths are
+    resolved against every directory the command may be in (`cd ~ && rm .claude/hooks/x`, a session started in
+    the config directory, `env -C`), and `sh -c` / `eval` strings are checked the same way.
   - Settings (F13): merging or unmerging `settings.json` keeps its file mode, so an owner-only file stays 0600.
   - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`
     gets web tools only, and every routine prompt marks what it reads as untrusted data.
