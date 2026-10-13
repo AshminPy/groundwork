@@ -35,4 +35,4 @@
 - [x] 6.1 Install into a temporary `CLAUDE_CONFIG_DIR` copy of the live config; prove idempotency and no overwrite
 - [x] 6.2 Independent fresh-context review (code + Python + security reviewers); fix MUST FIX; re-run tests
 - [x] 6.3 Live install on this machine with a settings backup; installed hooks executed with real SessionStart/Stop payloads
-- [ ] 6.4 Fresh-session proof via `claude -p` (BLOCKED 2026-09-20: `Failed to authenticate: OAuth session expired and could not be refreshed` — needs `claude login` on this machine, then re-run)
+- [x] 6.4 Fresh-session proof via `claude -p` (2026-10-12, Claude Code 2.1.296, claude-sonnet-5-5, all tools disabled, run in the main checkout: the session quoted the injected snapshot line `git: branch main; HEAD ad8b71c …; 0 modified, 0 untracked; 0 ahead / 24 behind upstream`, matching `git` exactly, and the rule-defined `HARNESS METADATA` header. Proven against the installed harness, which is 1.5.1 on this machine. First attempt hit `error_max_budget_usd` at a USD 0.50 cap (one Opus turn cost USD 1.34); the Sonnet re-run cost USD 0.67)
