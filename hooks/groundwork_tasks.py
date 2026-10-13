@@ -48,8 +48,8 @@ MAX_MISSION = 2000
 MAX_HISTORY = 60
 MAX_EVIDENCE = 30
 
-CHECKBOX_ANY = re.compile(r"^\s*-\s*\[[ xX]\]", re.MULTILINE)
-CHECKBOX_DONE = re.compile(r"^\s*-\s*\[[xX]\]", re.MULTILINE)
+CHECKBOX_ANY = re.compile(r"^[ \t]*-[ \t]*\[[ xX]\]", re.MULTILINE)
+CHECKBOX_DONE = re.compile(r"^[ \t]*-[ \t]*\[[xX]\]", re.MULTILINE)
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏  ‪-‮⁦-⁩﻿]")
 
 
