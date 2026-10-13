@@ -9,16 +9,16 @@ Each task carries a work class (design D10):
 
 ## 1. M0: Reconcile `main` with the released 2.4.0 (docs only, minimal)
 
-- [ ] 1.1 [release-critical] Replace `main`'s `## 2.4.0` CHANGELOG section with the one at tag `v2.4.0` (dated 2026-10-13, with the macOS fix bullets). Remove the already-released macOS entry, including the `groundwork report schedule` text, from Unreleased. Verify:
+- [x] 1.1 [release-critical] Replace `main`'s `## 2.4.0` CHANGELOG section with the one at tag `v2.4.0` (dated 2026-10-13, with the macOS fix bullets). Remove the already-released macOS entry, including the `groundwork report schedule` text, from Unreleased. Verify:
   - every section from `## 2.4.0` to the end is byte-identical to `git show v2.4.0:CHANGELOG.md`;
   - `## Unreleased` is still the first heading and holds only post-2.4.0 entries;
   - `grep -n "groundwork report schedule" CHANGELOG.md` returns nothing.
-- [ ] 1.2 [release-critical] Check that version behaviour is unchanged (design D11). Verify:
+- [x] 1.2 [release-critical] Check that version behaviour is unchanged (design D11). Verify:
   - `grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md` prints `## 2.4.0`;
   - `_top_changelog_version` from `scripts/groundwork_update.py` returns 2.4.0 for the file;
   - `python3 tests/test_groundwork_update.py` and `python3 -m pytest tests -q --ignore=tests/mutation` pass.
-- [ ] 1.3 [product-critical] Copy `docs/RELEASE-REPORT-2.4.md` from tag `v2.4.0`. Verify: `git diff v2.4.0 -- docs/RELEASE-REPORT-2.4.md` is empty.
-- [ ] 1.4 [release-critical] Open a docs-only PR containing nothing beyond 1.1–1.3. The owner approves the merge.
+- [x] 1.3 [product-critical] Copy `docs/RELEASE-REPORT-2.4.md` from tag `v2.4.0`. Verify: `git diff v2.4.0 -- docs/RELEASE-REPORT-2.4.md` is empty.
+- [ ] 1.4 [release-critical] Open a docs-only PR containing nothing beyond 1.1–1.3 (#60, opened). The owner approves the merge.
 
 ## 2. M1: Task-gate hardening (F7, F8, F11, F12)
 
