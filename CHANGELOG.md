@@ -8,9 +8,10 @@
   Upgrading (`groundwork update`, `./setup.sh` or `./install.sh`) reschedules the report job automatically.
   It does not reschedule routines: for each enabled routine, run
   `groundwork routines schedule <routine> <frequency> --hour H --minute M` with the frequency and time that
-  `groundwork routines list` shows (without `--hour`/`--minute` the time resets to 08:00). Jobs now point at the
+  `groundwork routines list` shows (without `--hour`/`--minute` the time resets to 08:00); every routine job is a
+  `~/Library/LaunchAgents/com.groundwork.routine.*.plist` file. Jobs now point at the
   exact Python that scheduled them: if that Python is later removed (a virtualenv, a pyenv version), reschedule.
-- **Tests pass on macOS.** Five test-only issues that never showed in Linux containers are fixed: tests that resolved
+- **Tests pass on macOS** (run on PR #57's branch). Five test-only issues that never showed in Linux containers are fixed: tests that resolved
   `python3` through a restricted PATH, a certificate fixture copied from the interpreter's trust store (empty on
   python.org macOS Python), a test that assumed it runs as root, and two clock-dependent flakes.
 - **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on
