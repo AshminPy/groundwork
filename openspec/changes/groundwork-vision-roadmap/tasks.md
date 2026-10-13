@@ -18,7 +18,7 @@ Each task carries a work class (design D10):
   - `_top_changelog_version` from `scripts/groundwork_update.py` returns 2.4.0 for the file;
   - `python3 tests/test_groundwork_update.py` and `python3 -m pytest tests -q --ignore=tests/mutation` pass.
 - [x] 1.3 [product-critical] Copy `docs/RELEASE-REPORT-2.4.md` from tag `v2.4.0`. Verify: `git diff v2.4.0 -- docs/RELEASE-REPORT-2.4.md` is empty.
-- [ ] 1.4 [release-critical] Open a docs-only PR containing nothing beyond 1.1–1.3 (#60, opened). The owner approves the merge.
+- [x] 1.4 [release-critical] Open a docs-only PR containing nothing beyond 1.1–1.3. Done: #60, independently reviewed (approved, 0 MUST FIX), merged by owner approval as 086216d.
 
 ## 2. M1: Task-gate hardening (F7, F8, F11, F12)
 
