@@ -56,14 +56,14 @@ def load_module():
 def run_cli(args, env_extra=None, timeout=30) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.update(env_extra or {})
-    return subprocess.run(["python3", str(SCRIPT), *args], capture_output=True, text=True,
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
                           timeout=timeout, env=env)
 
 
 def config_cli(args, env_extra=None, timeout=30) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.update(env_extra or {})
-    return subprocess.run(["python3", str(CONFIG_SCRIPT), *args], capture_output=True, text=True,
+    return subprocess.run([sys.executable, str(CONFIG_SCRIPT), *args], capture_output=True, text=True,
                           timeout=timeout, env=env)
 
 
@@ -306,9 +306,7 @@ def claude_unreachable_path() -> str:
     """A PATH with python3 (needed to run the script itself) reachable but no `claude` binary
     anywhere on it — proves BLOCKED/off-switch paths never even attempt to spawn `claude`."""
     d = Path(tempfile.mkdtemp(prefix="gw-no-claude-bin-"))
-    py = shutil.which("python3")
-    if py:
-        (d / "python3").symlink_to(py)
+    (d / "python3").symlink_to(sys.executable)
     return str(d)
 
 
@@ -322,7 +320,7 @@ def run_routine_subprocess(cfgdir: Path, name: str, path_override=None, env_extr
     if path_override is not None:
         env["PATH"] = path_override
     env.update(env_extra or {})
-    r = subprocess.run(["python3", str(SCRIPT), "run", name, "--repo", str(REPO_ROOT), "--timeout", "10"],
+    r = subprocess.run([sys.executable, str(SCRIPT), "run", name, "--repo", str(REPO_ROOT), "--timeout", "10"],
                        capture_output=True, text=True, timeout=20, env=env)
     try:
         return json.loads(r.stdout)
@@ -383,33 +381,33 @@ def test_semantic_status_from_routine_result_block() -> None:
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfgdir), "PATH": f"{bindir}:/usr/bin:/bin"}
 
         write_claude_stub(bindir, "result", "Some digest.\n\nROUTINE RESULT\nStatus: COMPLETE\nSummary: all good")
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         out = json.loads(r.stdout)
         check("exit 0 + Status: COMPLETE in the block -> semantic status complete", out["status"] == "complete" and r.returncode == 0, out)
 
         write_claude_stub(bindir, "result", "Tried but Jira was unreachable.\n\nROUTINE RESULT\nStatus: BLOCKED\nSummary: Jira unavailable")
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         out = json.loads(r.stdout)
         check("exit 0 but Status: BLOCKED in the block -> semantic status blocked, NOT complete (exit code alone is never COMPLETE)",
               out["status"] == "blocked", out)
 
         write_claude_stub(bindir, "result", "Half worked.\n\nROUTINE RESULT\nStatus: PARTIAL\nSummary: 2 of 3 done")
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         out = json.loads(r.stdout)
         check("Status: PARTIAL in the block -> semantic status partial", out["status"] == "partial", out)
 
         write_claude_stub(bindir, "echo")  # emits "stub output: ..." with NO ROUTINE RESULT block
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         out = json.loads(r.stdout)
         check("exit 0 but missing ROUTINE RESULT block -> FAILED, never silently upgraded to COMPLETE (owner requirement §13)",
               out["status"] == "failed" and "missing or malformed" in out.get("reason", ""), out)
 
         write_claude_stub(bindir, "fail")
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         out = json.loads(r.stdout)
         check("nonzero exit code -> FAILED regardless of anything else (a crash is a crash)",
@@ -428,7 +426,7 @@ def test_result_storage_separate_from_telemetry() -> None:
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfgdir), "PATH": f"{bindir}:/usr/bin:/bin"}
         digest_text = "AI news: nothing especially material this week, one minor SDK release noted."
         write_claude_stub(bindir, "result", f"{digest_text}\n\nROUTINE RESULT\nStatus: COMPLETE\nSummary: quiet week")
-        r = subprocess.run(["python3", str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "news", "--repo", str(REPO_ROOT), "--timeout", "20"],
                            capture_output=True, text=True, timeout=30, env=env)
         check("run exits 0", r.returncode == 0, r.stdout + r.stderr)
 
@@ -447,7 +445,7 @@ def test_result_storage_separate_from_telemetry() -> None:
         check("stored result actually contains the routine's real output text", digest_text in stored["content"], stored)
         check("stored result records the semantic status", stored["status"] == "complete", stored)
 
-        r2 = subprocess.run(["python3", str(SCRIPT), "latest", "news"], capture_output=True, text=True, timeout=10, env=env)
+        r2 = subprocess.run([sys.executable, str(SCRIPT), "latest", "news"], capture_output=True, text=True, timeout=10, env=env)
         check("`latest news` retrieves the actual digest text", digest_text in r2.stdout, r2.stdout)
         check("`latest news` shows the semantic status", "COMPLETE" in r2.stdout, r2.stdout)
     finish()
@@ -590,7 +588,7 @@ def test_doctor_name_filter() -> None:
             # own row through the exact same formatter `doctor` (all routines) already uses —
             # narration of the same data, never a second, independently-computed view.
             expected_jira_text = mod.format_doctor_text([r for r in all_rows if r["routine"] == "jira_eod"])
-            single_out = subprocess.run(["python3", str(SCRIPT), "doctor", "jira_eod"], capture_output=True,
+            single_out = subprocess.run([sys.executable, str(SCRIPT), "doctor", "jira_eod"], capture_output=True,
                                         text=True, timeout=30, env={**os.environ})
             check("`doctor jira_eod` exits 0", single_out.returncode == 0, single_out.stderr)
             check("`doctor jira_eod` output is byte-identical to format_doctor_text() on just its own row",
@@ -601,7 +599,7 @@ def test_doctor_name_filter() -> None:
 
             # An unrecognized routine name is rejected the same way run/schedule/latest already
             # reject one (argparse's own `choices=sorted(ROUTINES)`), not a bespoke error path.
-            bad = subprocess.run(["python3", str(SCRIPT), "doctor", "not-a-real-routine"],
+            bad = subprocess.run([sys.executable, str(SCRIPT), "doctor", "not-a-real-routine"],
                                  capture_output=True, text=True, timeout=30, env={**os.environ})
             check("`doctor` with an unknown routine name exits non-zero", bad.returncode != 0, bad.returncode)
             check("`doctor` with an unknown routine name reports it as an invalid choice, no traceback",
@@ -635,6 +633,8 @@ def test_schedule_routine() -> None:
             import plistlib
             plist = plistlib.loads(Path(r["plist"]).read_bytes())
             check("plist label is com.groundwork.routine.jira_eod", plist["Label"] == "com.groundwork.routine.jira_eod", plist["Label"])
+            check("plist runs the scheduling interpreter by absolute path, never `env python3` (launchd PATH would pick macOS's Python 3.9)",
+                  plist["ProgramArguments"][0] == sys.executable, plist["ProgramArguments"])
             check("plist StartCalendarInterval hour/minute match the requested schedule time",
                   plist["StartCalendarInterval"]["Hour"] == 17 and plist["StartCalendarInterval"]["Minute"] == 30, plist["StartCalendarInterval"])
             r2 = mod.schedule_routine("jira_eod", "disabled")
@@ -658,15 +658,15 @@ def test_cli_list_reflects_new_schema() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         cfgdir = Path(tmpdir) / "cfg"
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfgdir)}
-        r = subprocess.run(["python3", str(SCRIPT), "list"], capture_output=True, text=True, timeout=30, env=env)
+        r = subprocess.run([sys.executable, str(SCRIPT), "list"], capture_output=True, text=True, timeout=30, env=env)
         check("list with no config.json: exits 0, all six disabled, never run",
               r.returncode == 0 and "enabled=False" in r.stdout and "never run" in r.stdout and r.stdout.count("\n") == 6, r.stdout)
 
-        subprocess.run(["python3", str(CONFIG_SCRIPT), "init", "sre-cloudops", "--path", str(cfgdir / "groundwork" / "config.json")],
+        subprocess.run([sys.executable, str(CONFIG_SCRIPT), "init", "sre-cloudops", "--path", str(cfgdir / "groundwork" / "config.json")],
                        capture_output=True, text=True, timeout=30, env=env, check=True)
-        subprocess.run(["python3", str(CONFIG_SCRIPT), "set", "jira_eod", "schedule.time=17:00",
+        subprocess.run([sys.executable, str(CONFIG_SCRIPT), "set", "jira_eod", "schedule.time=17:00",
                         "--path", str(cfgdir / "groundwork" / "config.json")], capture_output=True, text=True, timeout=30, env=env, check=True)
-        r2 = subprocess.run(["python3", str(SCRIPT), "list"], capture_output=True, text=True, timeout=30, env=env)
+        r2 = subprocess.run([sys.executable, str(SCRIPT), "list"], capture_output=True, text=True, timeout=30, env=env)
         check("list after sre-cloudops profile: jira_eod shows enabled=True with its real schedule time",
               "jira_eod: enabled=True" in r2.stdout and "17:00" in r2.stdout, r2.stdout)
     finish()
@@ -804,7 +804,7 @@ def test_build_command_always_fails_closed_for_every_routine() -> None:
         for name in mod.ROUTINES:
             if argv_file.exists():
                 argv_file.unlink()
-            r = subprocess.run(["python3", str(SCRIPT), "run", name, "--repo", str(REPO_ROOT), "--timeout", "10"],
+            r = subprocess.run([sys.executable, str(SCRIPT), "run", name, "--repo", str(REPO_ROOT), "--timeout", "10"],
                                capture_output=True, text=True, timeout=20, env=env)
             try:
                 result = json.loads(r.stdout)
@@ -848,7 +848,7 @@ def test_readiness_visible_in_list_and_doctor_output() -> None:
             check("doctor text marks the unconfigured pr_followup routine BLOCKED, not READY",
                   "BLOCKED" in text, text)
 
-            r = subprocess.run(["python3", str(SCRIPT), "list"], capture_output=True, text=True, timeout=30,
+            r = subprocess.run([sys.executable, str(SCRIPT), "list"], capture_output=True, text=True, timeout=30,
                                env={**os.environ})
             check("list output includes readiness= for every routine line",
                   r.stdout.count("readiness=") == 6, r.stdout)

@@ -202,18 +202,26 @@ def test_fresh_cached_integration_visibly_communicates_age() -> None:
         mod.TELEMETRY_PATH = mod.CLAUDE_DIR / "groundwork" / "telemetry" / "events.jsonl"
         mod.INTEGRATIONS_CACHE_PATH = mod.CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
         mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
-        fresh_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30))  # 30s ago, well under STALE_AFTER_S
+        # Frozen clock: with a live clock, a second boundary between writing the timestamp and
+        # rendering turns the expected "30s" into "31s" (seen on a loaded machine in a full run).
+        now = int(time.time())
+        fresh_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 30))  # 30s ago, well under STALE_AFTER_S
         _write_json(mod.INTEGRATIONS_CACHE_PATH, {
             "schema": 1,
             "integrations": {"GitHub": {"available": True, "configured": False, "connected": True,
                                          "used": None, "summary": "CONNECTED", "checked_at": fresh_ts}},
         })
-        out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+        real_time = mod.time.time
+        mod.time.time = lambda: float(now)
+        try:
+            out = mod.render(STDIN_FIXTURE, dict(mod.DEFAULT_STATUSLINE_CONFIG))
+            plain_out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "plain_text": True})
+        finally:
+            mod.time.time = real_time
         check("fresh entry's rendering includes an age annotation (not bare 'GitHub ●' with nothing after it)",
               "GitHub" in out and mod._age_label(30) in out, out)
         check("fresh entry's age carries no stale marker ('!')",
               "!" not in out.split("GitHub", 1)[1].split("│")[0], out)
-        plain_out = mod.render(STDIN_FIXTURE, {**mod.DEFAULT_STATUSLINE_CONFIG, "plain_text": True})
         check("fresh entry in plain-text mode also shows its age",
               "GitHub" in plain_out and mod._age_label(30) in plain_out, plain_out)
     finish()

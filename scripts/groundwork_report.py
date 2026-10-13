@@ -680,7 +680,9 @@ def schedule(freq: str, hour=None) -> dict:
     env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.environ["CLAUDE_CONFIG_DIR"]
-    plist = {"Label": LABEL, "ProgramArguments": ["/usr/bin/env", "python3", str(Path(__file__).resolve()), "generate", "--snapshot"],
+    # The interpreter that scheduled the job, not `env python3`: launchd's PATH puts /usr/bin
+    # first, which on macOS is Apple's Python 3.9 (below the 3.10 minimum).
+    plist = {"Label": LABEL, "ProgramArguments": [sys.executable, str(Path(__file__).resolve()), "generate", "--snapshot"],
              "StartCalendarInterval": calendar(freq, cfg["hour"]), "RunAtLoad": False,
              "StandardOutPath": str(logs / "report.log"), "StandardErrorPath": str(logs / "report.err"),
              "EnvironmentVariables": env, "ProcessType": "Background"}
