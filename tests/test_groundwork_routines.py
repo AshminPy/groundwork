@@ -167,8 +167,9 @@ def test_routine_grants_security_scan() -> None:
     routine reads as untrusted."""
     print("groundwork_routines.py — security scan F1-F3: read-only git, web-only news, untrusted-input note")
     mod = load_module()
-    read_subcommands = ("log", "show", "diff", "status", "branch --list", "branch --show-current", "rev-parse",
-                        "ls-files", "worktree list", "for-each-ref")
+    read_subcommands = ("log", "show", "diff", "status", "branch --list", "branch --show-current", "branch -a",
+                        "branch -r", "branch -vv", "branch -a -vv", "rev-parse", "ls-files", "worktree list",
+                        "for-each-ref", "stash list")
     with tempfile.TemporaryDirectory() as tmpdir:
         cfgdir = Path(tmpdir) / "cfg"
         init_config(cfgdir)
@@ -226,6 +227,14 @@ def test_schedule_cli_records_the_time_for_list() -> None:
         r = cli("schedule", "news", "daily", "--hour", "24")
         check("an hour outside 0-23 is refused before anything is written",
               r.returncode == 2 and cfg_file.read_text() == before, f"{r.returncode} {r.stderr}")
+        # independent review: an unreadable config.json must never be replaced by the defaults
+        corrupt = before.rstrip().rstrip("}") + ', "jira": {"site": "example.atlassian.net"},}\n'
+        cfg_file.write_text(corrupt)
+        plist = tmp / "LaunchAgents" / "com.groundwork.routine.doc_drift.plist"
+        r = cli("schedule", "doc_drift", "weekly", "--hour", "9", "--minute", "5")
+        check("a config.json that does not parse: refused (exit 1), file untouched, nothing scheduled",
+              r.returncode == 1 and cfg_file.read_text() == corrupt and not plist.exists() and "could not be read" in r.stderr,
+              f"{r.returncode} {r.stderr}")
     finish()
 
 

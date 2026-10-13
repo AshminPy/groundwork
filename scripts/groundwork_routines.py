@@ -63,8 +63,10 @@ RESULT_RETENTION = 10
 # Each rule matches only commands that begin with these words, and every part of a compound command must match one
 # (code.claude.com/docs/en/permissions, "Wildcard patterns" and "Compound commands").
 GIT_READ_TOOLS = ["Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git status *)",
-                  "Bash(git branch --list *)", "Bash(git branch --show-current)", "Bash(git rev-parse *)",
-                  "Bash(git ls-files *)", "Bash(git worktree list *)", "Bash(git for-each-ref *)"]
+                  "Bash(git branch --list *)", "Bash(git branch --show-current)", "Bash(git branch -a)",
+                  "Bash(git branch -r)", "Bash(git branch -vv)", "Bash(git branch -a -vv)", "Bash(git rev-parse *)",
+                  "Bash(git ls-files *)", "Bash(git worktree list *)", "Bash(git for-each-ref *)",
+                  "Bash(git stash list *)"]
 GIT_DENIED_TOOLS = ["Bash(git * --output*)"]  # `git log/show/diff --output=<file>` writes any file
 BASE_REPO_READ = GIT_READ_TOOLS + ["Read", "Grep", "Glob"]
 # Appended to every routine prompt (security scan, F1-F3): what a routine reads is someone else's text.
@@ -703,6 +705,18 @@ def _cmd_schedule(args) -> int:
     if not (0 <= args.hour <= 23 and 0 <= args.minute <= 59):
         print("schedule: --hour must be 0-23 and --minute 0-59", file=sys.stderr)
         return 2
+    # load_config() falls back to defaults for an unreadable file; saving that would erase the user's settings
+    # (independent review). Refuse before scheduling anything.
+    cfg_path = gcfg.DEFAULT_PATH
+    if cfg_path.exists():
+        try:
+            readable = isinstance(json.loads(cfg_path.read_text(encoding="utf-8")), dict)
+        except (OSError, ValueError):
+            readable = False
+        if not readable:
+            print(f"schedule: {cfg_path} could not be read, so nothing was scheduled or changed. Fix the file or run "
+                  "./setup.sh --configure, then schedule again.", file=sys.stderr)
+            return 1
     result = schedule_routine(args.name, args.frequency, args.hour, args.minute)
     if result.get("plist") or result.get("schedule") == "disabled":
         _save_schedule(args.name, args.frequency, args.hour, args.minute)

@@ -5,8 +5,10 @@
 - **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
   design D2). Release blockers, each with a regression test from the scan's proof of concept:
   - Push guard (F4, F5, F6): pushes hidden by newlines, separators touching a word, subshells, `{ }`, `if … then`,
-    substitutions, wrapper options, `bash -lc`, or a force flag inside `-uf` are now denied. Also F10: the branch of
-    a bare push is checked where the push runs (`cd`, `git -C`).
+    substitutions, wrapper options, `bash -lc`, line continuations, `$'…'` quoting, or a force flag inside `-uf` are
+    now denied. Also F10: the branch of a bare push is checked where the push runs (`cd`, also through `builtin`,
+    `command` or `eval`, and `git -C`), and a bare push that picks its repository or destination another way
+    (`--git-dir`, `GIT_DIR`, `-c push.*`, `-c remote.*`) is denied.
   - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
     directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
     the Claude config directory through earlier `cd`s or assignments now asks before settings or hooks change.
@@ -16,7 +18,8 @@
   - F9: the checkbox pattern used on `tasks.md` is linear, so a repository's `tasks.md` cannot stall session start.
   - Deferred with a justification: F14 (`jira_eod` read/write boundary; see docs/ROUTINES.md).
 - **Fix: `groundwork routines schedule … --hour H --minute M` now records the time**, so `groundwork routines list`
-  shows the time the job runs. An hour or minute out of range is refused.
+  shows the time the job runs. An hour or minute out of range is refused, and so is a `config.json` that cannot be
+  read (nothing is scheduled or overwritten).
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

@@ -36,6 +36,7 @@ Fail-open on unreadable hook input — a broken guard must never become a sessio
 bypass of Claude's normal permission prompts. A command it cannot parse is denied only
 when it looks like a git push.
 """
+import codecs
 import json
 import os
 import re
@@ -49,7 +50,8 @@ FORCE_CLUSTER_RE = re.compile(r"^-[A-Za-z0-9]*f[A-Za-z0-9]*$")  # -f inside a sh
 SHELL_C_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c inside a short-flag cluster: -lc, -ec, -xc
 ALL_BRANCH_FLAGS = {"--all", "--mirror", "--branches"}
 # push options that consume the next token when not written as --opt=value
-VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo", "--recurse-submodules", "--signed"}
+# (`--signed` takes a value only as `--signed=…`, so it never consumes the next word; independent review)
+VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo", "--recurse-submodules"}
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 OPERATOR_CHARS = "();<>|&\n`"
 OPERATORS = ("&>>", "<<<", "<<-", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<", ";", "|", "&",
@@ -66,19 +68,39 @@ MAX_DEPTH = 3
 
 
 def _strip_comments(cmd: str) -> str:
-    """Remove `#` comments the way bash does: only a `#` that starts a word, outside quotes, up to the newline.
-    `a#b`, `$#`, `${x#y}` and `\\#` stay literal (shlex's own comment handling ends a word at any `#`)."""
+    """Prepare the text the way bash reads it before shlex sees it:
+    - remove `#` comments: only a `#` that starts a word, outside quotes, up to the newline; `a#b`, `$#`, `${x#y}`
+      and `\\#` stay literal (shlex's own comment handling ends a word at any `#`);
+    - join backslash-newline line continuations, outside single quotes (independent review: `ma\\⏎in` was the
+      refspec `\\nmain`, not `main`);
+    - decode ANSI-C `$'…'` quoting into an ordinary quoted word, and read `$"…"` as `"…"`."""
     out, i, n, boundary = [], 0, len(cmd), True
     while i < n:
         c = cmd[i]
         if c == "\\":
+            if cmd[i + 1:i + 2] == "\n":
+                i += 2  # a line continuation: the word goes on, `boundary` unchanged
+                continue
             out.append(cmd[i:i + 2])
             i, boundary = i + 2, False
+        elif c == "$" and cmd[i + 1:i + 2] == "'":
+            j = i + 2
+            while j < n and cmd[j] != "'":
+                j += 2 if cmd[j] == "\\" else 1
+            try:
+                text = codecs.decode(cmd[i + 2:j], "unicode_escape")
+            except Exception:
+                text = cmd[i + 2:j]
+            out.append("'" + text.replace("'", "'\"'\"'") + "'")
+            i, boundary = j + 1, False
+        elif c == "$" and cmd[i + 1:i + 2] == '"':
+            i += 1  # `$"…"` is a locale-translated "…": the same words
         elif c in "'\"":
             j = i + 1
             while j < n and cmd[j] != c:
                 j += 2 if c == '"' and cmd[j] == "\\" else 1
-            out.append(cmd[i:j + 1])
+            quoted = cmd[i:j + 1]
+            out.append(quoted.replace("\\\n", "") if c == '"' else quoted)
             i, boundary = j + 1, False
         elif c == "#" and boundary:
             j = cmd.find("\n", i)
@@ -151,8 +173,9 @@ def _resolve_dir(target: str, base):
 
 
 def _command_position(seg, k) -> bool:
-    """True when seg[k] is where bash looks for the command name (after reserved words and assignments)."""
-    return all(t in RESERVED_WORDS or ASSIGNMENT_RE.match(t) for t in seg[:k])
+    """True when seg[k] is where bash looks for the command name (after reserved words, assignments, and `builtin` /
+    `command`, which run the word after them; independent review: `builtin cd ../repo` was not followed)."""
+    return all(t in RESERVED_WORDS or t in ("builtin", "command") or ASSIGNMENT_RE.match(t) for t in seg[:k])
 
 
 def push_positionals(push):
@@ -192,24 +215,32 @@ def target_branches(push, dirs):
     return targets
 
 
+GIT_ENV_RE = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE)=")
+
+
 def _git_push(seg, k):
-    """(push argv, `-C` dirs) when seg[k] is `git` running `push`, else None."""
-    j, cdirs = k + 1, []
+    """(push argv, `-C` dirs, unknown) when seg[k] is `git` running `push`, else None. `unknown` names a global
+    option that picks the repository (`--git-dir`, `--work-tree`) or the push destination (`-c push.*`,
+    `-c remote.*`) in a way the guard does not follow (independent review of the F10 fix)."""
+    j, cdirs, unknown = k + 1, [], None
     while j < len(seg) and seg[j].startswith("-"):
-        if seg[j] in GIT_VALUE_OPTIONS:
-            if seg[j] == "-C" and j + 1 < len(seg):
+        opt = seg[j]
+        if opt == "-C":
+            if j + 1 < len(seg):
                 cdirs.append(seg[j + 1])
-            j += 2
-        else:
-            if seg[j].startswith("-C"):
-                cdirs.append(seg[j][2:])
-            j += 1
+        elif opt.startswith("-C"):
+            cdirs.append(opt[2:])
+        elif opt == "-c" and j + 1 < len(seg) and seg[j + 1].lower().startswith(("push.", "remote.")):
+            unknown = "-c " + seg[j + 1].split("=")[0]
+        elif opt.split("=")[0] in ("--git-dir", "--work-tree"):
+            unknown = opt.split("=")[0]
+        j += 2 if opt in GIT_VALUE_OPTIONS else 1
     if j < len(seg) and seg[j] == "push":
-        return seg[j:], cdirs
+        return seg[j:], cdirs, unknown
     return None
 
 
-def _push_reason(push, dirs):
+def _push_reason(push, dirs, unknown=None):
     if any(t in FORCE_FLAGS or t.startswith("--force") or FORCE_CLUSTER_RE.match(t) for t in push[1:]):
         return ("block_protected_push: force-push is not allowed from Claude. Push a normal commit, "
                 "or ask the user to force-push themselves.")
@@ -218,17 +249,19 @@ def _push_reason(push, dirs):
                 "protected ones, so it is not allowed from Claude. Push one feature branch explicitly.")
     for target in target_branches(push, dirs):
         if target == UNKNOWN_DIR:
-            return ("block_protected_push: this push runs in a directory the guard cannot determine, so it cannot "
-                    "check the branch. Name the branch explicitly (`git push origin <branch>`) or push yourself.")
+            how = f"sets `{unknown}`" if unknown else "runs in a directory the guard cannot determine"
+            return (f"block_protected_push: this push {how}, so the guard cannot check which branch it updates. "
+                    "Name the branch explicitly (`git push origin <branch>`) or push yourself.")
         if target in PROTECTED:
             return (f"block_protected_push: direct push to protected branch '{target}' is not allowed "
                     "(branch → PR → merge). Push a feature branch and open a PR instead.")
     return None
 
 
-def inspect_command(cmd: str, cwd: str, depth: int = 0, dirs=None):
-    """Return a denial reason for the first violating `git push`, else None. dirs: the directories the command may
-    be running in (the session's, plus every `cd` target seen so far)."""
+def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
+    """Return a denial reason for the first violating `git push`, else None. `state` is shared with nested
+    `eval` / `sh -c` commands so a `cd` or a GIT_DIR assignment in them counts for later pushes: dirs are the
+    directories the command may be running in (the session's, plus every `cd` target seen so far)."""
     if depth > MAX_DEPTH:
         return ("block_protected_push: too many nested shells to check this git push; run it yourself."
                 if PUSH_LIKE_RE.search(cmd) else None)
@@ -236,36 +269,43 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, dirs=None):
     if segs is None:
         return ("block_protected_push: this command could not be parsed (unbalanced quotes) and looks like a git "
                 "push; run the push yourself or simplify the command." if PUSH_LIKE_RE.search(cmd) else None)
-    dirs = list(dirs) if dirs is not None else [cwd]
+    if state is None:
+        state = {"dirs": [cwd], "git_env": None}
+    dirs = state["dirs"]
     for seg in segs:
         for k, tok in enumerate(seg):
             name = os.path.basename(tok)
-            if name in ("cd", "pushd") and _command_position(seg, k):
+            if GIT_ENV_RE.match(tok):
+                state["git_env"] = tok.split("=")[0]  # GIT_DIR=… / export GIT_WORK_TREE=… picks another repository
+            elif name in ("cd", "pushd") and _command_position(seg, k):
                 args = [a for a in seg[k + 1:] if not a.startswith("-") or a == "-"]
                 dirs.append(os.path.expanduser("~") if not args else _resolve_dir(args[0], dirs[-1]))
             elif name in SHELLS:
                 # Recurse into nested shells so `bash -c "…"` and `bash -lc "…"` are seen.
                 for j in range(k + 1, len(seg) - 1):
                     if SHELL_C_RE.match(seg[j]):
-                        reason = inspect_command(seg[j + 1], cwd, depth + 1, dirs)
+                        reason = inspect_command(seg[j + 1], cwd, depth + 1, state)
                         if reason:
                             return reason
                         break
             elif name == "eval":
-                reason = inspect_command(" ".join(seg[k + 1:]), cwd, depth + 1, dirs)
+                reason = inspect_command(" ".join(seg[k + 1:]), cwd, depth + 1, state)
                 if reason:
                     return reason
             elif name == "git":
                 found = _git_push(seg, k)
                 if not found:
                     continue
-                push, cdirs = found
-                push_dirs = dirs
+                push, cdirs, unknown = found
+                unknown = unknown or state["git_env"]
+                push_dirs = list(dirs)
                 for c in cdirs:  # each -C is relative to the previous one, as in git
                     push_dirs = [_resolve_dir(c, d) for d in push_dirs]
                 if cdirs:
                     push_dirs = push_dirs + [cwd]  # never weaker than checking the session's directory
-                reason = _push_reason(push, push_dirs)
+                if unknown:
+                    push_dirs = [None]
+                reason = _push_reason(push, push_dirs, unknown)
                 if reason:
                     return reason
     return None

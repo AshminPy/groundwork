@@ -487,7 +487,25 @@ def test_push_guard() -> None:
             (f"git -C {repo} push", True),
             (f"cd {repo} && git push origin HEAD", True),
             ('cd "$X" && git push', True),                       # directory cannot be determined
+            # independent review of the fix (M1): other ways to pick the repository or the destination
+            (f"git --git-dir={repo}/.git push", True),
+            (f"git --work-tree {repo} --git-dir {repo}/.git push origin HEAD", True),
+            (f"GIT_DIR={repo}/.git git push", True),
+            (f"export GIT_DIR={repo}/.git; git push", True),
+            (f"builtin cd {repo} && git push", True),
+            (f"command cd {repo} && git push origin HEAD", True),
+            (f'eval "cd {repo}"; git push', True),               # a cd inside eval counts for later commands
+            ("git -c push.default=matching push origin", True),  # config picks the destination
+            ("git -c remote.origin.push=refs/heads/main push origin", True),
+            ("git push origin \\\nmain", True),                  # backslash-newline continuation
+            ("git pu\\\nsh origin main", True),
+            ("git push origin $'\\x6dain'", True),               # ANSI-C quoting is decoded
+            ("git push --signed origin main", True),             # --signed does not take the next word
             # existing behaviour kept: ordinary work is not denied
+            ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
+            ("git push \\\n  origin feature/x", False),
+            ("GIT_DIR=.git git push origin feature/x", False),   # explicit branch needs no repository lookup
+            ("git --git-dir=.git log -3", False),
             ("git push", False),                                 # feature/x
             ("git push -u origin feature/x", False),
             ("git push -q origin feature/x", False),

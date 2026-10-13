@@ -864,7 +864,9 @@ def test_security_scan_regressions() -> None:
                     f'cd "$(echo {e.cfg})" && rm hooks/groundwork_task_gate.py'):
             check(f"F11: {cmd.replace(str(tmp), '<tmp>')!r} asks", "settings" in asked(e.bash(repo, cmd)),
                   str(e.bash(repo, cmd)))
-        for cmd in ("cd build && make", 'cd "$X" && make'):
+        for cmd in ("cd build && make", 'cd "$X" && make',
+                    # independent review: a project's own .claude/ folder is not the Claude config directory
+                    'cd "$REPO" && git add .claude/commands/foo.md && git commit -m x'):
             check(f"F11: ordinary {cmd!r} flows", asked(e.bash(repo, cmd)) == "", str(e.bash(repo, cmd)))
     finish()
 

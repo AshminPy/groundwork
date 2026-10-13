@@ -1240,7 +1240,8 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str) -> bool:
             words = _words(argv[1:])
             target = _expand_literal(words[0], assigns) if words else os.path.expanduser("~")
             if "$" in target or "`" in target or target == "-":
-                inside = inside or named or os.path.basename(cdir.rstrip("/")) in cmd
+                # the full config path or `~/.claude`, not just its name: a project's own `.claude/` is not it
+                inside = inside or named or cdir in cmd or "~/.claude" in cmd
             else:
                 new = [os.path.normpath(os.path.join(d, target)) for d in dirs]
                 dirs = list(dict.fromkeys(dirs + new))[-32:]
