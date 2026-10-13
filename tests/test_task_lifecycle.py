@@ -879,6 +879,14 @@ def test_security_scan_regressions() -> None:
         for cmd in ("rm hooks/groundwork_task_gate.py", "sed -i s/a/b/ settings.json"):
             check(f"F11: {cmd!r} in a session started in the config directory asks",
                   "settings" in asked(e.bash(e.cfg, cmd)), str(e.bash(e.cfg, cmd)))
+        # third confirmation review: the config directory itself, and `of=PATH` / `--opt=PATH` words
+        for cmd in (f"rm -rf {name}", f"rm -rf ./{name}/", f"mv {name} {name}.bak", f"find {name} -delete",
+                    f"dd if=/dev/null of={name}/hooks/groundwork_task_gate.py",
+                    f"cp --target-directory={name}/hooks /dev/null"):
+            check(f"F11: {cmd!r} next to the config directory asks", "settings" in asked(e.bash(parent, cmd)),
+                  str(e.bash(parent, cmd)))
+        check("F11: listing the config directory flows", asked(e.bash(parent, f"ls {name}")) == "",
+              str(e.bash(parent, f"ls {name}")))
         for cmd in ("cd build && make", 'cd "$X" && make', 'cd "$X" && cd build && make',
                     # independent review: a project's own .claude/ folder is not the Claude config directory
                     'cd "$REPO" && git add .claude/commands/foo.md && git commit -m x'):

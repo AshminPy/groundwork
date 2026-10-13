@@ -1275,13 +1275,17 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> 
                    for p, q in zip(parts, parts[1:]))
 
     def resolves_protected(word: str, where: list[str]) -> bool:
-        w = _expand_literal(word, assigns)
-        if not w or w.startswith("-") or "$" in w or "`" in w:
-            return False
-        for d in where:
-            p = os.path.normpath(os.path.join(d, w))
-            if any(under(p, Path(b)) for b in protected) or os.path.realpath(p) in config_paths():
-                return True
+        # the word, or the path after `=` in `of=PATH` / `--target-directory=PATH` (independent review)
+        for w in [word] + ([word.split("=", 1)[1]] if "=" in word else []):
+            w = _expand_literal(w, assigns)
+            if not w or w.startswith("-") or "$" in w or "`" in w:
+                continue
+            for d in where:
+                p = os.path.normpath(os.path.join(d, w))
+                real = os.path.realpath(p)
+                # the config directory itself (`rm -rf .claude`, `mv .claude x`), or a protected path inside it
+                if real == os.path.realpath(cdir) or real in config_paths() or any(under(p, Path(b)) for b in protected):
+                    return True
         return False
 
     bodies = heredoc_bodies(cmd)

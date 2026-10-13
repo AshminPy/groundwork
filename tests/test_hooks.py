@@ -11,6 +11,7 @@ see docs/VALIDATION.md for how they connect to real, live tests.
 AssertionError when any check failed, so pytest reports a real failure (an earlier
 version only printed FAIL lines and pytest still showed "passed").
 """
+import importlib.util
 import json
 import os
 import re
@@ -454,6 +455,14 @@ def test_push_guard() -> None:
             # a branch created earlier in the same command is the one pushed
             ("git checkout -b feature/new && git push -u origin HEAD", False),
             ("git switch -c fix/y && git push -u origin HEAD", False),
+            ("git checkout -b feature/new && git add -A && git commit -qm x && git push -u origin HEAD", False),
+            # ... but only when the push runs only if the branch was created (third confirmation review)
+            ("git checkout -b feature/y; git push origin HEAD", True),
+            ("git checkout -b feature/y || git push origin HEAD", True),
+            ("git switch -c feature/y; git push origin HEAD", True),
+            ("false && git checkout -b feature/q; git push origin HEAD", True),
+            ('if [ -n "$NOPE" ]; then git checkout -b feature/q; fi; git push origin HEAD', True),
+            ("true || git checkout -b feature/q && git push origin HEAD", True),
         ]
         for cmd, expect_denied in cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
@@ -571,6 +580,36 @@ def test_push_guard() -> None:
             (f"sudo -D {repo} git push", True),
             ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main", True),
             ("echo $(date) push", True),                         # fail closed: a computed word before `push`
+            # third confirmation review (M1)
+            ("echo $[1<<n]\ngit push origin main", True),        # a `<<` that is not a here-document
+            ("a[1<<n]=3\ngit push origin main", True),
+            ("for((i=0;i<1<<n;i++)); do :; done\ngit push origin main", True),
+            ("a=([1<<n]=x)\ngit push origin main", True),
+            ("cat <<EOF\nno terminator\ngit push origin main", True),  # no terminator line: read as commands
+            ('echo "$(git switch release 2>&1)"; git push origin HEAD', True),  # a switch inside a substitution
+            ("cat <<EOF\n$(git switch release)\nEOF\ngit push origin HEAD", True),
+            ("git checkout -b git && $(git branch --show-current) push origin main", True),
+            ('git branch push && git switch push && git "$(git branch --show-current)" origin main', True),
+            ("cat <<'EOF' | sh\ngit push origin main\nEOF", True),  # a here-document piped to a shell
+            ("echo $(true)#x; git push origin main", True),      # `#` after a substitution is not a comment
+            ("cat <(true)#x; git push origin main", True),
+            ("[[ $x =~ ^(a|#b) ]]; git push origin main", True),  # ... nor inside `[[ … ]]`
+            ("[[ a =~ b|# ]]; git push origin main", True),
+            ('echo "$(case x in x) git push origin main;; esac)"', True),  # what a case pattern `)` hides
+            ('echo "$(true # )\ngit push origin main)"', True),
+            ('echo "$(echo ${x:-)} && git push origin main)"', True),
+            ('echo "$(# c \\\ngit push origin main)"', True),
+            ("CDPATH=../repo cd docs && git push origin HEAD", True),
+            (f"time -p cd {repo} && git push origin HEAD", True),
+            (f"find {repo} -maxdepth 0 -execdir git push origin HEAD \\;", True),
+            ("C='git push origin main'; $C", True),              # a variable that holds the push
+            ("C='git push origin main'; bash -c \"$C\"", True),
+            ("C='git push origin main'; eval \"$C\"", True),
+            ("P='git push origin'; $P main", True),
+            ("G=git; P=push; $G $P origin main", True),
+            ("shopt -s expand_aliases\nalias gp='git push origin main'\ngp", True),
+            ("rbash -c 'git push origin main'", True),
+            ("((" * 10000 + "\ngit push origin main", True),    # a long command is checked, not timed out
             # existing behaviour kept: ordinary work is not denied
             ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
             ("git push \\\n  origin feature/x", False),
@@ -602,6 +641,11 @@ def test_push_guard() -> None:
             ("cat <<'EOF'\ngit push origin main\nEOF", False),   # a quoted here-document is text
             ("git checkout -- notes.md && git push", False),     # restoring a file keeps the branch
             ("git push -o 'merge_request.title=x [WIP]' origin feature/x", False),  # a push option value is text
+            # a `.` or a shell name as an argument does not make a here-document commands (third review)
+            ("git add . && git commit -F - <<'EOF'\nnote: git push origin main is blocked\nEOF", False),
+            ("git add . && git commit -F - <<'EOF'\nfix: don't let git push to main\nEOF", False),
+            ("cd . && cat > docs.md <<'EOF'\ngit push origin main\nEOF", False),
+            ("echo $((1 << 2)) && git push origin feature/x", False),
         ]
         for cmd, expect_denied in security_cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})
@@ -611,6 +655,24 @@ def test_push_guard() -> None:
         # Hook stdin is valid JSON but not an object -> fail open, never a crash. Found by the
         # Phase 1/2/4 re-review: this hook had the identical unguarded `data.get(...)` bug that
         # require_material_review.py was fixed for in the same round — same fix here.
+        # A check that outlasts its time budget stops instead of running into the hook timeout, and the hook then
+        # denies a command that mentions push (third confirmation review; a timed-out hook lets the command run).
+        spec = importlib.util.spec_from_file_location("push_guard_budget", PUSH_HOOK)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        guard.TIME_BUDGET = -1
+        try:
+            guard.inspect_command("git push origin feature/x", str(feat))
+            stopped = False
+        except guard._OutOfTime:
+            stopped = True
+        check("a check past its time budget stops (and main() then denies a push)", stopped)
+        # A command or tool_input of the wrong type is checked as text, never a crash (third confirmation review).
+        for bad in ({"command": ["git push origin main"]}, "git push origin main"):
+            result = subprocess.run(["python3", str(PUSH_HOOK)], input=json.dumps(
+                {"tool_name": "Bash", "cwd": str(feat), "tool_input": bad}), capture_output=True, text=True, timeout=15)
+            check(f"tool_input {bad!r} -> no crash", result.returncode == 0 and result.stderr == "",
+                  f"exit={result.returncode} stderr={result.stderr!r}")
         for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
             result = subprocess.run(["python3", str(PUSH_HOOK)], input=bad_stdin,
                                      capture_output=True, text=True, timeout=15)
