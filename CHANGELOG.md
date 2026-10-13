@@ -2,12 +2,14 @@
 
 ## 2.4.0 — 2026-10-13
 
-- **Fix: scheduled routines and the daily report ran on the wrong Python on macOS.** The launchd jobs started
-  `/usr/bin/env python3` with `/usr/bin` first on PATH, which on macOS is Apple's Python 3.9 (below the 3.10
-  minimum), so every scheduled run crashed at startup. The jobs now run the interpreter that scheduled them.
-  Existing jobs keep the old command until rescheduled: re-run `setup.sh`, or
-  `groundwork routines schedule <routine> <frequency>` and
-  `python3 ~/.claude/groundwork/bin/groundwork_report.py schedule <frequency>`.
+- **Fix: scheduled routines and the scheduled health report ran on the wrong Python on macOS.** The launchd jobs
+  started `/usr/bin/env python3` with `/usr/bin` first on PATH, which on macOS is Apple's Python 3.9 (below the 3.10
+  minimum); scheduled routines crashed at startup. The jobs now run the interpreter that scheduled them.
+  Upgrading (`groundwork update`, `./setup.sh` or `./install.sh`) reschedules the report job automatically.
+  It does not reschedule routines: for each enabled routine, run
+  `groundwork routines schedule <routine> <frequency> --hour H --minute M` with the frequency and time that
+  `groundwork routines list` shows (without `--hour`/`--minute` the time resets to 08:00). Jobs now point at the
+  exact Python that scheduled them: if that Python is later removed (a virtualenv, a pyenv version), reschedule.
 - **Tests pass on macOS.** Five test-only issues that never showed in Linux containers are fixed: tests that resolved
   `python3` through a restricted PATH, a certificate fixture copied from the interpreter's trust store (empty on
   python.org macOS Python), a test that assumed it runs as root, and two clock-dependent flakes.
