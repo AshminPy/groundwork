@@ -2,14 +2,6 @@
 
 ## Unreleased
 
-- **Fix: scheduled routines and the daily report ran on the wrong Python on macOS.** The launchd jobs started
-  `/usr/bin/env python3` with `/usr/bin` first on PATH, which on macOS is Apple's Python 3.9 (below the 3.10
-  minimum), so every scheduled run crashed at startup. The jobs now run the interpreter that scheduled them.
-  Existing jobs keep the old command until rescheduled: re-run `setup.sh`, or
-  `groundwork routines schedule <routine> <frequency>` and `groundwork report schedule <frequency>`.
-- **Tests pass on macOS.** Five test-only issues that never showed in Linux containers are fixed: tests that resolved
-  `python3` through a restricted PATH, a certificate fixture copied from the interpreter's trust store (empty on
-  python.org macOS Python), a test that assumed it runs as root, and two clock-dependent flakes.
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).
@@ -33,8 +25,20 @@
   - New hook registrations: UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure. Off switch:
     `GROUNDWORK_TASK_GATE=off`.
 
-## 2.4.0 — 2026-10-11
+## 2.4.0 — 2026-10-13
 
+- **Fix: scheduled routines and the scheduled health report ran on the wrong Python on macOS.** The launchd jobs
+  started `/usr/bin/env python3` with `/usr/bin` first on PATH, which on macOS is Apple's Python 3.9 (below the 3.10
+  minimum); scheduled routines crashed at startup. The jobs now run the interpreter that scheduled them.
+  Upgrading (`groundwork update`, `./setup.sh` or `./install.sh`) reschedules the report job automatically.
+  It does not reschedule routines: for each enabled routine, run
+  `groundwork routines schedule <routine> <frequency> --hour H --minute M` with the frequency and time that
+  `groundwork routines list` shows (without `--hour`/`--minute` the time resets to 08:00); every routine job is a
+  `~/Library/LaunchAgents/com.groundwork.routine.*.plist` file. Jobs now point at the
+  exact Python that scheduled them: if that Python is later removed (a virtualenv, a pyenv version), reschedule.
+- **Tests pass on macOS** (run on PR #57's branch). Five test-only issues that never showed in Linux containers are fixed: tests that resolved
+  `python3` through a restricted PATH, a certificate fixture copied from the interpreter's trust store (empty on
+  python.org macOS Python), a test that assumed it runs as root, and two clock-dependent flakes.
 - **Per-tool-call Usage Telemetry**: `hooks/groundwork_telemetry.py` is now also registered on
   Claude Code's `PostToolUse`/`PostToolUseFailure` hook events (confirmed current against
   code.claude.com/docs/en/hooks-guide, 2026-10-01), closing the gap recorded in CHANGELOG 2.2.0
