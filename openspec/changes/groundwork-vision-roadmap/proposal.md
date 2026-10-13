@@ -15,31 +15,33 @@ This change is the plan that closes those gaps with the fewest new parts. It is 
 
 ## What Changes
 
-The milestones are in the recommended order. Each one ships as its own release, using the existing release, update and rollback process.
+The milestones are in the recommended order. Each one ships as its own release, using the existing release, update and rollback process. Work in every milestone falls into one of three classes (design D10):
+- **release-critical** work blocks that milestone's release;
+- **product-critical** work is planned in the milestone but moves to the next release if it is not ready;
+- **optional** work never blocks anything.
 
-- **M0. Reconcile `main` with the released 2.4.0 (docs only).**
-  - Bring the 2.4.0 CHANGELOG section and the release report from the `v2.4.0` tag into `main`.
-  - Remove the nonexistent `groundwork report schedule` command from them.
-  - This is a prerequisite for M1: `install.sh` and `groundwork update` read the version from the top CHANGELOG heading.
+- **M0. Reconcile `main` with the released 2.4.0 (docs only, minimal).**
+  - Bring the 2.4.0 CHANGELOG section and the release report from the `v2.4.0` tag into `main`, and remove the released macOS entry, with its nonexistent `groundwork report schedule` command, from Unreleased.
+  - Verify that version behaviour is unchanged. `install.sh` and `groundwork update` both take the first `## x.y.z` CHANGELOG heading as the version, so it must still read 2.4.0, and every released section must match the tag.
+  - Nothing else goes into M0.
 - **M1. Release task tracking (proposed 2.5.0).**
   - Ship the merged M1 behaviour unchanged in scope.
-  - Fix the security findings from the Claude Security scan on 2026-10-12:
-    - task-gate bypasses (F7, F8, F11, F12);
-    - push-guard bypasses (F4, F5, F6, F10);
-    - settings.json losing its owner-only mode (F13);
-    - routines' broad `Bash(git *)` grant and the `news` routine's web grant (F1–F3);
-    - the quadratic snapshot regex (F9).
-  - Fix `groundwork routines schedule` not saving the time. This bug affects the 2.4.0 macOS upgrade instructions.
+  - Apply severity- and evidence-based release criteria to the Claude Security findings of 2026-10-12 (design D2):
+    - **Release blockers**, fixed before release: every finding reproduced at runtime (F4, F5, F6, F7, F8, F12, F13), and every MEDIUM-or-higher finding that the full panel confirmed with at least medium confidence (F1, F2).
+    - **Not blockers:** F3, F9, F10 and F11 are fixed in the release when ready, because they sit in code the release already changes or next to it. F14 is deferred, with a written justification.
+  - Fix `groundwork routines schedule` not saving the time (product-critical).
   - Validate the release on a real install, upgrade, rollback and a live `claude -p` acceptance run. Then archive `add-task-lifecycle-gate`, so `task-lifecycle` enters the main specs.
-  - Follow the release with a short owner pilot on real work.
-- **E. Make ECC optional (owner decision; recommended between M1 and M2).**
+  - An owner pilot on real work starts when 2.5.0 is published. It has no fixed duration and blocks nothing except M2's merge.
+- **E. Make ECC optional (recommended between M1 and M2).**
   - Groundwork stops depending on ECC.
-  - New installs ask whether to install ECC. Existing installs keep it.
-  - An ECC install failure no longer aborts the install, and a missing ECC no longer fails `--verify`.
+  - An ECC install failure no longer aborts the install, and a missing ECC no longer fails `--verify`. Existing installs keep ECC.
+  - **The default for new installs stays undecided** until the R9 baseline compares Groundwork with and without ECC. The owner then picks it.
   - The rules name native subagents and review commands first, and ECC agents only "when installed".
-  - The `--no-verify` block moves into Groundwork's existing task gate. The GateGuard "investigate before edit" hook stops being listed as an enforced control and stays as rule guidance.
+  - Groundwork's task gate keeps `--no-verify` hard-blocked, with or without ECC. Replacing the block with `ask` would be a security-policy change. It needs explicit owner approval and its own validation, and it is not part of this plan.
+  - For installs without ECC, GateGuard's "investigate before edit" stop becomes rule guidance. The owner approves this together with the ECC default.
   - ECC itself is not modified.
 - **M2. Intelligent task planning.**
+  - Development may start on its own branch once 2.5.0 is published, during the pilot. It merges only after the relevant pilot findings are fixed or explicitly deferred.
   - Planning facts live in the native OpenSpec plan, in one `## Planning` section: an estimate with range and confidence, `Depends on` task keys, and priority.
   - Groundwork reads that section the same way it reads `## Verification` today.
   - Several keyed tasks in one prompt are recorded separately.
@@ -48,10 +50,11 @@ The milestones are in the recommended order. Each one ships as its own release, 
 - **M3. Integrated developer experience.**
   - The statusLine shows the current task: key, phase, progress and review state.
   - MATERIAL intake names the catalog integrations relevant to the task and their cached readiness, as guidance only.
-  - Two dashboard readability defects are fixed: clipped labels and unsorted rows.
+  - Optional: two dashboard readability defects (clipped labels, unsorted rows). They never block the M3 release.
 - **R9 evaluation (cross-cutting).**
   - A small, repeatable comparison with and without Groundwork on three reference tasks, with the same model and environment.
   - It runs at M1 and again after M2 and M3.
+  - Every run has a hard spending cap, so the maximum cost is stated before the owner is asked to authorize it (design D7).
   - Results are reported as observed, with sample size and variance stated.
 
 None of these is a breaking change. Every new behaviour reads existing state, adds guidance, or can be switched off with an existing kill switch or statusLine setting.

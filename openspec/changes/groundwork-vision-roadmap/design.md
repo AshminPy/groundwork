@@ -114,25 +114,46 @@ NOT VERIFIED, and not re-checked for this plan:
   - E comes before M2 because it is small and independent, and it lowers the per-session cost of everything after it.
 - **Alternative:** fold E into M3, keeping the owner's original M2-then-M3 sequence. This is an owner decision (see Owner decisions).
 - Each milestone is its own release, with its own CHANGELOG entry, release report and owner approval. This roadmap change stays the plan of record across those releases.
+- The order fixes when work **merges**, not when it may start. M2 development can run during the M1 pilot, the R9 baseline and E. Only M2's merge waits on the relevant pilot findings (D10).
 
-### D2. M1 scope: ship as merged, plus security fixes and one routines bug
-- **Fix in M1:**
-  - F7, F8, F11, F12: task-gate bypasses. These are in the M1 feature itself. F7, F8 and F12 were reproduced.
-  - F4, F5, F6, F10: push-guard bypasses. F4–F6 were reproduced.
-  - F13: settings mode. Reproduced.
-  - F1–F3: routines' broad `Bash(git *)` and the `news` routine's web plus Read grant. Medium severity.
-  - F9: quadratic snapshot regex.
-  - The `routines schedule` time bug. The 2.4.0 macOS upgrade note tells users to run that command.
-- **Defer F14** (`jira_eod` MCP grant). It has low confidence, and narrowing it depends on per-tool MCP grants that have not been checked. It is recorded as a known limitation.
-- **Each fix:**
-  - Make the smallest change in place, plus a regression test built from the report's proof of concept.
-  - The push guard and the task gate keep separate parsers. Merging them would refactor a released, enforced control during a release. The duplication is recorded as a trade-off.
-  - Routine grants are narrowed to the git subcommands each routine's prompt actually uses. Each routine is then re-run live through the existing path.
-- **Housekeeping:**
-  - Archive `add-task-lifecycle-gate` (and the other finished changes) after the release is validated.
-  - Write Purpose sections for `health-dashboard` and `onboarding`.
-  - Refresh `docs/FUTURE-SCOPE.md` §7 and §14, which M1 made stale.
-  - `add-groundwork-copilot` stays open: its remaining tasks are deferred features.
+### D2. M1 security release criteria: severity and evidence
+- **Release blocker.** A finding blocks 2.5.0 when either of these holds:
+  1. it is **verified exploitable**: reproduced at runtime against the code being released; or
+  2. it is **MEDIUM or higher**, confirmed by all three verification lenses, with medium or higher confidence.
+
+  Every release blocker is fixed before the release. Each fix comes with a regression test built from the report's proof of concept.
+- **Not a blocker.** Any other finding is either fixed in the release because it sits in code the release already changes (product-critical), or deferred with a written justification.
+- A non-blocker that is reproduced during M1 work becomes a blocker.
+- The source for every column below is the Claude Security report of 2026-10-12. "Reproduced" means a runtime reproduction already recorded for that finding.
+
+| Finding | Severity / confidence / panel | Reproduced | Class | Disposition |
+|---|---|---|---|---|
+| F1 routines grant `Bash(git *)` while reading untrusted content | MEDIUM / medium / 3 of 3 | no | Blocker (rule 2) | Fix: narrow to the git subcommands each routine uses |
+| F2 `news` adds WebFetch/WebSearch to `Bash(git *)` under `dontAsk` | MEDIUM / medium / 3 of 3 | no | Blocker (rule 2) | Fix with F1 |
+| F3 `news` combines unrestricted Read with web content | MEDIUM / low / 3 of 3 | no | Not blocker: low confidence | Fix with F2 (same grant list) |
+| F4 push guard misses newline and tight `;` chains | LOW / high / 3 of 3 | yes | Blocker (rule 1) | Fix |
+| F5 push guard misses `-lc`, `-ec` | LOW / high / 3 of 3 | yes | Blocker (rule 1) | Fix |
+| F6 push guard misses `-uf`, `-fu` | LOW / high / 3 of 3 | yes | Blocker (rule 1) | Fix |
+| F7 task gate: `[[` hides later commands | LOW / medium / 2 of 3 | yes | Blocker (rule 1) | Fix |
+| F8 task gate: carriage return as a comment boundary | LOW / medium / 2 of 3 | yes | Blocker (rule 1) | Fix |
+| F9 quadratic regex on `tasks.md` in the snapshot | LOW / medium / 2 of 3 | no | Not blocker | Fix when ready, otherwise defer to the next release. Justification: availability only (a slower session start in a repository that carries a hostile `tasks.md`); no confidentiality or integrity impact. |
+| F10 push guard ignores `git -C` and in-command `cd` | LOW / medium / 3 of 3 | no | Not blocker | Fix with F4–F6 (same parser) |
+| F11 task gate loses a computed `cd` into the config directory | LOW / medium / 3 of 3 | no | Not blocker | Fix with F7 and F8 (same parser) |
+| F12 bare credential directories not treated as credential access | LOW / medium / 3 of 3 | yes | Blocker (rule 1) | Fix |
+| F13 settings rewrite drops the 0600 mode | LOW / medium / 3 of 3 | yes | Blocker (rule 1) | Fix |
+| F14 `jira_eod` read/write boundary is prompt-only | LOW / low / 3 of 3 | no | Not blocker | **Deferred** (justification below) |
+
+- **F14 justification:**
+  - It is low severity and low confidence, and it was not reproduced.
+  - The write path it concerns is the routine's intended function.
+  - Narrowing it needs per-tool MCP permission rules for the Atlassian server, which this plan has not verified.
+  - It only matters on installs where `jira_eod` has Atlassian access configured.
+  - It is recorded as a known limitation in the routines documentation, and revisited when that routine next changes or if it is reproduced.
+- **Product-critical, non-blocking in M1:**
+  - the `routines schedule` time bug;
+  - archiving finished changes, including the two main-spec Purpose sections that `validate --specs --strict` needs first;
+  - the `docs/FUTURE-SCOPE.md` refresh.
+- **How each fix is made:** the smallest change in place. The push guard and the task gate keep separate parsers, because merging them would refactor a released, enforced control during a release; the duplication is a recorded trade-off. Narrowed routines are re-run live through the existing path. `add-groundwork-copilot` stays open, since its remaining tasks are deferred features.
 
 ### D3. Planning facts live in the OpenSpec plan, in one `## Planning` section
 - The estimate, `Depends on` and priority are read like `## Verification` (spec: `task-planning`).
@@ -176,17 +197,37 @@ NOT VERIFIED, and not re-checked for this plan:
   - claims that do not match the evidence;
   - fresh-session resume giving the correct next action.
 - **Reporting:** the sample is small and model output varies, so results are reported as observed values with n and spread, never as significance.
+- **Maximum cost, stated before authorization:**
+  - Every run is capped with `claude -p --max-budget-usd`. The flag is present in the installed CLI, 2.1.296.
+  - The only measured cost is a trivial task: $0.21 without ECC and $0.41 with it (`docs/VALIDATION.md`). The caps are ceilings set well above that, not predictions.
+  - The baseline is 18 task runs (3 tasks, 3 arms, 2 runs each), 6 short fresh-session resume runs (MATERIAL task, 3 arms × 2) and 1 dry run.
+
+  | Run | Cap | Count | Maximum |
+  |---|---|---|---|
+  | STANDARD task | $1.50 | 6 | $9.00 |
+  | TROUBLESHOOT task | $3.00 | 6 | $18.00 |
+  | MATERIAL task | $6.00 | 6 | $36.00 |
+  | Resume check | $0.75 | 6 | $4.50 |
+  | Dry run (STANDARD, one arm) | $1.50 | 1 | $1.50 |
+  | **Total** | | **25** | **$69.00** |
+
+  - A run that hits its cap is recorded as capped. That is a result too, and it is never silently re-run.
+  - UNVERIFIED: whether the CLI stops exactly at the cap or after the turn that crosses it. If it is the latter, the overshoot is at most one turn per run, and the observed total is reported.
+  - On a subscription login, the dollar figure is the CLI's computed equivalent and the runs use plan limits. How the cap applies there is UNVERIFIED.
+  - The owner authorizes the $69.00 maximum before the dry run. A later re-run is authorized separately, with its own stated maximum.
 - **Delivery:** a short runbook and a small script under `tests/eval/`. No framework, and no runs in CI.
 
 ### D8. ECC: make it an optional integration (DECISION record)
 
 ```
-DECISION            Groundwork stops depending on ECC. New installs ask whether to install it
-                    (recommended default: no). Existing installs keep it. A failed or skipped ECC
-                    install no longer aborts install.sh or fails --verify. The rules name native
-                    subagents and review commands first and ECC agents only "when installed".
-                    The --no-verify block moves into the existing task gate (native `ask`).
-                    "Investigate before edit" becomes advisory rule guidance. ECC is not modified.
+DECISION            Groundwork stops depending on ECC. A failed or skipped ECC install no longer
+                    aborts install.sh or fails --verify. Existing installs keep ECC. The rules name
+                    native subagents and review commands first and ECC agents only "when
+                    installed". The default for new installs (ECC on or off) stays UNDECIDED until
+                    the R9 baseline compares Groundwork with and without ECC; the owner then picks
+                    it. Groundwork's task gate hard-blocks --no-verify with or without ECC, which
+                    keeps today's enforced control. For installs without ECC, "investigate before
+                    edit" becomes advisory. ECC is not modified.
 EVIDENCE            Context § "ECC facts used by Decision 8": install.sh:24,71-72; setup.sh:664,690-691;
                     docs/ARCHITECTURE.md enforced-controls table; `claude plugin details ecc@ecc`
                     (~40,639 always-on tokens); docs/VALIDATION.md cost table ($0.21 vs $0.41);
@@ -204,20 +245,33 @@ WHY                 Unique, material value: (1) the only enforcement of two cont
                     - Remove from users' machines: destructive to their environment, and drops
                       value for users who rely on it.
                     Optional keeps ECC's value for those who choose it and removes the cost for
-                    everyone else.
+                    everyone who does not. Whether "does not" should be the default is a question
+                    for the comparative evidence, not for this record.
 TRADEOFFS           Users without ECC lose the language-specific reviewer checklists (native
                     reviewers are general) and GateGuard's hard "investigate first" stop (now
-                    advisory). The --no-verify control becomes `ask` rather than a hard block.
+                    advisory). That downgrade from enforced to advisory is a control change; the
+                    owner approves it together with the ECC default. A hard deny is a new kind of
+                    decision for the task gate, which otherwise only asks.
 VALIDATION METHOD   The acceptance criteria below, plus the R9 baseline arms with and without ECC.
 UNCERTAINTY         Cost data is n=1 on a trivial task (the R9 baseline replaces it). Hook latency
                     is not measured. Whether anyone uses /ecc:* commands is NOT VERIFIED. The
                     install-abort path is INFERENCE.
 ```
 
+**`--no-verify` policy:**
+- Today ECC's block-no-verify hook enforces a hard block, and `docs/ARCHITECTURE.md` lists it as Enforced.
+- This plan keeps a hard block: Groundwork's task gate denies the bypass forms, so the control holds whether or not ECC is installed. This needs a `task-lifecycle` spec delta, written in E once that capability is in the main specs.
+- Replacing the block with `ask` would weaken an enforced control. That makes it a **security-policy change**, which needs three things before it could happen:
+  1. explicit owner approval;
+  2. its own spec delta;
+  3. its own validation: tests for every bypass form, and a live check that the prompt appears.
+
+  It is not part of this plan.
+
 **Migration:**
 - **Upgrade:** never uninstalls or disables ECC. `hook_profile` is kept when ECC is present.
 - **New installs:**
-  - `setup.sh` asks once and records the answer in `config.json`.
+  - `setup.sh` asks once, offering the default the owner picks after the R9 baseline, and records the answer in `config.json`.
   - `--non-interactive` keeps the current machine's state.
   - `groundwork update` passes the detected state through.
 - **Other changes:**
@@ -228,7 +282,7 @@ UNCERTAINTY         Cost data is n=1 on a trivial task (the R9 baseline replaces
 **Acceptance criteria:**
 1. A clean install with ECC declined completes. `--verify` passes. The full test suite passes.
 2. In a fixture repository without ECC, a MATERIAL change reaches completion. Its independent review comes from a native subagent that emits `REVIEW RESULT`, and the review gate accepts it.
-3. Without ECC, `git commit --no-verify`, `git commit -n` and `git push --no-verify` raise the native permission prompt.
+3. With and without ECC, `git commit --no-verify`, `git commit -n` and `git push --no-verify` are denied, and `git commit -m msg` is not.
 4. Upgrading a machine that has ECC leaves ECC installed and enabled, with `hook_profile` unchanged.
 5. No rule line names an ECC agent without a native alternative.
 6. The R9 baseline reports always-on tokens and cost with and without ECC.
@@ -236,7 +290,7 @@ UNCERTAINTY         Cost data is n=1 on a trivial task (the R9 baseline replaces
 **Risks:**
 - [Review quality drops for Python-heavy work without ECC] → The native reviewer prompt names the language. The R9 review-effectiveness measure checks this. The owner can keep ECC.
 - [Edits happen without investigation once GateGuard is gone] → The rules, snapshot and review gate remain, and the R9 "plan before first edit" measure watches for it.
-- [Owner prefers keeping ECC by default] → Decide at approval. Only the default changes; the work is the same.
+- [The baseline favours keeping ECC on by default] → The default is decided from that evidence. Only the default changes; the work is the same.
 
 ### D9. Roles and review
 - Claude implements and supplies evidence.
@@ -244,6 +298,40 @@ UNCERTAINTY         Cost data is n=1 on a trivial task (the R9 baseline replaces
 - At each milestone gate, the owner relays the PR, diff and evidence to ChatGPT/Codex for architecture and independent review.
 - The owner alone approves merge, tag, publish and any production action.
 - Claude never self-approves and never reviews its own change as the only reviewer.
+
+### D10. Work classes, the pilot, and M2 during the pilot
+- **Release-critical** work blocks only its own milestone's release:
+  - M0: the version checks in D11;
+  - M1: the D2 release blockers, a green full suite, clean install plus 2.4.0 upgrade plus rollback, live COR-123 acceptance, a fresh-context review at Must-fix 0, the owner macOS smoke test, and owner approval;
+  - E, M2 and M3: the same release gate plus their own acceptance criteria.
+- **Product-critical** work is needed for the vision and planned in its milestone. If it is not ready, it moves to the next release with a note, without holding up an unrelated release. This covers:
+  - the non-blocking findings in D2, the schedule bug and the M1 housekeeping;
+  - the R9 evaluation;
+  - E;
+  - M2;
+  - M3's statusLine segment and intake hints.
+- **Optional** work never blocks a milestone: the dashboard's clipped labels and unsorted rows. Dark mode stays a non-goal.
+- **The pilot:**
+  - It starts when 2.5.0 is published and has no fixed duration.
+  - Findings are logged as they occur in the 2.5.0 release report: unneeded prompts, intake misclassifications and resume failures.
+  - It blocks nothing except M2's merge.
+- **M2 during the pilot:**
+  - M2 development may start once 2.5.0 is published, on its own branch off `main`.
+  - **Before M2 merges:** every logged pilot finding that touches intake, the ledger, the gate or completion is fixed or explicitly deferred with a reason. At least one real MATERIAL task must have gone from intake to completion or cancellation on 2.5.0, so that pilot findings exist to check.
+  - If M2 code collides with a pilot fix, the fix lands on `main` first and M2 merges `main` in.
+
+### D11. M0 stays minimal and keeps version behaviour
+- **Scope:** the 2.4.0 CHANGELOG section and `docs/RELEASE-REPORT-2.4.md` from tag `v2.4.0`, and removal of the already-released macOS entry from Unreleased. Nothing else; the spec Purpose fixes move to M1 housekeeping.
+- **Why version behaviour is at stake:** two pieces of code take the first `## x.y.z` CHANGELOG heading as the version, and `## Unreleased` does not match it.
+  - `install.sh:192` writes the installed `VERSION` file from it.
+  - `scripts/groundwork_update.py:180-186` reads it, and lines 345–347 refuse an update whose fetched CHANGELOG top version does not match the release.
+- **Checks:**
+  1. `grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md` prints `## 2.4.0`, the same command `install.sh` uses. The value is unchanged from today.
+  2. `_top_changelog_version` from `groundwork_update.py` returns 2.4.0 for the reconciled file.
+  3. Every released section, from `## 2.4.0` to the end, is byte-identical to the tag.
+  4. `## Unreleased` stays first and holds only post-2.4.0 entries.
+  5. `python3 tests/test_groundwork_update.py` and the full suite pass.
+- **Effect on the next release:** M1 adds `## 2.5.0` above the 2.4.0 section, which keeps the update check consistent.
 
 ## Answers to architecture-quality §2
 
@@ -268,26 +356,26 @@ UNCERTAINTY         Cost data is n=1 on a trivial task (the R9 baseline replaces
   - The ledger lives outside repositories, and file tools cannot write it.
   - No credentials are stored.
   - M1 narrows routine grants.
-  - E keeps `--no-verify` behind `ask`.
-- **Scaling and cost:** ledger reads are per repository and small. `next` is O(tasks²) at most, for tens of tasks. E removes about 40K tokens per session for users without ECC. R9 runs cost API usage: a few dozen runs per evaluation. That cost is UNVERIFIED until the baseline is run and reported.
+  - E keeps `--no-verify` hard-blocked. Any move to `ask` is a separate, owner-approved security-policy change (D8).
+- **Scaling and cost:** ledger reads are per repository and small. `next` is O(tasks²) at most, for tens of tasks. E removes about 40K tokens per session for users without ECC. R9 runs are capped per run, so the baseline costs at most $69.00 (D7). The actual cost is UNVERIFIED until it is run and reported.
 
 ## Testing and real-world validation strategy
 
 | Milestone | Unit / integration | Live / real-world |
 |---|---|---|
-| M0 | `openspec validate --specs --strict`; diff against the `v2.4.0` tag | — |
-| M1 | One regression test per finding (from the report's proof of concept); full suite `python3 -m pytest tests -q --ignore=tests/mutation`; no mutation suite exists for the gate or push guard; regression tests stand in | Clean install, 2.4.0 → 2.5.0 upgrade, rollback in sandbox config dirs. Live COR-123 acceptance with real `claude -p` and a fake `gcloud`. Re-run each narrowed routine. Owner macOS smoke test. Two-week owner pilot. |
-| R9 | Script dry run on one task | 3 tasks × 3 arms × 2 runs |
+| M0 | The D11 version checks; diff against the `v2.4.0` tag; `tests/test_groundwork_update.py` and the full suite | — |
+| M1 | One regression test per finding (from the report's proof of concept); full suite `python3 -m pytest tests -q --ignore=tests/mutation`; no mutation suite exists for the gate or push guard; regression tests stand in | Clean install, 2.4.0 → 2.5.0 upgrade, rollback in sandbox config dirs. Live COR-123 acceptance with real `claude -p` and a fake `gcloud`. Re-run each narrowed routine. Owner macOS smoke test. Owner pilot, with no fixed duration (D10). |
+| R9 | Script dry run on one task, within its cap | 3 tasks × 3 arms × 2 runs plus 6 resume runs, each capped (D7) |
 | E | `test_setup.py` updates; `--no-verify` gate tests | Clean install without ECC; upgrade with ECC; MATERIAL fixture reaching completion with a native reviewer |
 | M2 | Parser, readiness, cycle and order tests; multi-key intake tests | Live two-ticket run: both recorded, `next` recommends the prerequisite, fresh-session resume |
-| M3 | statusLine segment tests; no-subprocess assertion; intake hint tests | Live statusLine render timing; COR-123 intake shows the GCP hint; dashboard screenshot check |
+| M3 | statusLine segment tests; no-subprocess assertion; intake hint tests | Live statusLine render timing; COR-123 intake shows the GCP hint; optional dashboard screenshot check (does not block the release) |
 
 Unit tests prove logic only. Each milestone is reported as complete only with its live evidence. Anything that cannot be run is labelled RUNTIME VALIDATION REQUIRED.
 
 ## Safety and rollback
 
 - Milestone releases are reversible with `groundwork rollback`, which is tested in every release.
-- New task behaviour is read-only or guidance. The only new `ask` is `--no-verify` (E). `GROUNDWORK_TASK_GATE=off` switches the gate off.
+- New task behaviour is read-only or guidance. E adds no `ask`. It adds one hard block, `--no-verify`, which keeps today's ECC-enforced control. `GROUNDWORK_TASK_GATE=off` switches the gate off.
 - Security fixes only tighten controls. Each one has a regression test, so a later change cannot silently reopen it.
 - No real cloud mutation happens during validation; a fake `gcloud` is used. No production access.
 - E never removes ECC from a machine.
@@ -301,12 +389,12 @@ These are estimates, not commitments. They count working days of implementation 
 |---|---|---|---|
 | M0 | 0.25–0.5 d | high | Docs copied from the tag |
 | M1 | 3–6 d | medium | The task-gate change needed 4 reviews (2 sent it back); Copilot needed 10 rounds and 42 MUST FIX. The 2.4.0 release validation took about 1–2 d. |
-| R9 baseline | 1.5–3 d | low | New script and fixtures; run time and cost not yet measured |
+| R9 baseline | 1.5–3 d | low | New script and fixtures; run cost capped at $69.00 (D7) |
 | E | 1.5–3 d | medium | Install, setup and merge changes, tests, two live installs |
 | M2 | 4–8 d | low–medium | Intake classifier changes have needed several review rounds before |
 | M3 | 3–5 d | low–medium | statusLine and intake changes are small; live timing and screenshots add time |
 | R9 re-run | 0.5–1 d | medium | Reuses the baseline script |
-| **Total** | **13.75–26.5 d** | low–medium | Plus a two-week pilot after M1 |
+| **Total** | **13.75–26.5 d** | low–medium | The pilot runs alongside later work and adds no fixed delay (D10) |
 
 ## Risks / Trade-offs
 
@@ -333,12 +421,12 @@ These are estimates, not commitments. They count working days of implementation 
 
 ## Owner decisions
 
-1. **M1 security scope:** fix F1–F13 in 2.5.0, deferring F14 (recommended), or ship M1 with only the task-gate fixes.
-2. **ECC:** make it optional with the default "no" for new installs (recommended), make it optional with the default "yes", or keep the full install as today.
-3. **Where E sits:** after the M1 release and R9 baseline (recommended), or folded into M3 to keep the original M2-then-M3 order.
-4. **Pilot overlap:** start M2 during the two-week M1 pilot and merge it only after the pilot findings are triaged (recommended), or wait for the pilot to finish.
-5. **R9 cost:** about 18 headless runs for the baseline use API usage on the owner's account. Approve before the first run.
-6. **M0 method:** a docs-only PR that copies the 2.4.0 CHANGELOG section and release report from the tag. This avoids the release-branch merge that was blocked earlier.
+1. **M1 release criteria:** approve the D2 rule. Its effect is that F1, F2, F4–F8, F12 and F13 block 2.5.0, F3, F9, F10 and F11 are fixed when ready, and F14 is deferred with the stated justification.
+2. **ECC default for new installs:** decided **after** the R9 baseline, from its evidence. Approving this plan now commits only to making ECC optional and keeping existing installs as they are.
+3. **Where E sits:** after the M1 release and the R9 baseline (recommended), or folded into M3 to keep the original M2-then-M3 order.
+4. **R9 baseline spend:** authorize a maximum of $69.00, enforced per run with `--max-budget-usd` (D7), before the dry run.
+5. **M0 method:** a docs-only PR that copies the 2.4.0 CHANGELOG section and release report from the tag and passes the D11 version checks. This avoids the release-branch merge that was blocked earlier.
+6. **`--no-verify` (only if raised later):** the plan keeps the hard block. Changing it to `ask` would need a separate, explicit approval (D8).
 
 ## Open Questions
 
