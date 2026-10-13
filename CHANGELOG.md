@@ -8,10 +8,14 @@
     substitutions, wrapper options, `bash -lc`, line continuations, `$'…'` quoting, or a force flag inside `-uf` are
     now denied. Also F10: the branch of a bare push is checked where the push runs (`cd`, also through `builtin`,
     `command` or `eval`, and `git -C`), and a bare push that picks its repository or destination another way
-    (`--git-dir`, `GIT_DIR`, `-c push.*`, `-c remote.*`) is denied.
+    (`--git-dir`, `GIT_DIR`, `GIT_CONFIG*`, `-c push.default`, `-c remote.<name>.push`) is denied. A push whose
+    destination the shell or git computes (`origin $B`, `HEAD:$(…)`, a glob or brace expansion, xargs, a computed
+    `git` or subcommand, a `-c alias.*`) is denied, and so is a `+refspec` force, the refspec `:`, and a bare push
+    where the current branch cannot be read. `$(git branch --show-current)` is read as `HEAD`.
   - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
     directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
-    the Claude config directory through earlier `cd`s or assignments now asks before settings or hooks change.
+    the Claude config directory through earlier `cd`s or assignments, also after a `cd` the gate cannot compute
+    (`cd "$X" && cd .claude`, a glob, CDPATH), now asks before settings or hooks change.
   - Settings (F13): merging or unmerging `settings.json` keeps its file mode, so an owner-only file stays 0600.
   - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`
     gets web tools only, and every routine prompt marks what it reads as untrusted data.

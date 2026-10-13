@@ -861,10 +861,15 @@ def test_security_scan_regressions() -> None:
         parent, name = e.cfg.parent, e.cfg.name
         for cmd in (f"cd {parent} && cd {name} && cd hooks && : > groundwork_task_gate.py",
                     f"D={e.cfg}; cd $D; sed -i s/a/b/ settings.json",
-                    f'cd "$(echo {e.cfg})" && rm hooks/groundwork_task_gate.py'):
+                    f'cd "$(echo {e.cfg})" && rm hooks/groundwork_task_gate.py',
+                    # confirmation review: after a cd the gate cannot compute, a cd that names the config directory
+                    f'cd "$(echo {parent})" && cd {name} && rm hooks/groundwork_task_gate.py',
+                    f'cd "$X" && cd {name}/hooks && : > groundwork_task_gate.py',
+                    f"cd {parent} && cd {name[:3]}* && rm hooks/groundwork_task_gate.py",
+                    f"CDPATH={parent} cd {name} && rm hooks/groundwork_task_gate.py"):
             check(f"F11: {cmd.replace(str(tmp), '<tmp>')!r} asks", "settings" in asked(e.bash(repo, cmd)),
                   str(e.bash(repo, cmd)))
-        for cmd in ("cd build && make", 'cd "$X" && make',
+        for cmd in ("cd build && make", 'cd "$X" && make', 'cd "$X" && cd build && make',
                     # independent review: a project's own .claude/ folder is not the Claude config directory
                     'cd "$REPO" && git add .claude/commands/foo.md && git commit -m x'):
             check(f"F11: ordinary {cmd!r} flows", asked(e.bash(repo, cmd)) == "", str(e.bash(repo, cmd)))

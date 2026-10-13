@@ -18,6 +18,7 @@ Kill switch: GROUNDWORK_TASK_GATE=off in settings.json env.
 Not a sandbox (docs/TASK-LIFECYCLE.md): programs such as Python are not inspected; shell commands and scripts run
 directly are.
 """
+import fnmatch
 import json
 import os
 import re
@@ -1224,28 +1225,45 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str) -> bool:
     one of them (in its words, redirect targets or here-document) and is not a plain reader or the task CLI. After
     `cd` into one of them, every later segment counts as naming it. A `cd` is followed from the session's directory
     through earlier `cd`s and literal assignments in the same command (`cd ~ && cd .claude`, `D=~/.claude; cd $D`;
-    2026-10-12 security scan, F11); a directory the gate cannot compute counts as inside when the command names the
-    Claude config directory."""
+    2026-10-12 security scan, F11). Once a `cd` goes where the gate cannot compute (`cd "$X"`, `cd -`, a glob, or any
+    `cd` while CDPATH is set), the shell may be anywhere, so a `cd` whose target names the config directory
+    (`.claude`, also as a glob such as `.cl*`) counts as entering it (independent review: `cd "$(echo ~)" && cd
+    .claude` was missed). A directory the gate cannot compute also counts as inside when the command names the
+    config directory's full path or `~/.claude`."""
     cdir = str(gt.claude_dir())
     markers = PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", cdir + "/groundwork", "~/.claude/settings",
                                 "~/.claude/hooks", ".claude/settings")
+    config_name = os.path.basename(cdir.rstrip("/")) or ".claude"
+
+    def names_config(word: str) -> bool:
+        if "$" in word or "`" in word:
+            return config_name in word  # `"$HOME/.claude"`, `"$(echo ~/.claude)"`
+        return any(fnmatch.fnmatchcase(config_name, part) for part in word.split("/") if part)
+
     bodies = heredoc_bodies(cmd)
     assigns = _literal_assignments(segs)
     dirs, inside = [cwd], False
+    unknown = bool(os.environ.get("CDPATH")) or "CDPATH" in cmd  # `cd name` may then go anywhere CDPATH lists
     for s in segs:
         argv = unwrap_run(s["argv"]) or s["argv"]
         text = os.path.expandvars(" ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)]))
         named = inside or any(m in text for m in markers)
         if argv[:1] in (["cd"], ["pushd"]):
             words = _words(argv[1:])
-            target = _expand_literal(words[0], assigns) if words else os.path.expanduser("~")
-            if "$" in target or "`" in target or target == "-":
-                # the full config path or `~/.claude`, not just its name: a project's own `.claude/` is not it
-                inside = inside or named or cdir in cmd or "~/.claude" in cmd
-            else:
+            raw = words[0] if words else "~"
+            target = _expand_literal(raw, assigns) if words else os.path.expanduser("~")
+            computed = any(ch in target for ch in "$`*?[") or target == "-"
+            if not computed:
                 new = [os.path.normpath(os.path.join(d, target)) for d in dirs]
                 dirs = list(dict.fromkeys(dirs + new))[-32:]
-                inside = inside or named or any(under(p, Path(cdir)) for p in new)
+                inside = inside or any(under(p, Path(cdir)) for p in new)
+            if computed or unknown:
+                inside = inside or names_config(raw) or names_config(target)
+            if computed:
+                # the full config path or `~/.claude`, not just its name: a project's own `.claude/` is not it
+                inside = inside or cdir in cmd or "~/.claude" in cmd
+                unknown = True
+            inside = inside or named
             continue
         if named and (s["writes"] or ((os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS
                                       and not _task_cli(argv))):

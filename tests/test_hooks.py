@@ -501,6 +501,43 @@ def test_push_guard() -> None:
             ("git pu\\\nsh origin main", True),
             ("git push origin $'\\x6dain'", True),               # ANSI-C quoting is decoded
             ("git push --signed origin main", True),             # --signed does not take the next word
+            # confirmation review (M1): bash ends `$'…'` text at a NUL, and its escapes differ from Python's
+            (f"cd $'{repo}\\x00junk' && git push", True),
+            (f"cd $'{repo}\\c@zz' && git push", True),
+            ("git push origin $'ma\\x00junk'in", True),
+            ("git push origin $'\\u6d'ain", True),
+            # a directory whose current branch cannot be read is unknown (a fresh clone is on main)
+            (f"git clone -q {repo} {tmpdir}/c && cd {tmpdir}/c && git push", True),
+            # confirmation review (M1): an argument the shell or git computes fails closed
+            ("B=main; git push origin $B", True),
+            ('git push -u origin "$BRANCH"', True),
+            ("git push origin HEAD:$(echo main)", True),
+            ("git push origin HEAD:`echo main`", True),
+            ("git push origin {main,}", True),                   # brace expansion
+            ("git push origin ma?n", True),                      # glob
+            ('A="origin main"; git push $A', True),              # word splitting
+            ("git push -{f,} origin feature/x", True),           # a computed flag
+            ("C=push; git $C origin main", True),                # a computed subcommand
+            ("git {push,} origin main", True),
+            ("G=git; $G push origin main", True),                # a computed command name
+            ("$(echo git) push origin main", True),
+            ("`echo git` push origin main", True),
+            (f"git -C $(echo {repo})/. push", True),
+            ("echo main | xargs git push origin", True),         # xargs appends the destination
+            ("git -c alias.p=push p origin main", True),         # git aliases defined on the command line
+            ("git -c alias.p='push --force' p origin feature/x", True),
+            ("git -c alias.p='!git push origin main' p", True),
+            ("git -c alias.a=b -c alias.b=push a origin main", True),
+            ('git -c "$X" push', True),
+            ("git --config-env=push.default=X push", True),
+            ("GIT_CONFIG_PARAMETERS=\"'push.default=matching'\" git push", True),
+            ("git push origin +feature/x", True),                # `+refspec` force-updates
+            ("git push origin :", True),                         # matching branches, main included
+            ("git push origin HEAD:heads/main", True),           # git reads heads/main as main
+            (f"env -C {repo} git push", True),
+            (f"env --chdir={repo} git push origin HEAD", True),
+            ("sudo -u $U git push origin feature/x", True),      # word splitting can put another push first
+            ("git -C $D push origin feature/x", True),           # ... also inside git's own options
             # existing behaviour kept: ordinary work is not denied
             ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
             ("git push \\\n  origin feature/x", False),
@@ -515,6 +552,17 @@ def test_push_guard() -> None:
             ("ls # git push origin main", False),                # a real comment
             ('git commit -m "fix; push to main later"', False),  # quoted text
             ("git log --oneline | head", False),
+            ('git push -u origin "$(git branch --show-current)"', False),  # the current branch, like HEAD
+            ("git push -u origin $(git branch --show-current)", False),
+            ("git push origin `git rev-parse --abbrev-ref HEAD`", False),
+            ("git -c push.autoSetupRemote=true push", False),    # a key that does not pick the destination
+            ("git -c alias.st=status st", False),
+            ('git commit -m "$(cat msg)" && git push origin feature/x', False),
+            ("git stash push -m wip", False),
+            ("git commit -F- <<'EOF'\npush guard: fix\nEOF", False),  # a here-document line starting with push
+            ("echo $(date) push", False),
+            (f"env -C {feat} git push", False),
+            ('GIT_SSH_COMMAND="ssh -i $KEY" git push origin feature/x', False),  # an assignment is not split
         ]
         for cmd, expect_denied in security_cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})
