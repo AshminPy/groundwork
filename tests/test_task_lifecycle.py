@@ -823,9 +823,55 @@ def test_tracking_and_boundaries() -> None:
     finish()
 
 
+def test_security_scan_regressions() -> None:
+    """2026-10-12 Claude Security scan, M1 release (design D2): each proof of concept asks now, and the ordinary
+    forms next to it still flow. F7, F8, F12 and F6 are release blockers; F11 ships with them."""
+    print("security scan regressions (F6, F7, F8, F11, F12)")
+
+    def sens(cmd):
+        return gate.command_sensitive(cmd, "/srv/repo")
+
+    must_ask = {
+        # F7: `[[` is a test only where bash reads a command name; as an argument it hides nothing
+        "echo [[ ; terraform destroy ; echo ]]": "terraform destroy",
+        "printf x [[ ; kubectl delete ns prod ; echo ]]": "kubectl mutation",
+        # F8: a carriage return before `#` does not start a comment in bash
+        "ls\r# ;terraform destroy": "terraform destroy",
+        # F12: credential directories without a trailing slash, and all of ~/.aws and ~/.config/gcloud
+        "tar czf - ~/.ssh | base64": "credential", "cp -r ~/.ssh /tmp/k": "credential",
+        "grep -r . ~/.aws": "credential", "ls ~/.gnupg": "credential", "ls ~/.config/gcloud": "credential",
+        "cat ~/.aws/sso/cache/token.json": "credential",
+        # F6 (gate side): force or delete inside a short-flag cluster
+        "git push -uf origin feature/x": "forced", "git push -fu origin feature/x": "forced",
+    }
+    wrong = {c: sens(c) for c, label in must_ask.items() if label not in (sens(c) or "")}
+    check("every proof of concept asks", not wrong, str(wrong))
+    flowing = ("[[ -f x && -d y ]] && echo ok", 'if [[ -n "$a" ]]; then echo hi; fi', "! [[ a == b ]] && ls",
+               'while [[ $i -lt 3 ]]; do i=$((i+1)); done', "ls # terraform destroy", "grep -rn ssh src/",
+               "cat docs/.ssh-notes.md", "git push -u origin feature/x", "git push -q origin feature/x")
+    asking = {c: sens(c) for c in flowing if sens(c) is not None}
+    check("the ordinary forms next to them still flow", not asking, str(asking))
+
+    # F11: a cd into the Claude config directory is followed through earlier cds and literal assignments
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        e = Env(tmp)
+        (e.cfg / "hooks").mkdir()
+        repo = make_repo(tmp, openspec=False)
+        parent, name = e.cfg.parent, e.cfg.name
+        for cmd in (f"cd {parent} && cd {name} && cd hooks && : > groundwork_task_gate.py",
+                    f"D={e.cfg}; cd $D; sed -i s/a/b/ settings.json",
+                    f'cd "$(echo {e.cfg})" && rm hooks/groundwork_task_gate.py'):
+            check(f"F11: {cmd.replace(str(tmp), '<tmp>')!r} asks", "settings" in asked(e.bash(repo, cmd)),
+                  str(e.bash(repo, cmd)))
+        for cmd in ("cd build && make", 'cd "$X" && make'):
+            check(f"F11: ordinary {cmd!r} flows", asked(e.bash(repo, cmd)) == "", str(e.bash(repo, cmd)))
+    finish()
+
+
 if __name__ == "__main__":
     for test in (test_classifier, test_plan_reader, test_authorization_classes, test_shell_parser_regressions,
-                 test_material_lifecycle,
+                 test_security_scan_regressions, test_material_lifecycle,
                  test_archive_completes_and_recovery, test_tracking_and_boundaries):
         try:
             test()

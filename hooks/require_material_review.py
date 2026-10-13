@@ -81,8 +81,8 @@ except Exception:
 
 # (?<![a-z]) so "preview"/"previewer" never count; "reviewer", "code-review", "orch-review" still do.
 REVIEW_PATTERN = re.compile(r"(?<![a-zA-Z])review", re.IGNORECASE)
-CHECKBOX_UNDONE = re.compile(r"^\s*-\s*\[\s\]", re.MULTILINE)
-CHECKBOX_ANY = re.compile(r"^\s*-\s*\[[ xX]\]", re.MULTILINE)
+CHECKBOX_UNDONE = re.compile(r"^[ \t]*-[ \t]*\[[ \t]\]", re.MULTILINE)
+CHECKBOX_ANY = re.compile(r"^[ \t]*-[ \t]*\[[ xX]\]", re.MULTILINE)
 AGENT_TOOLS = ("Task", "Agent")
 AGENT_REVIEW_FIELDS = ("subagent_type", "name")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")

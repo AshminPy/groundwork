@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
+  design D2). Release blockers, each with a regression test from the scan's proof of concept:
+  - Push guard (F4, F5, F6): pushes hidden by newlines, separators touching a word, subshells, `{ }`, `if … then`,
+    substitutions, wrapper options, `bash -lc`, or a force flag inside `-uf` are now denied. Also F10: the branch of
+    a bare push is checked where the push runs (`cd`, `git -C`).
+  - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
+    directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
+    the Claude config directory through earlier `cd`s or assignments now asks before settings or hooks change.
+  - Settings (F13): merging or unmerging `settings.json` keeps its file mode, so an owner-only file stays 0600.
+  - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`
+    gets web tools only, and every routine prompt marks what it reads as untrusted data.
+  - F9: the checkbox pattern used on `tasks.md` is linear, so a repository's `tasks.md` cannot stall session start.
+  - Deferred with a justification: F14 (`jira_eod` read/write boundary; see docs/ROUTINES.md).
+- **Fix: `groundwork routines schedule … --hour H --minute M` now records the time**, so `groundwork routines list`
+  shows the time the job runs. An hour or minute out of range is refused.
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -452,6 +453,56 @@ def test_push_guard() -> None:
             denied = '"permissionDecision": "deny"' in out
             check(f"{cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
 
+        # 2026-10-12 Claude Security scan (M1 release blockers F4-F6, and F10): every form below hid a push from the
+        # 2.4.0 guard. The session sits in a worktree on feature/x, so only the command itself can reach main.
+        feat = Path(tmpdir) / "feat"
+        git(repo, "worktree", "add", "-q", "-b", "feature/x", str(feat))
+        security_cases = [
+            # F4: separators that touch a word, newlines, subshells, groups, compound commands, substitutions
+            ("git status\ngit push origin main", True),
+            ("cd repo;git push origin main", True),
+            ("true&&git push origin main", True),
+            ("(git push origin main)", True),
+            ("{ git push origin main; }", True),
+            ("if true; then git push origin main; fi", True),
+            ("echo `git push origin main`", True),
+            ("echo $(git push origin main)", True),
+            ("echo a#b; git push origin main", True),            # `#` inside a word is not a comment in bash
+            ("ls\r# ;git push origin main", True),               # a carriage return is part of a word in bash
+            ("sudo -u root git push origin main", True),         # wrapper options
+            ("timeout 30 git push origin main", True),
+            (">log git push origin main", True),                 # redirection before the command
+            ("2>/dev/null git push origin main", True),
+            ("cat <(git push origin main)", True),               # process substitution
+            ("git push origin main # it's fine", True),          # comment with a quote
+            ("git push origin feature/x 'oops", True),           # unbalanced quote: cannot be parsed, looks like a push
+            # F5: -c inside an option cluster
+            ("bash -lc 'git push origin main'", True),
+            ("sh -ec 'git push origin main'", True),
+            ("bash -l -c 'git push origin main'", True),
+            # F6: force inside a short-flag cluster
+            ("git push -uf origin feature/x", True),
+            ("git push -fu origin feature/x", True),
+            # F10: the branch is checked where the push runs
+            (f"git -C {repo} push", True),
+            (f"cd {repo} && git push origin HEAD", True),
+            ('cd "$X" && git push', True),                       # directory cannot be determined
+            # existing behaviour kept: ordinary work is not denied
+            ("git push", False),                                 # feature/x
+            ("git push -u origin feature/x", False),
+            ("git push -q origin feature/x", False),
+            ("bash -lc 'git push origin feature/x'", False),
+            ('cd "$X" && git push origin feature/x', False),     # explicit branch needs no directory
+            (f"cd {repo} && git push origin feature/y", False),
+            ("ls # git push origin main", False),                # a real comment
+            ('git commit -m "fix; push to main later"', False),  # quoted text
+            ("git log --oneline | head", False),
+        ]
+        for cmd, expect_denied in security_cases:
+            out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})
+            denied = '"permissionDecision": "deny"' in out
+            check(f"[security] {cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
+
         # Hook stdin is valid JSON but not an object -> fail open, never a crash. Found by the
         # Phase 1/2/4 re-review: this hook had the identical unguarded `data.get(...)` bug that
         # require_material_review.py was fixed for in the same round — same fix here.
@@ -601,6 +652,18 @@ def test_session_snapshot() -> None:
         text = snapshot_text(out)
         check("empty git repo -> no crash, 'no commits yet'", "no commits yet" in text and "no upstream" in text, text)
         check("snapshot carries the harness line (version + profile)", re.search(r"^harness: Groundwork .+; profile: .+$", text, re.M) is not None, text[:400])
+
+        # 2026-10-12 security scan, F9: a repository's tasks.md full of blank lines cannot stall SessionStart. The
+        # old `^\s*-\s*\[` pattern took quadratic time (about 2.7 s at 40,000 lines, past the 10 s hook timeout at a
+        # few hundred KB); the checkbox count must still be right.
+        slow = make_repo(tmp, "slow-tasks")
+        (slow / "openspec" / "changes" / "big").mkdir(parents=True)
+        (slow / "openspec" / "changes" / "big" / "tasks.md").write_text("- [x] one\n" + "\n" * 400_000 + "- [ ] two\n")
+        started = time.monotonic()
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(slow)}))
+        elapsed = time.monotonic() - started
+        check("F9: 400,000 blank lines in tasks.md -> snapshot in under 5 s with the right count",
+              elapsed < 5 and "big: 1/2 tasks" in text, f"{elapsed:.1f}s\n{text}")
     finish()
 
 
@@ -1303,6 +1366,26 @@ def test_settings_merge() -> None:
               gate.get("PreToolUse", {}).get("matcher") == "" and gate.get("PostToolUse", {}).get("matcher") == ""
               and gate.get("PostToolUseFailure", {}).get("matcher") == "Bash"
               and "matcher" not in gate.get("UserPromptSubmit", {"matcher": 1}), json.dumps(gate))
+
+        # 2026-10-12 security scan, F13 (M1 release blocker): merge and unmerge never widen settings.json's mode
+        private = tmp / "private.json"
+        private.write_text(json.dumps({"env": {"API_TOKEN": "synthetic-value"}}))
+        os.chmod(private, 0o600)
+        run_script(MERGE, args=[str(private)])
+        after_merge = private.stat().st_mode & 0o777
+        run_script(UNMERGE, args=[str(private)])
+        after_unmerge = private.stat().st_mode & 0o777
+        check("F13: an owner-only settings.json stays 0600 through merge and unmerge, content kept",
+              after_merge == 0o600 and after_unmerge == 0o600 and load(private)["env"]["API_TOKEN"] == "synthetic-value",
+              f"after merge {oct(after_merge)}, after unmerge {oct(after_unmerge)}")
+        shared = tmp / "shared.json"
+        shared.write_text("{}")
+        os.chmod(shared, 0o640)
+        (tmp / "shared.json.groundwork.tmp").write_text("stale temp file left by a crash")
+        os.chmod(tmp / "shared.json.groundwork.tmp", 0o666)
+        run_script(MERGE, args=[str(shared)])
+        check("F13: the user's own mode is kept exactly (0640 stays 0640), even over a stale world-writable temp file",
+              shared.stat().st_mode & 0o777 == 0o640 and "hooks" in load(shared), oct(shared.stat().st_mode & 0o777))
 
         # an older install's owner-command entry is removed on merge (and on unmerge), other entries kept
         old_install = tmp / "old_install.json"

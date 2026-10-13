@@ -3,27 +3,38 @@
 
 Groundwork extension (not part of ECC). ECC 2.2.1 only *reminds* about pushes in its
 `strict` profile; nothing blocks a direct push to main/master or a force-push. This hook
-closes that gap with the smallest implementation that survives the bypasses an
-independent security review reproduced against the 1.0.0 version:
+closes that gap with the smallest implementation that survives the bypasses independent
+security reviews reproduced against earlier versions:
 
-  - it splits the command on shell separators (ignoring quoted strings), strips env
-    assignments / sudo / command / env / nice wrappers, and recurses into
-    `sh|bash|zsh|dash|ksh -c "<cmd>"` and `eval "<cmd>"` strings (depth-limited);
-  - for every `git push` it finds it denies force flags, `--all` / `--mirror` /
-    `--branches` (they push every branch, so no single safe target exists), and any
-    refspec whose destination is protected — checking EVERY refspec, resolving `HEAD`
-    / `@` / a bare push to the current branch, `src:dst` to `dst`, `:dst` (remote
-    branch deletion) to `dst`, and stripping `+` and `refs/heads/`.
+  - it splits the command on every shell separator bash uses — `;`, `&&`, `||`, `|`, `&`,
+    newlines, `(`, `)`, backticks, also when they touch a word (`a;git push`, `true&&git push`)
+    — ignoring quoted text, and removes comments only where bash starts one (a `#` at the start
+    of a word); redirections and their targets are dropped;
+  - it finds a `git … push` anywhere in each command, so leading wrappers (`sudo -u x`,
+    `timeout 5`, `nohup`, `{`, `if … then`, env assignments) cannot hide it, and recurses into
+    `sh|bash|zsh|dash|ksh -c "<cmd>"` (also clustered flags such as `-lc`, `-ec`) and
+    `eval "<cmd>"` strings (depth-limited);
+  - for every `git push` it denies force flags (`--force*`, `-f`, and any short-flag cluster
+    with an `f`, such as `-uf`), `--all` / `--mirror` / `--branches` (they push every branch,
+    so no single safe target exists), and any refspec whose destination is protected —
+    checking EVERY refspec, resolving `HEAD` / `@` / a bare push to the current branch,
+    `src:dst` to `dst`, `:dst` (remote branch deletion) to `dst`, and stripping `+` and
+    `refs/heads/`;
+  - the current branch is checked in every directory the push may run in: the session's
+    directory, each `cd`/`pushd` target earlier in the command, and `git -C <dir>`. A directory
+    it cannot determine (`cd "$X"`) denies a push that depends on it.
 
 Known limits (deliberate — full shell parsing is out of scope): the protected set is an
-exact, case-sensitive match (`main`, `master`, `production`, `prod`, `release`);
-wrappers other than the shells above and `eval` (e.g. `xargs`, `python -c`, a script
-file that itself pushes) are not parsed; quoted text such as `echo "git push origin
-main"` is correctly NOT treated as a push. Every push still goes through Claude Code's
-normal Bash permission model, which is the backstop for anything this parser cannot see.
+exact, case-sensitive match (`main`, `master`, `production`, `prod`, `release`); a push
+run by another program (`python -c`, a script file that itself pushes) is not seen;
+quoted text such as `echo "git push origin main"` is correctly NOT treated as a push, but
+unquoted text (`echo git push origin main`) and here-document lines that read like a
+protected push are denied. Every push still goes through Claude Code's normal Bash
+permission model, which is the backstop for anything this parser cannot see.
 
-Fail-open on any parse error — a broken guard must never become a session-wide bypass of
-Claude's normal permission prompts.
+Fail-open on unreadable hook input — a broken guard must never become a session-wide
+bypass of Claude's normal permission prompts. A command it cannot parse is denied only
+when it looks like a git push.
 """
 import json
 import os
@@ -34,39 +45,90 @@ import sys
 
 PROTECTED = {"main", "master", "production", "prod", "release"}
 FORCE_FLAGS = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
+FORCE_CLUSTER_RE = re.compile(r"^-[A-Za-z0-9]*f[A-Za-z0-9]*$")  # -f inside a short-flag cluster: -uf, -fu
+SHELL_C_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c inside a short-flag cluster: -lc, -ec, -xc
 ALL_BRANCH_FLAGS = {"--all", "--mirror", "--branches"}
 # push options that consume the next token when not written as --opt=value
 VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo", "--recurse-submodules", "--signed"}
-SEPARATORS = {"&&", "||", ";", "|", "&"}
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+OPERATOR_CHARS = "();<>|&\n`"
+OPERATORS = ("&>>", "<<<", "<<-", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<", ";", "|", "&",
+             "(", ")", "<", ">", "\n", "`")
+SEPARATORS = {"&&", "||", ";", ";;", "|", "|&", "&", "\n", "(", ")", "`"}
+REDIRECT_RE = re.compile(r"^(?:&>>?|>>?|>\||>&|<<<|<<-?|<&|<>|<)$")
+COMMENT_AFTER = " \t\n;&|()<>"  # bash blanks are space and tab; a carriage return is part of a word
+RESERVED_WORDS = {"!", "{", "}", "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "time"}
+ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
-WRAPPERS = {"sudo", "command", "env", "nice", "time"}
+PUSH_LIKE_RE = re.compile(r"\bgit\b.*\bpush\b", re.S)
+UNKNOWN_DIR = "<unknown directory>"
 MAX_DEPTH = 3
 
 
+def _strip_comments(cmd: str) -> str:
+    """Remove `#` comments the way bash does: only a `#` that starts a word, outside quotes, up to the newline.
+    `a#b`, `$#`, `${x#y}` and `\\#` stay literal (shlex's own comment handling ends a word at any `#`)."""
+    out, i, n, boundary = [], 0, len(cmd), True
+    while i < n:
+        c = cmd[i]
+        if c == "\\":
+            out.append(cmd[i:i + 2])
+            i, boundary = i + 2, False
+        elif c in "'\"":
+            j = i + 1
+            while j < n and cmd[j] != c:
+                j += 2 if c == '"' and cmd[j] == "\\" else 1
+            out.append(cmd[i:j + 1])
+            i, boundary = j + 1, False
+        elif c == "#" and boundary:
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+        else:
+            out.append(c)
+            i, boundary = i + 1, c in COMMENT_AFTER
+    return "".join(out)
+
+
+def _split_operators(tok: str):
+    """shlex returns a run of adjacent operator characters as one token (`;\\n`, `)&&`); split it."""
+    if not tok or any(ch not in OPERATOR_CHARS for ch in tok):
+        return [tok]
+    parts, k = [], 0
+    while k < len(tok):
+        op = next(o for o in OPERATORS if tok.startswith(o, k))
+        parts.append(op)
+        k += len(op)
+    return parts
+
+
 def segments(cmd: str):
-    """Yield token lists for each simple command in a shell chain."""
+    """Token lists for each simple command, or None when the command cannot be tokenized (unbalanced quotes)."""
     try:
-        tokens = shlex.split(cmd, posix=True)
+        lex = shlex.shlex(_strip_comments(cmd), posix=True, punctuation_chars=OPERATOR_CHARS)
+        lex.whitespace = " \t\r"
+        lex.whitespace_split = True
+        lex.commenters = ""
+        tokens = [part for tok in lex for part in _split_operators(tok)]
     except ValueError:
-        return
-    seg = []
-    for tok in tokens:
+        return None
+    segs, seg, i = [], [], 0
+    while i < len(tokens):
+        tok = tokens[i]
         if tok in SEPARATORS:
             if seg:
-                yield seg
+                segs.append(seg)
             seg = []
+        elif REDIRECT_RE.match(tok):
+            if i + 1 < len(tokens) and tokens[i + 1] not in SEPARATORS:
+                i += 1  # the redirection target or here-document delimiter; `<(` keeps its `(`
+        elif tok.isdigit() and i + 1 < len(tokens) and REDIRECT_RE.match(tokens[i + 1]):
+            pass  # the "2" in "2>/dev/null"
         else:
             seg.append(tok)
-    if seg:
-        yield seg
-
-
-def strip_wrappers(seg):
-    """Drop leading env assignments / sudo / command wrappers before the real command."""
-    i = 0
-    while i < len(seg) and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[i]) or seg[i] in WRAPPERS):
         i += 1
-    return seg[i:]
+    if seg:
+        segs.append(seg)
+    return segs
 
 
 def current_branch(cwd: str):
@@ -76,6 +138,21 @@ def current_branch(cwd: str):
         return (out.stdout.strip() or None) if out.returncode == 0 else None
     except Exception:
         return None
+
+
+def _resolve_dir(target: str, base):
+    """A literal directory resolved against base; None when base is unknown or the shell would compute the path
+    (`$X`, a substitution, a glob, `~user`, `cd -`)."""
+    if base is None or not target or target == "-" or any(ch in target for ch in "$`*?["):
+        return None
+    if target.startswith("~") and target != "~" and not target.startswith("~/"):
+        return None
+    return os.path.normpath(os.path.join(base, os.path.expanduser(target)))
+
+
+def _command_position(seg, k) -> bool:
+    """True when seg[k] is where bash looks for the command name (after reserved words and assignments)."""
+    return all(t in RESERVED_WORDS or ASSIGNMENT_RE.match(t) for t in seg[:k])
 
 
 def push_positionals(push):
@@ -94,64 +171,103 @@ def push_positionals(push):
     return args
 
 
-def target_branches(push, cwd):
-    """Every destination branch a `git push` invocation would update (or delete)."""
+def target_branches(push, dirs):
+    """Every destination branch a `git push` invocation would update (or delete). A destination that depends on the
+    current branch is checked in every directory the push may run in; a None directory is reported as unknown."""
+    def current():
+        return [current_branch(d) if d is not None else UNKNOWN_DIR for d in dirs]
+
     args = push_positionals(push)
     if len(args) < 2:
-        return [current_branch(cwd)]  # bare `git push` or `git push <remote>`
+        return current()  # bare `git push` or `git push <remote>`
     targets = []
     for refspec in args[1:]:
         refspec = refspec.lstrip("+")
         src, sep, dst = refspec.partition(":")
         name = dst if sep else src
         if name in ("", "HEAD", "@"):
-            name = current_branch(cwd)
-        if name:
-            name = name.replace("refs/heads/", "")
-        targets.append(name)
+            targets.extend(current())
+            continue
+        targets.append(name.replace("refs/heads/", ""))
     return targets
 
 
-def inspect_command(cmd: str, cwd: str, depth: int = 0):
-    """Return a denial reason for the first violating `git push`, else None."""
+def _git_push(seg, k):
+    """(push argv, `-C` dirs) when seg[k] is `git` running `push`, else None."""
+    j, cdirs = k + 1, []
+    while j < len(seg) and seg[j].startswith("-"):
+        if seg[j] in GIT_VALUE_OPTIONS:
+            if seg[j] == "-C" and j + 1 < len(seg):
+                cdirs.append(seg[j + 1])
+            j += 2
+        else:
+            if seg[j].startswith("-C"):
+                cdirs.append(seg[j][2:])
+            j += 1
+    if j < len(seg) and seg[j] == "push":
+        return seg[j:], cdirs
+    return None
+
+
+def _push_reason(push, dirs):
+    if any(t in FORCE_FLAGS or t.startswith("--force") or FORCE_CLUSTER_RE.match(t) for t in push[1:]):
+        return ("block_protected_push: force-push is not allowed from Claude. Push a normal commit, "
+                "or ask the user to force-push themselves.")
+    if any(t in ALL_BRANCH_FLAGS for t in push[1:]):
+        return ("block_protected_push: `git push --all/--mirror/--branches` pushes every branch, including "
+                "protected ones, so it is not allowed from Claude. Push one feature branch explicitly.")
+    for target in target_branches(push, dirs):
+        if target == UNKNOWN_DIR:
+            return ("block_protected_push: this push runs in a directory the guard cannot determine, so it cannot "
+                    "check the branch. Name the branch explicitly (`git push origin <branch>`) or push yourself.")
+        if target in PROTECTED:
+            return (f"block_protected_push: direct push to protected branch '{target}' is not allowed "
+                    "(branch → PR → merge). Push a feature branch and open a PR instead.")
+    return None
+
+
+def inspect_command(cmd: str, cwd: str, depth: int = 0, dirs=None):
+    """Return a denial reason for the first violating `git push`, else None. dirs: the directories the command may
+    be running in (the session's, plus every `cd` target seen so far)."""
     if depth > MAX_DEPTH:
-        return None
-    for seg in segments(cmd):
-        seg = strip_wrappers(seg)
-        if not seg:
-            continue
-        head = os.path.basename(seg[0])
-        # Recurse into nested shells and eval so `bash -c "git push origin main"` is seen.
-        if head in SHELLS and "-c" in seg:
-            idx = seg.index("-c")
-            if idx + 1 < len(seg):
-                reason = inspect_command(seg[idx + 1], cwd, depth + 1)
+        return ("block_protected_push: too many nested shells to check this git push; run it yourself."
+                if PUSH_LIKE_RE.search(cmd) else None)
+    segs = segments(cmd)
+    if segs is None:
+        return ("block_protected_push: this command could not be parsed (unbalanced quotes) and looks like a git "
+                "push; run the push yourself or simplify the command." if PUSH_LIKE_RE.search(cmd) else None)
+    dirs = list(dirs) if dirs is not None else [cwd]
+    for seg in segs:
+        for k, tok in enumerate(seg):
+            name = os.path.basename(tok)
+            if name in ("cd", "pushd") and _command_position(seg, k):
+                args = [a for a in seg[k + 1:] if not a.startswith("-") or a == "-"]
+                dirs.append(os.path.expanduser("~") if not args else _resolve_dir(args[0], dirs[-1]))
+            elif name in SHELLS:
+                # Recurse into nested shells so `bash -c "…"` and `bash -lc "…"` are seen.
+                for j in range(k + 1, len(seg) - 1):
+                    if SHELL_C_RE.match(seg[j]):
+                        reason = inspect_command(seg[j + 1], cwd, depth + 1, dirs)
+                        if reason:
+                            return reason
+                        break
+            elif name == "eval":
+                reason = inspect_command(" ".join(seg[k + 1:]), cwd, depth + 1, dirs)
                 if reason:
                     return reason
-            continue
-        if head == "eval":
-            reason = inspect_command(" ".join(seg[1:]), cwd, depth + 1)
-            if reason:
-                return reason
-            continue
-        if head != "git" or len(seg) < 2:
-            continue
-        j = 1  # skip global git options such as `-C <dir>` / `-c k=v`
-        while j < len(seg) and seg[j].startswith("-"):
-            j += 2 if seg[j] in ("-C", "-c") else 1
-        if j >= len(seg) or seg[j] != "push":
-            continue
-        push = seg[j:]  # ["push", ...]
-        if any(t in FORCE_FLAGS or t.startswith("--force") for t in push[1:]):
-            return ("block_protected_push: force-push is not allowed from Claude. Push a normal commit, "
-                    "or ask the user to force-push themselves.")
-        if any(t in ALL_BRANCH_FLAGS for t in push[1:]):
-            return ("block_protected_push: `git push --all/--mirror/--branches` pushes every branch, including "
-                    "protected ones, so it is not allowed from Claude. Push one feature branch explicitly.")
-        for target in target_branches(push, cwd):
-            if target in PROTECTED:
-                return (f"block_protected_push: direct push to protected branch '{target}' is not allowed "
-                        "(branch → PR → merge). Push a feature branch and open a PR instead.")
+            elif name == "git":
+                found = _git_push(seg, k)
+                if not found:
+                    continue
+                push, cdirs = found
+                push_dirs = dirs
+                for c in cdirs:  # each -C is relative to the previous one, as in git
+                    push_dirs = [_resolve_dir(c, d) for d in push_dirs]
+                if cdirs:
+                    push_dirs = push_dirs + [cwd]  # never weaker than checking the session's directory
+                reason = _push_reason(push, push_dirs)
+                if reason:
+                    return reason
     return None
 
 

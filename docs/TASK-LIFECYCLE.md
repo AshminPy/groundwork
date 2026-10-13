@@ -75,6 +75,11 @@ Set `"GROUNDWORK_TASK_GATE": "off"` in the `env` of `~/.claude/settings.json`. E
 - **Not a sandbox.** Programs such as Python or Node are not inspected. A script Claude writes can call a cloud API that the shell check cannot see. MCP tools are left to Claude Code's own permission rules.
 - **Intake is keyword-based.** It can miss MATERIAL work or flag harmless work. Use `groundwork task intake` or `groundwork task cancel`.
 - **Shell checking is conservative.** What cannot be parsed asks. After a `cd`, a recursive delete is judged in every directory the command may be in, so `cd frontend && … && cd .. && rm -rf frontend/dist` asks. This includes `xargs … sh -c '…'`, `sh -c "$(…)"`, `eval "$(…)"` and a script written and run in the same command. A command name taken from a computed variable (`TF=$(command -v terraform); $TF apply`) is not resolved.
+- **Parsed the way bash parses.** `[[` is a test only where bash reads a command name, a carriage return is part of a
+  word (it never starts a comment), and credential directories count with or without a trailing slash (`~/.ssh`, all of
+  `~/.aws` and `~/.config/gcloud`). A `cd` into the Claude config directory is followed through earlier `cd`s and
+  assignments in the same command; a directory computed at run time (`cd "$(…)"`) counts as inside it only when
+  the command names that directory (2026-10-12 security scan, F7, F8, F11, F12).
 - **Reviews must run in the foreground** and end with a `REVIEW RESULT` block. Background reviews and background verification runs are not evidence.
 - **Evidence fingerprint.** Untracked files larger than 5 MB count by size and modification time, not content, so staging such a file changes the fingerprint once. A change inside a git submodule's working tree is not seen until the submodule's commit changes.
 - **Not verified:** how the `ask` decision behaves under `bypassPermissions` mode.
