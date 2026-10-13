@@ -2,7 +2,7 @@
 
 **Release version**: 2.4.0 (MINOR: new capabilities, no removed command, no changed default).
 
-**Status**: release candidate. The owner chose this scope (2.4.0 plus the macOS fix) on 2026-10-13; a local acceptance test runs before tagging.
+**Status**: released as `v2.4.0` on 2026-10-13, after a local acceptance test. The owner chose this scope (2.4.0 plus the macOS fix).
 
 **Release baseline**: `main` at `24080a6` (the merge of PR #40) plus PR #52 (`rc/milestone-1`), which merges the four pull requests below, plus the macOS fix from PR #57, applied on the `release/2.4.0` branch. Work merged to `main` after 2.4.0 was prepared (task tracking, PR #54; the README rewrite, PR #56; an OpenSpec task record, PR #55) is not part of 2.4.0.
 
@@ -75,4 +75,5 @@ No removed command, no changed flag, no changed default. The statusLine default 
 - **Version mechanism**: `groundwork update` refuses to install a release whose top `CHANGELOG.md` entry does not match its tag. The top entry is `## 2.4.0` (checked with the update code's own parser, which returns `(2, 4, 0)`), and `install.sh` writes `VERSION` from the same line.
 - **Date**: `CHANGELOG.md` carries 2026-10-13, the release day.
 - **Release review**: an independent review of `release/2.4.0` confirmed the content (only the PR #57 fix added, nothing from later work), the version mechanism and the tests, and found 2 MUST FIX in the macOS upgrade text: re-running `./setup.sh` does not reschedule routines, and `groundwork routines schedule` without `--hour`/`--minute` resets the time to 08:00. Both are fixed in the text. A fresh confirmation review approved the corrected text with 0 MUST FIX.
-- **Approval**: tagging and publishing wait for the owner, after the local acceptance test. The GitHub Release is published by the owner.
+- **Local acceptance test** (2026-10-13, Linux, throwaway home, real Claude sessions): upgrade from v2.3.0 with `./setup.sh --non-interactive` gave `VERSION` 2.4.0, the two new telemetry hook registrations and the kept profile, and `--verify` Overall PASS; `./setup.sh --rollback` restored 2.3.0 and a second upgrade worked. Per-tool telemetry recorded each call with no prompt text; the report's per-tool section rendered; the statusLine default matched 2.3.0 and the presets rendered; the snapshot named a worktree with unsaved work; `groundwork copilot explain` redacted two secrets in a dry run and answered a real call read-only. The macOS launchd fix was not run on a Mac.
+- **Approval**: the owner approved the release on 2026-10-13. The GitHub Release is published by the owner.
