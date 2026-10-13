@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fix: scheduled routines and the daily report ran on the wrong Python on macOS.** The launchd jobs started
+  `/usr/bin/env python3` with `/usr/bin` first on PATH, which on macOS is Apple's Python 3.9 (below the 3.10
+  minimum), so every scheduled run crashed at startup. The jobs now run the interpreter that scheduled them.
+  Existing jobs keep the old command until rescheduled: re-run `setup.sh`, or
+  `groundwork routines schedule <routine> <frequency>` and `groundwork report schedule <frequency>`.
+- **Tests pass on macOS.** Five test-only issues that never showed in Linux containers are fixed: tests that resolved
+  `python3` through a restricted PATH, a certificate fixture copied from the interpreter's trust store (empty on
+  python.org macOS Python), a test that assumed it runs as root, and two clock-dependent flakes.
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

@@ -103,7 +103,7 @@ def write_events(path: Path, rows: list, extra_lines=()) -> None:
 def run_cli(args, env_extra=None) -> subprocess.CompletedProcess:
     env = dict(os.environ, GROUNDWORK_NO_LAUNCHCTL="1")
     env.update(env_extra or {})
-    return subprocess.run(["python3", str(SCRIPT), *args], capture_output=True, text=True, timeout=120, env=env)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=120, env=env)
 
 
 def js_metrics(html_text: str, window, filters: dict) -> dict:
@@ -255,7 +255,7 @@ def test_report() -> None:
             r = run_cli(["schedule", freq], macos_env)
             plists = list(agents.glob("*.plist"))
             pl = plistlib.load(open(plists[0], "rb")) if plists else {}
-            check(f"schedule {freq}: exactly one plist, correct calendar, snapshot command", r.returncode == 0 and len(plists) == 1 and pl.get("StartCalendarInterval") == key and pl["ProgramArguments"][-2:] == ["generate", "--snapshot"] and pl["Label"] == "com.groundwork.report", r.stdout + r.stderr + json.dumps(pl))
+            check(f"schedule {freq}: exactly one plist, correct calendar, snapshot command", r.returncode == 0 and len(plists) == 1 and pl.get("StartCalendarInterval") == key and pl["ProgramArguments"][-2:] == ["generate", "--snapshot"] and pl["ProgramArguments"][0] == sys.executable and pl["Label"] == "com.groundwork.report", r.stdout + r.stderr + json.dumps(pl))
             check(f"schedule {freq}: config saved", json.loads((cfg / "groundwork" / "report.json").read_text())["schedule"] == freq)
         r = run_cli(["schedule", "weekly", "--hour", "6"], macos_env)
         pl = plistlib.load(open(next(agents.glob("*.plist")), "rb"))

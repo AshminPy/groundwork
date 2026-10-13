@@ -584,7 +584,9 @@ def schedule_routine(name: str, freq: str, hour: int = 8, minute: int = 0) -> di
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.environ["CLAUDE_CONFIG_DIR"]
     plist = {"Label": _label(name),
-             "ProgramArguments": ["/usr/bin/env", "python3", str(Path(__file__).resolve()), "run", name],
+             # The interpreter that scheduled the job, not `env python3`: launchd's PATH puts
+             # /usr/bin first, which on macOS is Apple's Python 3.9 (below the 3.10 minimum).
+             "ProgramArguments": [sys.executable, str(Path(__file__).resolve()), "run", name],
              "StartCalendarInterval": _calendar(freq, hour, minute), "RunAtLoad": False,
              "StandardOutPath": str(logs_dir / f"routine-{name}.log"),
              "StandardErrorPath": str(logs_dir / f"routine-{name}.err"),

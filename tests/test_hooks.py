@@ -70,8 +70,12 @@ def run_hook(hook: Path, payload: dict, env: dict | None = None) -> str:
 
 # Isolated from the developer's global/system git config (e.g. commit.gpgsign=true would
 # otherwise crash every fixture commit — found by independent review of 1.1.0).
+# Fixed, old commit dates: the snapshot's HEAD line uses git's relative date (%cr), and a fresh
+# commit's "9 seconds ago" turning into "10 seconds ago" mid-test changes the snapshot length
+# that exact-size cap tests compare against.
 GIT_ENV = {"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t.com",
            "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t.com",
+           "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z",
            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
            "HOME": os.environ.get("HOME", "/tmp"), "PATH": os.environ.get("PATH", "")}
 

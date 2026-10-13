@@ -232,6 +232,10 @@ def _setup_filtered_sysbin(dest: Path) -> Path:
     node/apt-get actually gets used instead of silently falling through to the real host's
     binaries (the same PATH-leak class independent review found in test_setup.py's Box)."""
     dest.mkdir(exist_ok=True)
+    # python3 pinned to the interpreter running the tests: mirroring /usr/bin first would pick
+    # macOS's Python 3.9 (below setup.sh's 3.10 floor) over a newer one in /usr/local/bin.
+    (dest / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (dest / "python3").chmod(0o755)
     for real_dir in ("/usr/bin", "/bin", "/usr/local/bin"):
         p = Path(real_dir)
         if not p.is_dir():
@@ -260,6 +264,10 @@ def test_setup_node_still_too_old_after_install() -> None:
         sysbin = _setup_filtered_sysbin(tmp / "sysbin")
         (bin_dir / "claude").write_text('#!/usr/bin/env bash\ncase "$1" in --version) echo "2.1.258 (Claude Code)";; plugin) echo "ecc@ecc";; *) exit 0;; esac\n')
         os.chmod(bin_dir / "claude", 0o755)
+        # Passwordless-sudo stub: as a non-root user (a developer machine, not a root CI container)
+        # setup.sh's `sudo -n true` check would otherwise reach the real sudo and stop early.
+        (bin_dir / "sudo").write_text('#!/usr/bin/env bash\n[ "$1" = -n ] && shift\nexec "$@"\n')
+        os.chmod(bin_dir / "sudo", 0o755)
         env = dict(os.environ, PATH=f"{bin_dir}:{sysbin}", HOME=str(tmp), CLAUDE_CONFIG_DIR=str(cfg), GROUNDWORK_OS="linux")
         common_args = ["bash", str(REPO_ROOT / "setup.sh"), "--non-interactive", "--install-prereqs",
                        "--no-agent-teams", "--schedule", "disabled"]
