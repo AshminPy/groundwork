@@ -18,6 +18,7 @@ Kill switch: GROUNDWORK_TASK_GATE=off in settings.json env.
 Not a sandbox (docs/TASK-LIFECYCLE.md): programs such as Python are not inspected; shell commands and scripts run
 directly are.
 """
+import fnmatch
 import json
 import os
 import re
@@ -83,7 +84,10 @@ DB_CLIENTS = {"psql", "mysql", "sqlplus", "mongosh", "mongo", "redis-cli", "cqls
 OPERATORS = ("&>>", "<<<", "<<-", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<", ";", "|", "&",
              "(", ")", "<", ">", "\n")
 OPERATOR_CHARS = "();<>|&\n"
-COMMENT_AFTER = " \t\r\n;&|()<>"  # a `#` that starts a word (at the start or after one of these) begins a comment
+# A `#` that starts a word (at the start or after one of these) begins a comment. Not after a carriage return: bash's
+# blanks are space and tab, so `ls\r# ;cmd` is the word `ls\r#` and then `cmd` (2026-10-12 security scan, F8). The
+# lexer still splits words at a carriage return: that can only add words to check, never hide a command.
+COMMENT_AFTER = " \t\n;&|()<>"
 # Quoted or escaped operator characters (and blanks inside ${…}) are literal text. They are encoded as private-use
 # characters before lexing and decoded in the argv, so `grep '||'`, `cut -d '|'` and `find … \;` keep them as
 # arguments and `rm '&&' -rf dir` is not split into `rm` and `-rf dir` (found by independent review).
@@ -256,6 +260,20 @@ def _scan_test(cmd: str, j: int) -> int | None:
     return None
 
 
+TEST_OPENERS = {"if", "then", "elif", "else", "while", "until", "do", "!", "{", "time"}
+
+
+def _command_position(prefix: str) -> bool:
+    """True when the next word of the prepared text `prefix` is where bash reads a command name: at the start, after
+    an operator or a newline, or after a reserved word that is itself in command position (`if [[`, `! [[`). Only
+    there is `[[` a test; as an argument (`echo [[ ; cmd ; echo ]]`) it is a plain word (security scan, F7)."""
+    text = prefix.rstrip(" \t")
+    if not text or text[-1] in ";&|(\n":
+        return True
+    word = re.search(r"\S+$", text)
+    return word.group(0) in TEST_OPENERS and _command_position(text[:word.start()])
+
+
 def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
     """Quote-aware pass before shlex, matching bash where it matters to the gate. Returns (text, here-doc bodies,
     command-substitution bodies); the substitutions are what bash would run (see substitutions()).
@@ -300,7 +318,7 @@ def _prepare_command(cmd: str) -> tuple[str, list[str], list[str]] | None:
             out.append(_encode(cmd[i:j]))  # arithmetic: `<<` is a shift, not a here-document
             i, boundary = j, False
         elif c == "[" and boundary and cmd.startswith("[[", i) and cmd[i + 2:i + 3] in (" ", "\t") and \
-                _scan_test(cmd, i + 3):
+                _command_position("".join(out)) and _scan_test(cmd, i + 3):
             j = _scan_test(cmd, i + 3)  # `[[ a && b ]]` is one test, not two commands (found by independent review)
             if not _expansions(cmd[i:j], subs):
                 return None
@@ -725,9 +743,11 @@ def segment_sensitive(argv: list[str], cwd: str, depth: int = 0, base: str | Non
     return None
 
 
+# Credential directories match with or without a trailing slash, and the whole of ~/.aws and ~/.config/gcloud counts:
+# `tar czf - ~/.ssh`, `cp -r ~/.ssh /tmp/k` and `grep -r . ~/.aws` name the directory (2026-10-12 security scan, F12).
 CREDENTIAL_PATH_RE = re.compile(
-    r"(?:^|/)(?:\.ssh/|\.aws/(?:credentials|config)|\.config/gcloud/|\.kube/config|\.netrc|\.docker/config\.json|"
-    r"\.npmrc|\.pypirc|\.git-credentials|\.gnupg/|\.vault-token)|(?:^|/)\.env(?:\.(?!example|sample|template)[\w.-]+)?$|"
+    r"(?:^|/)(?:\.ssh(?:/|$)|\.aws(?:/|$)|\.config/gcloud(?:/|$)|\.kube/config|\.netrc|\.docker/config\.json|"
+    r"\.npmrc|\.pypirc|\.git-credentials|\.gnupg(?:/|$)|\.vault-token)|(?:^|/)\.env(?:\.(?!example|sample|template)[\w.-]+)?$|"
     r"(?:^|/)id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?$")
 # Key and certificate files by extension: only for a path-like word (no spaces; a `.key` file needs a directory), so
 # `grep -rn "event.key"` or a commit message mentioning `item.key` is not credential access (found by review).
@@ -801,8 +821,10 @@ def _git_destructive(words: list[str], args: list[str]) -> str | None:
     """Git commands that discard history or uncommitted work; `git push` to a protected branch is the separate
     block_protected_push hook. `args` start at the subcommand."""
     sub = words[0] if words else ""
+    # -f or -d inside a short-flag cluster (`-uf`, `-fu`, `-ud`) forces or deletes too (security scan, F6)
     if sub == "push" and any(a in ("-f", "--force", "--force-with-lease", "--mirror", "--delete", "-d")
-                             or a.startswith(("--force", "+")) for a in args[1:]):
+                             or a.startswith(("--force", "+")) or re.match(r"^-[A-Za-z0-9]*[fd][A-Za-z0-9]*$", a)
+                             for a in args[1:]):
         return "a forced or deleting git push"
     if sub == "reset" and "--hard" in args:
         return "git reset --hard (discards uncommitted work)"
@@ -1169,7 +1191,7 @@ def check_command(cmd: str, cwd: str) -> None:
     label = embedded_sensitive(cmd, segs, cwd)
     if label:
         ask(f"{label}.")
-    if _touches_protected(segs, cmd):
+    if _touches_protected(segs, cmd, cwd):
         ask("this command touches Claude Code settings, Groundwork's hooks or the task ledger.")
 
 
@@ -1189,25 +1211,127 @@ def _task_cli(argv: list[str]) -> bool:
     return False
 
 
-def _touches_protected(segs: list[dict], cmd: str) -> bool:
+def _expand_literal(word: str, assigns: dict) -> str:
+    """`$NAME` / `${NAME}` replaced by a literal value assigned in the same command, then the environment and `~`."""
+    def value(m):
+        v = assigns.get(m.group(1) or m.group(2))
+        return v if v is not None else m.group(0)
+    word = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", value, word)
+    return os.path.expanduser(os.path.expandvars(word))
+
+
+def _wrapper_chdir(argv: list[str]) -> str | None:
+    """The directory `env -C DIR` / `env --chdir=DIR` (also `-iC DIR`) or `sudo -D DIR` runs its command in."""
+    for e, prog in enumerate(os.path.basename(a) for a in argv):
+        if prog not in ("env", "sudo"):
+            continue
+        letter = "C" if prog == "env" else "D"
+        for x in range(e + 1, len(argv)):
+            t = argv[x]
+            if not t.startswith("-") or t == "--":
+                break
+            if t == "--chdir" and x + 1 < len(argv):
+                return argv[x + 1]
+            if t.startswith("--chdir="):
+                return t.split("=", 1)[1]
+            if not t.startswith("--") and letter in t[1:]:
+                rest = t[t.index(letter, 1) + 1:]
+                return rest or (argv[x + 1] if x + 1 < len(argv) else None)
+    return None
+
+
+def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> bool:
     """A command that may change Claude Code settings, Groundwork's hooks or the task ledger: a segment that names
     one of them (in its words, redirect targets or here-document) and is not a plain reader or the task CLI. After
-    `cd` into one of them, every later segment counts as naming it."""
+    `cd` into one of them, every later segment counts as naming it. A `cd` is followed from the session's directory
+    through earlier `cd`s and literal assignments in the same command (`cd ~ && cd .claude`, `D=~/.claude; cd $D`;
+    2026-10-12 security scan, F11). Once a `cd` goes where the gate cannot compute (`cd "$X"`, `cd -`, a glob, or any
+    `cd` while CDPATH is set), the shell may be anywhere, so a `cd` whose target names the config directory
+    (`.claude`, also as a glob such as `.cl*`) counts as entering it (independent review: `cd "$(echo ~)" && cd
+    .claude` was missed). A directory the gate cannot compute also counts as inside when the command names the
+    config directory's full path or `~/.claude`. A relative word is resolved against every directory the command may
+    be in (`cd ~ && rm .claude/hooks/x`, a session started in the config directory, `env -C`), and `sh -c` / `eval`
+    strings are checked the same way (independent review)."""
     cdir = str(gt.claude_dir())
     markers = PROTECTED_TEXT + (cdir + "/settings", cdir + "/hooks", cdir + "/groundwork", "~/.claude/settings",
                                 "~/.claude/hooks", ".claude/settings")
+    config_name = os.path.basename(cdir.rstrip("/")) or ".claude"
+    protected = [os.path.join(cdir, "hooks"), os.path.join(cdir, "groundwork"), str(gt.tasks_root())]
+
+    def matches(name: str, part: str) -> bool:
+        # bash's `*` and `?` never match a leading dot (independent review: `cd packages/*` is not `.claude`)
+        return (part.startswith(".") or not name.startswith(".")) and fnmatch.fnmatchcase(name, part)
+
+    def names_config(word: str) -> bool:
+        if "$" in word or "`" in word:
+            return config_name in word  # `"$HOME/.claude"`, `"$(echo ~/.claude)"`
+        return any(matches(config_name, part) for part in word.split("/") if part)
+
+    def names_protected(word: str) -> bool:
+        # `.claude/hooks/x` after a cd the gate cannot follow (a project's own `.claude/commands` is not it)
+        parts = [p for p in word.split("/") if p]
+        return any(matches(config_name, p) and any(matches(n, q) for n in ("hooks", "groundwork", "settings.json",
+                                                                            "settings.local.json"))
+                   for p, q in zip(parts, parts[1:]))
+
+    def resolves_protected(word: str, where: list[str]) -> bool:
+        # the word, the path after `=` in `of=PATH` / `--target-directory=PATH`, or a value glued to a short option
+        # (`cp -t.claude/hooks x`, `tar -C.claude/hooks`; independent review)
+        letters = re.match(r"^-([A-Za-z]+)", word)
+        glued = [word[p:] for p in range(2, 2 + len(letters.group(1)))] if letters and len(word) > 2 else []
+        for w in [word] + ([word.split("=", 1)[1]] if "=" in word else []) + glued:
+            w = _expand_literal(w, assigns)
+            if not w or w.startswith("-") or "$" in w or "`" in w:
+                continue
+            for d in where:
+                p = os.path.normpath(os.path.join(d, w))
+                real = os.path.realpath(p)
+                # the config directory itself (`rm -rf .claude`, `mv .claude x`), or a protected path inside it
+                if real == os.path.realpath(cdir) or real in config_paths() or any(under(p, Path(b)) for b in protected):
+                    return True
+        return False
+
     bodies = heredoc_bodies(cmd)
-    inside = False
+    assigns = _literal_assignments(segs)
+    dirs, inside = [cwd], False
+    unknown = bool(os.environ.get("CDPATH")) or "CDPATH" in cmd  # `cd name` may then go anywhere CDPATH lists
     for s in segs:
         argv = unwrap_run(s["argv"]) or s["argv"]
         text = os.path.expandvars(" ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)]))
         named = inside or any(m in text for m in markers)
         if argv[:1] in (["cd"], ["pushd"]):
-            target = os.path.expanduser(os.path.expandvars(_words(argv[1:])[0])) if _words(argv[1:]) else ""
-            inside = inside or named or (bool(target) and under(target, Path(cdir)))
+            words = _words(argv[1:])
+            raw = words[0] if words else "~"
+            target = _expand_literal(raw, assigns) if words else os.path.expanduser("~")
+            computed = any(ch in target for ch in "$`*?[") or target == "-"
+            if not computed:
+                new = [os.path.normpath(os.path.join(d, target)) for d in dirs]
+                dirs = list(dict.fromkeys(dirs + new))[-32:]
+                inside = inside or any(under(p, Path(cdir)) for p in new)
+            if computed or unknown:
+                inside = inside or names_config(raw) or names_config(target)
+            if computed:
+                # the full config path or `~/.claude`, not just its name: a project's own `.claude/` is not it
+                inside = inside or cdir in cmd or "~/.claude" in cmd
+                unknown = True
+            inside = inside or named
             continue
-        if named and (s["writes"] or ((os.path.basename(argv[0]) if argv else "") not in PROTECTED_READERS
-                                      and not _task_cli(argv))):
+        chdir = _wrapper_chdir(s["argv"])
+        where = [os.path.normpath(os.path.join(d, os.path.expanduser(chdir))) for d in dirs] if chdir else dirs
+        words = argv[1:] + s["targets"]
+        named = (named or any(resolves_protected(w, where) for w in words)
+                 or (unknown and any(names_protected(w) for w in words)))
+        name = os.path.basename(argv[0]) if argv else ""
+        if depth < 3 and (name in SHELLS or name == "eval"):
+            inner = " ".join(argv[1:]) if name == "eval" else _shell_command_arg(argv[1:])
+            if inner:
+                inner_segs = split_segments(inner)
+                if inner_segs is None:
+                    if config_name in inner or any(m in inner for m in markers):
+                        return True
+                elif any(_touches_protected(inner_segs, inner, d, depth + 1) for d in where[:8]):
+                    return True
+        if named and (s["writes"] or (name not in PROTECTED_READERS and not _task_cli(argv))):
             return True
     return False
 

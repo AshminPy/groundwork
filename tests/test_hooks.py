@@ -11,6 +11,7 @@ see docs/VALIDATION.md for how they connect to real, live tests.
 AssertionError when any check failed, so pytest reports a real failure (an earlier
 version only printed FAIL lines and pytest still showed "passed").
 """
+import importlib.util
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -446,15 +448,266 @@ def test_push_guard() -> None:
             ("git push -o ci.skip origin feature/x", False),     # option value is not a refspec
             ('sh -c "git push origin feature/x"', False),        # nested shell, safe target
             ("git push origin feature/x feature/y", False),      # multiple safe refspecs
+            # independent review (M1): `$(git branch --show-current)` inside a destination is the current branch
+            ('git push origin "refs/heads/$(git branch --show-current)"', True),
+            ('git push origin "HEAD:refs/heads/$(git branch --show-current)"', True),
+            ('git push origin "main$(git branch --show-current)"', True),  # computed: empty in a detached HEAD
+            # a branch created earlier in the same command is the one pushed
+            ("git checkout -b feature/new && git push -u origin HEAD", False),
+            ("git switch -c fix/y && git push -u origin HEAD", False),
+            ("git checkout -b feature/new && git add -A && git commit -qm x && git push -u origin HEAD", False),
+            # ... but only when the push runs only if the branch was created (third confirmation review)
+            ("git checkout -b feature/y; git push origin HEAD", True),
+            ("git checkout -b feature/y || git push origin HEAD", True),
+            ("git switch -c feature/y; git push origin HEAD", True),
+            ("false && git checkout -b feature/q; git push origin HEAD", True),
+            ('if [ -n "$NOPE" ]; then git checkout -b feature/q; fi; git push origin HEAD', True),
+            ("true || git checkout -b feature/q && git push origin HEAD", True),
+            ("git branch feature/y; ! git checkout -q -b feature/y && git push origin HEAD", True),  # fourth review
         ]
         for cmd, expect_denied in cases:
             out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})
             denied = '"permissionDecision": "deny"' in out
             check(f"{cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
 
+        # 2026-10-12 Claude Security scan (M1 release blockers F4-F6, and F10): every form below hid a push from the
+        # 2.4.0 guard. The session sits in a worktree on feature/x, so only the command itself can reach main.
+        feat = Path(tmpdir) / "feat"
+        git(repo, "worktree", "add", "-q", "-b", "feature/x", str(feat))
+        # for the subshell-cd cases: sub2 is a nested repository on main, sub1/sub2 a plain directory on feature/x
+        (feat / "sub1" / "sub2").mkdir(parents=True)
+        git(feat, "init", "-q", "-b", "main", "sub2")
+        git(feat / "sub2", "commit", "-q", "--allow-empty", "-m", "init")
+        security_cases = [
+            # F4: separators that touch a word, newlines, subshells, groups, compound commands, substitutions
+            ("git status\ngit push origin main", True),
+            ("cd repo;git push origin main", True),
+            ("true&&git push origin main", True),
+            ("(git push origin main)", True),
+            ("{ git push origin main; }", True),
+            ("if true; then git push origin main; fi", True),
+            ("echo `git push origin main`", True),
+            ("echo $(git push origin main)", True),
+            ("echo a#b; git push origin main", True),            # `#` inside a word is not a comment in bash
+            ("ls\r# ;git push origin main", True),               # a carriage return is part of a word in bash
+            ("sudo -u root git push origin main", True),         # wrapper options
+            ("timeout 30 git push origin main", True),
+            (">log git push origin main", True),                 # redirection before the command
+            ("2>/dev/null git push origin main", True),
+            ("cat <(git push origin main)", True),               # process substitution
+            ("git push origin main # it's fine", True),          # comment with a quote
+            ("git push origin feature/x 'oops", True),           # unbalanced quote: cannot be parsed, looks like a push
+            # F5: -c inside an option cluster
+            ("bash -lc 'git push origin main'", True),
+            ("sh -ec 'git push origin main'", True),
+            ("bash -l -c 'git push origin main'", True),
+            # F6: force inside a short-flag cluster
+            ("git push -uf origin feature/x", True),
+            ("git push -fu origin feature/x", True),
+            # F10: the branch is checked where the push runs
+            (f"git -C {repo} push", True),
+            (f"cd {repo} && git push origin HEAD", True),
+            ('cd "$X" && git push', True),                       # directory cannot be determined
+            # independent review of the fix (M1): other ways to pick the repository or the destination
+            (f"git --git-dir={repo}/.git push", True),
+            (f"git --work-tree {repo} --git-dir {repo}/.git push origin HEAD", True),
+            (f"GIT_DIR={repo}/.git git push", True),
+            (f"export GIT_DIR={repo}/.git; git push", True),
+            (f"builtin cd {repo} && git push", True),
+            (f"command cd {repo} && git push origin HEAD", True),
+            (f'eval "cd {repo}"; git push', True),               # a cd inside eval counts for later commands
+            ("git -c push.default=matching push origin", True),  # config picks the destination
+            ("git -c remote.origin.push=refs/heads/main push origin", True),
+            ("git push origin \\\nmain", True),                  # backslash-newline continuation
+            ("git pu\\\nsh origin main", True),
+            ("git push origin $'\\x6dain'", True),               # ANSI-C quoting is decoded
+            ("git push --signed origin main", True),             # --signed does not take the next word
+            # confirmation review (M1): bash ends `$'…'` text at a NUL, and its escapes differ from Python's
+            (f"cd $'{repo}\\x00junk' && git push", True),
+            (f"cd $'{repo}\\c@zz' && git push", True),
+            ("git push origin $'ma\\x00junk'in", True),
+            ("git push origin $'\\u6d'ain", True),
+            # a directory whose current branch cannot be read is unknown (a fresh clone is on main)
+            (f"git clone -q {repo} {tmpdir}/c && cd {tmpdir}/c && git push", True),
+            # confirmation review (M1): an argument the shell or git computes fails closed
+            ("B=main; git push origin $B", True),
+            ('git push -u origin "$BRANCH"', True),
+            ("git push origin HEAD:$(echo main)", True),
+            ("git push origin HEAD:`echo main`", True),
+            ("git push origin {main,}", True),                   # brace expansion
+            ("git push origin ma?n", True),                      # glob
+            ('A="origin main"; git push $A', True),              # word splitting
+            ("git push -{f,} origin feature/x", True),           # a computed flag
+            ("C=push; git $C origin main", True),                # a computed subcommand
+            ("git {push,} origin main", True),
+            ("G=git; $G push origin main", True),                # a computed command name
+            ("$(echo git) push origin main", True),
+            ("`echo git` push origin main", True),
+            (f"git -C $(echo {repo})/. push", True),
+            ("echo main | xargs git push origin", True),         # xargs appends the destination
+            ("git -c alias.p=push p origin main", True),         # git aliases defined on the command line
+            ("git -c alias.p='push --force' p origin feature/x", True),
+            ("git -c alias.p='!git push origin main' p", True),
+            ("git -c alias.a=b -c alias.b=push a origin main", True),
+            ('git -c "$X" push', True),
+            ("git --config-env=push.default=X push", True),
+            ("GIT_CONFIG_PARAMETERS=\"'push.default=matching'\" git push", True),
+            ("git push origin +feature/x", True),                # `+refspec` force-updates
+            ("git push origin :", True),                         # matching branches, main included
+            ("git push origin HEAD:heads/main", True),           # git reads heads/main as main
+            (f"env -C {repo} git push", True),
+            (f"env --chdir={repo} git push origin HEAD", True),
+            ("sudo -u $U git push origin feature/x", True),      # word splitting can put another push first
+            ("git -C $D push origin feature/x", True),           # ... also inside git's own options
+            # second confirmation review (M1)
+            ("git -c alias.push=status push origin main", True),  # git ignores an alias that shadows push
+            ("git -c alias.push=log push origin HEAD:main", True),
+            ("git push origin main $'\\c\u00df'", True),          # was a parser crash that allowed the push
+            ("G=git; timeout 5 $G push origin main", True),      # a computed git behind a wrapper
+            ("timeout 5 $(echo git) push origin main", True),
+            ("nohup `echo git` push origin main", True),
+            ('result="$(git push origin main 2>&1)"', True),     # substitutions inside double quotes run
+            ('echo "$(git push origin main)"', True),
+            ('echo "`git push origin main`"', True),
+            ('echo "${x:-$(git push origin main)}"', True),
+            ('echo "$(echo $(git push origin main))"', True),
+            ("cat <<EOF\n$(git push origin main)\nEOF", True),   # ... and in an unquoted here-document
+            ("bash <<'EOF'\ngit push origin main\nEOF", True),   # a here-document fed to a shell is commands
+            ("git switch main && git merge --ff-only feature/y && git push origin HEAD", True),  # branch switched
+            ("git checkout main && git push", True),
+            ("git branch -m main && git push origin HEAD", True),
+            ("git checkout - && git push", True),
+            ("git init -q -b main && git push -u origin HEAD", True),
+            ("bash -c -- 'git push origin main'", True),         # `-c` takes the first operand as the command
+            ("sh -c -e 'git push origin main'", True),
+            (f"command -p cd {repo} && git push", True),
+            (f"env -iC {repo} git push", True),
+            (f"sudo -D {repo} git push", True),
+            ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main", True),
+            ("echo $(date) push", True),                         # fail closed: a computed word before `push`
+            # third confirmation review (M1)
+            ("echo $[1<<n]\ngit push origin main", True),        # a `<<` that is not a here-document
+            ("a[1<<n]=3\ngit push origin main", True),
+            ("for((i=0;i<1<<n;i++)); do :; done\ngit push origin main", True),
+            ("a=([1<<n]=x)\ngit push origin main", True),
+            ("cat <<EOF\nno terminator\ngit push origin main", True),  # no terminator line: read as commands
+            ('echo "$(git switch release 2>&1)"; git push origin HEAD', True),  # a switch inside a substitution
+            ("cat <<EOF\n$(git switch release)\nEOF\ngit push origin HEAD", True),
+            ("git checkout -b git && $(git branch --show-current) push origin main", True),
+            ('git branch push && git switch push && git "$(git branch --show-current)" origin main', True),
+            ("cat <<'EOF' | sh\ngit push origin main\nEOF", True),  # a here-document piped to a shell
+            ("echo $(true)#x; git push origin main", True),      # `#` after a substitution is not a comment
+            ("cat <(true)#x; git push origin main", True),
+            ("[[ $x =~ ^(a|#b) ]]; git push origin main", True),  # ... nor inside `[[ … ]]`
+            ("[[ a =~ b|# ]]; git push origin main", True),
+            ('echo "$(case x in x) git push origin main;; esac)"', True),  # what a case pattern `)` hides
+            ('echo "$(true # )\ngit push origin main)"', True),
+            ('echo "$(echo ${x:-)} && git push origin main)"', True),
+            ('echo "$(# c \\\ngit push origin main)"', True),
+            ("CDPATH=../repo cd docs && git push origin HEAD", True),
+            (f"time -p cd {repo} && git push origin HEAD", True),
+            (f"find {repo} -maxdepth 0 -execdir git push origin HEAD \\;", True),
+            ("C='git push origin main'; $C", True),              # a variable that holds the push
+            ("C='git push origin main'; bash -c \"$C\"", True),
+            ("C='git push origin main'; eval \"$C\"", True),
+            ("P='git push origin'; $P main", True),
+            ("G=git; P=push; $G $P origin main", True),
+            ("shopt -s expand_aliases\nalias gp='git push origin main'\ngp", True),
+            ("rbash -c 'git push origin main'", True),
+            ("((" * 10000 + "\ngit push origin main", True),    # a long command is checked, not timed out
+            # fourth confirmation review (M1)
+            ("git push origin main>()", True),                   # an empty process substitution is a redirection
+            ("git push origin main<()", True),
+            (">()git push origin main", True),
+            ("<( )git push origin main", True),
+            ("cat <<EOF\n'$(git push origin main)'", True),      # unquoted body: its substitutions run
+            ("cat <<EOF\n'`git push origin main`'", True),
+            ("bash <<EOF\necho '$(git push origin main)'\nEOF", True),
+            ("cat <<EOF | sh\necho '$(git push origin main)'\nEOF", True),
+            ("bash<<EOF\ngit push origin main\nEOF", True),      # other ways a shell reads the here-document
+            (">/dev/null bash <<EOF\ngit push origin main\nEOF", True),
+            ("<<EOF bash\ngit push origin main\nEOF", True),
+            ("timeout 5s bash <<EOF\ngit push origin main\nEOF", True),
+            ("env -u FOO bash <<EOF\ngit push origin main\nEOF", True),
+            ('"bash" <<EOF\ngit push origin main\nEOF', True),
+            ('cat <<EOF | "bash"\ngit push origin main\nEOF', True),
+            ("echo $(( '$(git push origin main)' ))", True),     # arithmetic reads quotes as text
+            ("echo $[ '$(git push origin main)' ]", True),
+            ("(( '$(git push origin main)' ))", True),
+            ("a['$(git push origin main)']=1", True),
+            ("gi\"\"t pu\"\"sh origin main\necho '", True),      # cannot be parsed and names push
+            ("g\\it p\\ush origin main\necho '", True),
+            ("[x " * 5000 + "\ngit push origin feature/x", True),  # too long to check in time
+            ("(cd sub1); cd sub2 && git push origin HEAD", True),  # a subshell's cd does not move the shell
+            ("x=$(cd sub1 && true); cd sub2 && git push origin HEAD", True),
+            ("/usr/lib/git-core/git-push origin main", True),    # other entry points to the same push
+            ("git send-pack origin main", True),
+            ("git subtree push --prefix=x origin main", True),
+            # existing behaviour kept: ordinary work is not denied
+            ("git commit -m $'line1\\nline2' && git push origin feature/x", False),
+            ("git push \\\n  origin feature/x", False),
+            ("GIT_DIR=.git git push origin feature/x", False),   # explicit branch needs no repository lookup
+            ("git --git-dir=.git log -3", False),
+            ("git push", False),                                 # feature/x
+            ("git push -u origin feature/x", False),
+            ("git push -q origin feature/x", False),
+            ("bash -lc 'git push origin feature/x'", False),
+            ('cd "$X" && git push origin feature/x', False),     # explicit branch needs no directory
+            (f"cd {repo} && git push origin feature/y", False),
+            ("ls # git push origin main", False),                # a real comment
+            ('git commit -m "fix; push to main later"', False),  # quoted text
+            ("git log --oneline | head", False),
+            ('git push -u origin "$(git branch --show-current)"', False),  # the current branch, like HEAD
+            ("git push -u origin $(git branch --show-current)", False),
+            ("git push origin `git rev-parse --abbrev-ref HEAD`", False),
+            ("git -c push.autoSetupRemote=true push", False),    # a key that does not pick the destination
+            ("git -c alias.st=status st", False),
+            ('git commit -m "$(cat msg)" && git push origin feature/x', False),
+            ("git stash push -m wip", False),
+            ("git commit -F- <<'EOF'\npush guard: fix\nEOF", False),  # a here-document line starting with push
+            (f"env -C {feat} git push", False),
+            ('GIT_SSH_COMMAND="ssh -i $KEY" git push origin feature/x', False),  # an assignment is not split
+            # a here-document is data: an apostrophe in it no longer makes the push unparseable
+            ("cat > n.md <<'EOF'\nIt's a note\nEOF\ngit add . && git commit -m x && git push origin feature/x", False),
+            ("git commit -F - <<'EOF'\nfix: don't crash\nEOF\ngit push origin feature/x", False),
+            ("git commit -m \"$(cat <<'EOF'\nIt's fine\nEOF\n)\" && git push origin feature/x", False),
+            ("cat <<'EOF'\ngit push origin main\nEOF", False),   # a quoted here-document is text
+            ("git checkout -- notes.md && git push", False),     # restoring a file keeps the branch
+            ("git push -o 'merge_request.title=x [WIP]' origin feature/x", False),  # a push option value is text
+            # a `.` or a shell name as an argument does not make a here-document commands (third review)
+            ("git add . && git commit -F - <<'EOF'\nnote: git push origin main is blocked\nEOF", False),
+            ("git add . && git commit -F - <<'EOF'\nfix: don't let git push to main\nEOF", False),
+            ("cd . && cat > docs.md <<'EOF'\ngit push origin main\nEOF", False),
+            ("echo $((1 << 2)) && git push origin feature/x", False),
+            ("diff <(git log -1) <(git log -2); git push origin feature/x", False),
+            ("docker run -i img bash <<EOF\necho hi\nEOF\ngit push origin feature/x", False),
+        ]
+        for cmd, expect_denied in security_cases:
+            out = run_hook(PUSH_HOOK, {"tool_name": "Bash", "cwd": str(feat), "tool_input": {"command": cmd}})
+            denied = '"permissionDecision": "deny"' in out
+            check(f"[security] {cmd!r} -> {'deny' if expect_denied else 'allow'}", denied == expect_denied, out)
+
         # Hook stdin is valid JSON but not an object -> fail open, never a crash. Found by the
         # Phase 1/2/4 re-review: this hook had the identical unguarded `data.get(...)` bug that
         # require_material_review.py was fixed for in the same round — same fix here.
+        # A check that outlasts its time budget stops instead of running into the hook timeout, and the hook then
+        # denies a command that mentions push (third confirmation review; a timed-out hook lets the command run).
+        spec = importlib.util.spec_from_file_location("push_guard_budget", PUSH_HOOK)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        guard.TIME_BUDGET = -1
+        try:
+            guard.inspect_command("git push origin feature/x", str(feat))
+            stopped = False
+        except guard._OutOfTime:
+            stopped = True
+        check("a check past its time budget stops (and main() then denies a push)", stopped)
+        # A command or tool_input of the wrong type is checked as text, never a crash (third confirmation review).
+        for bad in ({"command": ["git push origin main"]}, "git push origin main"):
+            result = subprocess.run(["python3", str(PUSH_HOOK)], input=json.dumps(
+                {"tool_name": "Bash", "cwd": str(feat), "tool_input": bad}), capture_output=True, text=True, timeout=15)
+            check(f"tool_input {bad!r} -> no crash", result.returncode == 0 and result.stderr == "",
+                  f"exit={result.returncode} stderr={result.stderr!r}")
         for bad_stdin in ("[1,2,3]", '"a string"', "null", "42", "true"):
             result = subprocess.run(["python3", str(PUSH_HOOK)], input=bad_stdin,
                                      capture_output=True, text=True, timeout=15)
@@ -601,6 +854,18 @@ def test_session_snapshot() -> None:
         text = snapshot_text(out)
         check("empty git repo -> no crash, 'no commits yet'", "no commits yet" in text and "no upstream" in text, text)
         check("snapshot carries the harness line (version + profile)", re.search(r"^harness: Groundwork .+; profile: .+$", text, re.M) is not None, text[:400])
+
+        # 2026-10-12 security scan, F9: a repository's tasks.md full of blank lines cannot stall SessionStart. The
+        # old `^\s*-\s*\[` pattern took quadratic time (about 2.7 s at 40,000 lines, past the 10 s hook timeout at a
+        # few hundred KB); the checkbox count must still be right.
+        slow = make_repo(tmp, "slow-tasks")
+        (slow / "openspec" / "changes" / "big").mkdir(parents=True)
+        (slow / "openspec" / "changes" / "big" / "tasks.md").write_text("- [x] one\n" + "\n" * 400_000 + "- [ ] two\n")
+        started = time.monotonic()
+        text = snapshot_text(run_hook(SNAPSHOT_HOOK, {"cwd": str(slow)}))
+        elapsed = time.monotonic() - started
+        check("F9: 400,000 blank lines in tasks.md -> snapshot in under 5 s with the right count",
+              elapsed < 5 and "big: 1/2 tasks" in text, f"{elapsed:.1f}s\n{text}")
     finish()
 
 
@@ -1303,6 +1568,26 @@ def test_settings_merge() -> None:
               gate.get("PreToolUse", {}).get("matcher") == "" and gate.get("PostToolUse", {}).get("matcher") == ""
               and gate.get("PostToolUseFailure", {}).get("matcher") == "Bash"
               and "matcher" not in gate.get("UserPromptSubmit", {"matcher": 1}), json.dumps(gate))
+
+        # 2026-10-12 security scan, F13 (M1 release blocker): merge and unmerge never widen settings.json's mode
+        private = tmp / "private.json"
+        private.write_text(json.dumps({"env": {"API_TOKEN": "synthetic-value"}}))
+        os.chmod(private, 0o600)
+        run_script(MERGE, args=[str(private)])
+        after_merge = private.stat().st_mode & 0o777
+        run_script(UNMERGE, args=[str(private)])
+        after_unmerge = private.stat().st_mode & 0o777
+        check("F13: an owner-only settings.json stays 0600 through merge and unmerge, content kept",
+              after_merge == 0o600 and after_unmerge == 0o600 and load(private)["env"]["API_TOKEN"] == "synthetic-value",
+              f"after merge {oct(after_merge)}, after unmerge {oct(after_unmerge)}")
+        shared = tmp / "shared.json"
+        shared.write_text("{}")
+        os.chmod(shared, 0o640)
+        (tmp / "shared.json.groundwork.tmp").write_text("stale temp file left by a crash")
+        os.chmod(tmp / "shared.json.groundwork.tmp", 0o666)
+        run_script(MERGE, args=[str(shared)])
+        check("F13: the user's own mode is kept exactly (0640 stays 0640), even over a stale world-writable temp file",
+              shared.stat().st_mode & 0o777 == 0o640 and "hooks" in load(shared), oct(shared.stat().st_mode & 0o777))
 
         # an older install's owner-command entry is removed on merge (and on unmerge), other entries kept
         old_install = tmp / "old_install.json"

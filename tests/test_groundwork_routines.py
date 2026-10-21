@@ -161,6 +161,83 @@ def test_capabilities_for_never_grants_beyond_configured_access() -> None:
     finish()
 
 
+def test_routine_grants_security_scan() -> None:
+    """2026-10-12 Claude Security scan, F1/F2 (M1 release blockers) and F3: unattended routines get read-only git
+    subcommands, never `Bash(git *)`; `news` gets web tools only; `--output` is denied; every prompt marks what the
+    routine reads as untrusted."""
+    print("groundwork_routines.py — security scan F1-F3: read-only git, web-only news, untrusted-input note")
+    mod = load_module()
+    read_subcommands = ("log", "show", "diff", "status", "branch --list", "branch --show-current", "branch -a",
+                        "branch -r", "branch -vv", "branch -a -vv", "rev-parse", "ls-files", "worktree list",
+                        "for-each-ref", "stash list")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfgdir = Path(tmpdir) / "cfg"
+        init_config(cfgdir)
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        try:
+            cfg = mod.gcfg.load_config(cfgdir / "groundwork" / "config.json")
+            git_rules = [t for t in mod.BASE_REPO_READ if t.startswith("Bash(git")]
+            check("F1: the base grant has no `Bash(git *)`, and every git rule names a read-only subcommand",
+                  "Bash(git *)" not in mod.BASE_REPO_READ and git_rules and all(
+                      any(r == f"Bash(git {s})" or r.startswith(f"Bash(git {s} ") for s in read_subcommands)
+                      for r in git_rules), git_rules)
+            for name in mod.ROUTINES:
+                tools, blocked = mod._capabilities_for(name, cfg)
+                bad = [t for t in tools if t.startswith("Bash(git") and t not in mod.GIT_READ_TOOLS]
+                check(f"F1: {name} gets no git rule beyond the read-only set", not bad, tools)
+            tools, _ = mod._capabilities_for("news", cfg)
+            check("F2/F3: news gets WebSearch and WebFetch only (no Bash, Read, Grep or Glob)",
+                  tools == ["WebSearch", "WebFetch"], tools)
+            cmd, blocked = mod.build_command("doc_drift", False, str(REPO_ROOT), "sonnet", "")
+            denied = cmd[cmd.index("--disallowedTools") + 1] if cmd and "--disallowedTools" in cmd else ""
+            check("F1: `git … --output=<file>` is denied in the routine command", "Bash(git * --output*)" in denied, cmd)
+            check("F1-F3: the prompt tells the model that what it reads is untrusted data",
+                  bool(cmd) and cmd[2].endswith(mod.UNTRUSTED_INPUT_NOTE), cmd and cmd[2][-300:])
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+    finish()
+
+
+def test_schedule_cli_records_the_time_for_list() -> None:
+    """M1 (roadmap task 4.3): `groundwork routines schedule … --hour H --minute M` used to write the launchd job but not
+    config.json, so `routines list` kept showing the old time. The 2.4.0 macOS upgrade note relies on this command."""
+    print("groundwork_routines.py schedule — the applied time is what `list` shows")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        cfgdir = tmp / "cfg"
+        init_config(cfgdir)
+        cfg_file = cfgdir / "groundwork" / "config.json"
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfgdir), "GROUNDWORK_OS": "darwin", "GROUNDWORK_NO_LAUNCHCTL": "1",
+               "GROUNDWORK_LAUNCH_AGENTS_DIR": str(tmp / "LaunchAgents")}
+
+        def cli(*args, extra=None):
+            return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=30,
+                                  env={**env, **(extra or {})})
+
+        r = cli("schedule", "news", "daily", "--hour", "17", "--minute", "30")
+        saved = json.loads(cfg_file.read_text())["routines"]["news"]["schedule"]
+        news_line = next((ln for ln in cli("list").stdout.splitlines() if ln.strip().startswith("news")), "")
+        check("macOS: schedule saves daily 17:30 and `list` shows it",
+              r.returncode == 0 and saved == {"frequency": "daily", "time": "17:30"} and "daily 17:30" in news_line,
+              f"{r.stdout}{r.stderr}\n{saved}\n{news_line}")
+        before = cfg_file.read_text()
+        r = cli("schedule", "news", "weekly", "--hour", "6", extra={"GROUNDWORK_OS": "linux"})
+        check("elsewhere: nothing is scheduled, so config.json is not changed", r.returncode == 0 and cfg_file.read_text() == before,
+              r.stdout)
+        r = cli("schedule", "news", "daily", "--hour", "24")
+        check("an hour outside 0-23 is refused before anything is written",
+              r.returncode == 2 and cfg_file.read_text() == before, f"{r.returncode} {r.stderr}")
+        # independent review: an unreadable config.json must never be replaced by the defaults
+        corrupt = before.rstrip().rstrip("}") + ', "jira": {"site": "example.atlassian.net"},}\n'
+        cfg_file.write_text(corrupt)
+        plist = tmp / "LaunchAgents" / "com.groundwork.routine.doc_drift.plist"
+        r = cli("schedule", "doc_drift", "weekly", "--hour", "9", "--minute", "5")
+        check("a config.json that does not parse: refused (exit 1), file untouched, nothing scheduled",
+              r.returncode == 1 and cfg_file.read_text() == corrupt and not plist.exists() and "could not be read" in r.stderr,
+              f"{r.returncode} {r.stderr}")
+    finish()
+
+
 def test_capabilities_for_configured_jira_and_github() -> None:
     print("groundwork_routines.py — _capabilities_for(): configured access grants exactly that mechanism's tools")
     mod = load_module()
@@ -863,6 +940,7 @@ def test_readiness_visible_in_list_and_doctor_output() -> None:
 
 if __name__ == "__main__":
     for fn in (test_module_level_registry_and_result_parsing, test_capabilities_for_never_grants_beyond_configured_access,
+               test_routine_grants_security_scan, test_schedule_cli_records_the_time_for_list,
                test_capabilities_for_configured_jira_and_github, test_github_mcp_tools_are_real_and_read_only,
                test_work_digest_cross_references_jira_and_github_access,
                test_non_mutating_routines_never_inherit_jiras_write_capable_wildcard,
