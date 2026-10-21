@@ -123,6 +123,28 @@ Being honest about this distinction is the whole point of Groundwork — a rule 
 | `groundwork copilot` never runs anything and reads only the invoking terminal | **Enforced by the tool's own code and flags, verified on one Claude Code version** — the pane is taken from the process's own `$TMUX_PANE` and checked against its controlling tty and process ancestry; the model call uses `--safe-mode --tools ""` (checked against a real project with a hook and an MCP server) and the prompt has its `@` file mentions neutralised (checked with a canary file against the real CLI; both checks are on one Claude Code version, and another version may expand other syntaxes: RUNTIME VALIDATION REQUIRED); the tool never executes a suggestion. **Advisory**: best-effort redaction, and the model's answer itself (it can be wrong or suggest a harmful command) |
 | Completion status block format and hard rules | Advisory |
 
+### Push guard: residual limits and the server-side boundary (M1, owner decision)
+
+`block_protected_push.py` is defense-in-depth, not the authoritative branch boundary. It reads command text, so a
+push the text does not show is outside what it can stop. These limits are accepted and documented (owner decision
+on PR #61, under roadmap design D2), not open defects:
+
+- a push run by another program (`python -c`, a script file, `env -S`) or fed to a shell on stdin (`echo … | bash`,
+  `bash <<< …`, `source <(…)`);
+- a command assembled at run time and run through a variable (`read C; $C`, `C=(git push); "${C[@]}"`,
+  `set -- git push; "$@"`, names built by concatenation or `printf -v`);
+- deliberately obfuscated shell syntax: `case` patterns that hide text outside double quotes, and some bracket and
+  `((` spellings;
+- a destination or alias set in a git config file, pushes whose run order differs from their text order, and
+  non-exact branch names.
+
+Where it cannot check a command that mentions push (unparseable, over 10 KB, or over its 20-second budget), it denies.
+
+The authoritative boundary for `main` on GitHub is the repository's `protect-main` ruleset: pull requests required,
+deletion and non-fast-forward updates blocked. That ruleset currently requires **zero approving reviews and no status
+checks**, so GitHub does not enforce CI or independent review; both stay owner-run gates (the owner approves each
+merge). Claude Code's permission prompt remains the backstop on the local machine.
+
 ## `require_material_review.py` — how the gate actually works
 
 On every `Stop` event:

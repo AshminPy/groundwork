@@ -50,7 +50,7 @@ is not a push (`git $c` in a loop), and so is a computed word before the word `p
 (`echo $(date) push`). Quoted text such as `echo "git push origin main"` is correctly NOT
 treated as a push, but unquoted text (`echo git push origin main`) is denied. Because a
 program can push without any of this text, the guard stops mistakes rather than a determined
-adversary: branch protection on the server is the control for that. Every push still goes
+adversary: the server-side ruleset on main is the control for that (docs/ARCHITECTURE.md). Every push still goes
 through Claude Code's normal Bash permission model, which is the backstop for anything this
 parser cannot see.
 

@@ -32,6 +32,8 @@
   - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`
     gets web tools only, and every routine prompt marks what it reads as untrusted data.
   - F9: the checkbox pattern used on `tasks.md` is linear, so a repository's `tasks.md` cannot stall session start.
+  - Accepted limits of the local push guard (deliberately obfuscated or run-time-assembled pushes) are documented
+    in docs/ARCHITECTURE.md; GitHub's `protect-main` ruleset is the authoritative boundary.
   - Deferred with a justification: F14 (`jira_eod` read/write boundary; see docs/ROUTINES.md).
 - **Fix: `groundwork routines schedule … --hour H --minute M` now records the time**, so `groundwork routines list`
   shows the time the job runs. An hour or minute out of range is refused, and so is a `config.json` that cannot be
