@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "note": "Initial preferences from the owner's brief, not measured optima. Model names are Claude Code aliases.",
+  "models": ["haiku", "sonnet", "opus"],
+  "efforts": ["low", "medium", "high", "xhigh", "max"],
+  "roles": {
+    "classifier":        {"model": "haiku",  "effort": "low",    "reason": "ambiguous classification is short, structured work"},
+    "answer":            {"model": "sonnet", "effort": "medium", "reason": "source-backed answers need code reading, not deep reasoning"},
+    "investigate":       {"model": "opus",   "effort": "high",   "reason": "root-cause analysis must separate proven from possible causes"},
+    "plan":              {"model": "opus",   "effort": "high",   "reason": "planning and acceptance criteria"},
+    "implement":         {"model": "sonnet", "effort": "medium", "reason": "routine implementation"},
+    "implement_complex": {"model": "opus",   "effort": "high",   "reason": "high-risk implementation"},
+    "document":          {"model": "sonnet", "effort": "medium", "reason": "routine documentation"}
+  }
+}

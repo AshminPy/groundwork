@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Orchestrator add-on, Phase 1 (opt-in)**: `groundwork query "<request>"` runs a request through a LangGraph
+  workflow of `claude -p` workers on the existing claude.ai subscription login, decided by deterministic checks
+  (`orchestrator/`, [orchestrator/README.md](orchestrator/README.md), `openspec/changes/add-orchestrator-mvp/`).
+  - Installed only with `install.sh --with-orchestrator`, in its own venv with pinned LangGraph; core Groundwork stays
+    standard-library only and unchanged. `groundwork orch list|show|approve|reject|resume|cancel|allow|doctor`.
+  - Four categories (QUESTION, TROUBLESHOOTING, PROJECT, DOCUMENTATION), rule-based with a Haiku fallback; model and
+    effort per role from `routing.json`; read-only by default; writes only in a git worktree after approval; never
+    commits, pushes or merges; at most two repairs in the same worker session; quota and login problems block instead
+    of retrying; crash recovery never repeats a finished side effect.
+  - Workers run with `--setting-sources user --strict-mcp-config` (a repository's own hooks and MCP servers do not run),
+    and checks run without secret-looking environment variables.
+
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

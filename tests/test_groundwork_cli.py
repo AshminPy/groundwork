@@ -12,6 +12,7 @@ Run: python3 tests/test_groundwork_cli.py   (or: python3 -m pytest tests -q)
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -428,12 +429,46 @@ def test_copilot_dispatches_not_reimplements() -> None:
     finish()
 
 
+def test_orchestrator_is_opt_in_and_dispatches() -> None:
+    print("groundwork_cli.py — `query`/`orch` reach the opt-in orchestrator add-on only when it is installed")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        e = Env(Path(tmpdir))
+        r = e.run_install()
+        check("install.sh (without --with-orchestrator) exits 0", r.returncode == 0, r.stdout[-1200:] + r.stderr[-600:])
+        app = e.cfg / "groundwork" / "orchestrator-app"
+        check("the add-on is not installed by default", not app.exists())
+        missing = e.run_cli("query", "how does this work?")
+        check("groundwork query without the add-on exits 1 and names the opt-in flag",
+              missing.returncode == 1 and "--with-orchestrator" in missing.stderr, missing.stderr)
+        top = e.run_cli("--help")
+        check("groundwork --help lists query and orch", all(__import__("re").search(rf"(?m)^\s+{n}\s+\S", top.stdout)
+                                                         for n in ("query", "orch")), top.stdout[:900])
+        dev_python = REPO_ROOT / "orchestrator" / ".venv" / "bin" / "python"
+        if dev_python.exists():  # the add-on's dependencies come from its own venv; reuse the dev one if present
+            (app / "venv" / "bin").mkdir(parents=True)
+            (app / "venv" / "bin" / "python").symlink_to(dev_python)
+            shutil.copytree(REPO_ROOT / "orchestrator" / "groundwork_orchestrator", app / "groundwork_orchestrator")
+            via = e.run_cli("orch", "query", "--help")
+            direct = subprocess.run([str(dev_python), "-m", "groundwork_orchestrator", "query", "--help"],
+                                    capture_output=True, text=True, cwd=str(REPO_ROOT / "orchestrator"), timeout=60)
+            check("groundwork orch query --help is identical to the add-on's own help",
+                  via.returncode == direct.returncode == 0 and via.stdout == direct.stdout, via.stdout[:300] + via.stderr[:300])
+            q = e.run_cli("query", "--help")
+            check("groundwork query --help is the add-on's query help", q.returncode == 0 and "--check" in q.stdout, q.stderr)
+        else:
+            print("  note: orchestrator/.venv not present — dispatch half of this test not exercised")
+        u = e.run_uninstall()
+        check("uninstall removes the add-on code", u.returncode == 0 and not app.exists(), u.stdout[-600:])
+    finish()
+
+
 if __name__ == "__main__":
     for t in (test_cli_help_and_no_args_deterministic, test_version_reads_authoritative_source,
               test_doctor_dispatches_not_reimplements, test_install_uninstall_registers_and_removes_path,
               test_integrations_dispatches_not_reimplements, test_update_rollback_dispatches_not_reimplements,
               test_routines_dispatches_not_reimplements, test_statusline_dispatches_not_reimplements,
-              test_copilot_dispatches_not_reimplements):
+              test_copilot_dispatches_not_reimplements,
+              test_orchestrator_is_opt_in_and_dispatches):
         try:
             t()
         except AssertionError:

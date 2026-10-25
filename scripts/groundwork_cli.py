@@ -66,6 +66,10 @@ INSTALLED_COPILOT_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_copilot.p
 # `task` is the same kind of pass-through to the task ledger (openspec/changes/add-task-lifecycle-gate/). It lives in
 # hooks/ because the task gate hook imports it as a sibling module; one installed copy serves both.
 INSTALLED_TASKS_PY = CLAUDE_DIR / "hooks" / "groundwork_tasks.py"
+# `query` and `orch` are pass-throughs to the opt-in orchestrator add-on (openspec/changes/add-orchestrator-mvp/), run
+# by its own venv interpreter because it needs LangGraph; core Groundwork stays standard-library only.
+ORCH_APP = CLAUDE_DIR / "groundwork" / "orchestrator-app"
+ORCH_PYTHON = ORCH_APP / "venv" / "bin" / "python"
 
 
 def _read_version() -> str | None:
@@ -167,6 +171,16 @@ def cmd_task(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_orchestrator(extra_argv: list[str]) -> int:
+    if not ORCH_PYTHON.exists() or not (ORCH_APP / "groundwork_orchestrator").is_dir():
+        print(f"orchestrator: not installed at {ORCH_APP} — it is an opt-in add-on: "
+              "re-run install.sh --with-orchestrator", file=sys.stderr)
+        return 1
+    env = {**os.environ, "PYTHONPATH": str(ORCH_APP)}
+    result = subprocess.run([str(ORCH_PYTHON), "-m", "groundwork_orchestrator", *extra_argv], env=env)
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -217,6 +231,16 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     )
     sub.add_parser(
+        "query",
+        help="opt-in orchestrator: run a request through a validated workflow (see 'groundwork orch --help')",
+        add_help=False,
+    )
+    sub.add_parser(
+        "orch",
+        help="opt-in orchestrator: list/show/approve/reject/resume/cancel/allow/doctor tasks",
+        add_help=False,
+    )
+    sub.add_parser(
         "task",
         help="engineering task tracking: list/show/complete/cancel/block (see 'groundwork task --help')",
         add_help=False,
@@ -244,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_copilot(argv[1:])
     if argv and argv[0] == "task":
         return cmd_task(argv[1:])
+    if argv and argv[0] == "query":
+        return cmd_orchestrator(argv)
+    if argv and argv[0] == "orch":
+        return cmd_orchestrator(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

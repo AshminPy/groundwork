@@ -16,6 +16,9 @@
 #   --agent-teams   also set CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in settings.json
 #                   (Claude Code's experimental Agent Teams; opt-in, never default —
 #                   it changes how named subagents launch, see docs/en/agent-teams).
+#   --with-orchestrator  also install the opt-in orchestrator add-on (`groundwork query`, `groundwork orch`):
+#                   its own virtual environment with pinned LangGraph (orchestrator/requirements.txt).
+#                   Core Groundwork stays standard-library only; see orchestrator/README.md.
 #
 # Safe to re-run: every step is idempotent.
 #
@@ -26,10 +29,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 MERGE_ARGS=()
+WITH_ORCHESTRATOR=0
 for arg in "$@"; do
   case "$arg" in
     --agent-teams) MERGE_ARGS+=("--agent-teams") ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --with-orchestrator) WITH_ORCHESTRATOR=1 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg (see --help)"; exit 1 ;;
   esac
 done
@@ -144,6 +149,23 @@ chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork"
 # the installed setup.sh --rollback above. Stores no credentials, installs nothing itself.
 cp "$HERE/scripts/groundwork_update.py" "$CLAUDE_DIR/groundwork/bin/"
 chmod +x "$CLAUDE_DIR/groundwork/bin/groundwork_update.py"
+
+# Opt-in orchestrator add-on (openspec/changes/add-orchestrator-mvp/): code and its own venv live in
+# orchestrator-app/; task state lives separately in orchestrator/ and is never touched here. A failed dependency
+# install leaves core Groundwork installed and working, and says so.
+if [ "$WITH_ORCHESTRATOR" = 1 ]; then
+  ORCH_APP="$CLAUDE_DIR/groundwork/orchestrator-app"
+  mkdir -p "$ORCH_APP"
+  if python3 -m venv "$ORCH_APP/venv" && "$ORCH_APP/venv/bin/python" -m pip install -q --disable-pip-version-check \
+       -r "$HERE/orchestrator/requirements.txt"; then
+    rm -rf "$ORCH_APP/groundwork_orchestrator"
+    cp -R "$HERE/orchestrator/groundwork_orchestrator" "$ORCH_APP/"
+    find "$ORCH_APP/groundwork_orchestrator" -name __pycache__ -type d -prune -exec rm -rf {} +
+    echo "  orchestrator: installed (try: groundwork orch doctor)"
+  else
+    echo "  orchestrator: dependency install failed; core Groundwork is installed and unaffected"
+  fi
+fi
 
 # PATH registration — the exact idempotent-env-script pattern already used by uv/rustup (see
 # DECISION 2 in openspec/changes/groundwork-cli-foundation/design.md for the live evidence this

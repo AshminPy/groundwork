@@ -68,7 +68,8 @@ doc_drift"
     fi
   done <<< "$routine_names"
 fi
-rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
+rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin" \
+       "$CLAUDE_DIR/groundwork/orchestrator-app"  # orchestrator task history in groundwork/orchestrator/ is kept
 rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/groundwork/env" \
