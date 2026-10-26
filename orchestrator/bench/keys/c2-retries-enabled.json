@@ -2,11 +2,11 @@
  "case": "c2-retries-enabled",
  "category": "C",
  "required": [
-  "^\\W*(answer\\W*)?(\\*\\*)?yes\\b",
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?yes\\b",
   "\\b(429|503)\\b"
  ],
  "forbidden": [
-  "^\\W*(answer\\W*)?(\\*\\*)?no\\b"
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?no\\b"
  ],
  "expected_files": [
   "payapi/client.py"

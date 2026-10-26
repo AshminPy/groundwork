@@ -46,10 +46,21 @@ def _over_quota(rate_limit: dict | None) -> str | None:
     return None
 
 
+RETRY_ON_RERUN = {None, "error"}   # empty-answer cells whose cause may be transient (timeout, API error)
+
+
 def _done(results: Path) -> set[tuple]:
-    if not results.exists():
-        return set()
-    return {(r["case"], r["arm"], r["rep"]) for r in map(json.loads, results.read_text().splitlines())}
+    """Cells that need no re-run. An empty answer from a transient error is retried; a harness state such as BLOCKED
+    is a real result about that harness and is kept."""
+    done = set()
+    for line in results.read_text().splitlines() if results.exists() else []:
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        transient = not (r.get("final_text") or "").strip() and r.get("state") in RETRY_ON_RERUN
+        (done.discard if transient else done.add)((r["case"], r["arm"], r["rep"]))
+    return done
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,12 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     results = run_dir / "results.jsonl"
     done = _done(results)
     ledger_before = set(p.name for p in LEDGER.iterdir()) if LEDGER.exists() else set()
-    stop_reason = None
+    stop_reason = pending_stop = None
     for ci, case in enumerate(cases):
         key = grade.load_key(case)
         instruction = (BENCH / "tasks" / case / "instruction.md").read_text().strip()
         for rep in range(1, a.repeats + 1):
             order = ["A", "B"] if (ci + rep) % 2 == 0 else ["B", "A"]
+            pending_stop = None
             for pos, arm in enumerate(order):
                 if (case, arm, rep) in done or stop_reason:
                     continue
@@ -110,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{case} {arm} r{rep}: {'correct' if g['correct'] else 'WRONG'} "
                       f"({g['facts_found']}/{g['facts_required']} facts, {out['wall_s']}s, ok={out['ok']})", flush=True)
                 if arm == "A":
-                    stop_reason = _over_quota(out.get("rate_limit"))
+                    pending_stop = _over_quota(out.get("rate_limit")) or pending_stop
+            if pending_stop:
+                stop_reason = pending_stop          # stop only after the A/B pair for this repeat is complete
     ledger_after = set(p.name for p in LEDGER.iterdir()) if LEDGER.exists() else set()
     meta = {"run_id": a.run_id, "finished_at": datetime.now(timezone.utc).isoformat(), "repeats": a.repeats,
             "cases": cases, "stop_reason": stop_reason, "arm_a": {"model": ARM_A_MODEL, "effort": ARM_A_EFFORT},

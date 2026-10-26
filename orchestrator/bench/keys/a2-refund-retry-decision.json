@@ -2,12 +2,12 @@
  "case": "a2-refund-retry-decision",
  "category": "A",
  "required": [
-  "^\\W*(answer\\W*)?(\\*\\*)?no\\b",
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?no\\b",
   "X-PayAPI-Idempotency",
   "duplicate|double"
  ],
  "forbidden": [
-  "^\\W*(answer\\W*)?(\\*\\*)?yes\\b"
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?yes\\b"
  ],
  "expected_files": [
   "payapi/client.py",

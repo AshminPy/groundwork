@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -15,9 +16,11 @@ import time
 from pathlib import Path
 
 from groundwork_orchestrator.claude_adapter import ISOLATION_FLAGS, claude_bin, worker_env
+from groundwork_orchestrator.store import stop_group
 
 ORCH_DIR = Path(__file__).resolve().parents[1]
 READ_TOOLS = "Read,Grep,Glob"
+TIMEOUT_S = 1200   # the same wall-clock limit for both arms
 
 
 def clean_env() -> dict:
@@ -73,7 +76,7 @@ def _outside(ws: Path, tool_input: dict) -> bool:
     return not str(p.resolve()).startswith(str(ws.resolve()))
 
 
-def run_arm_a(ws: Path, instruction: str, model: str, effort: str, timeout_s: int = 900) -> dict:
+def run_arm_a(ws: Path, instruction: str, model: str, effort: str, timeout_s: int = TIMEOUT_S) -> dict:
     start = time.monotonic()
     try:
         p = subprocess.run(arm_a_argv(model, effort), cwd=ws, input=instruction, capture_output=True, text=True,
@@ -97,21 +100,44 @@ def run_arm_a(ws: Path, instruction: str, model: str, effort: str, timeout_s: in
 
 
 def _orch(args: list[str], home: Path, timeout_s: int) -> subprocess.CompletedProcess:
+    """Run the orchestrator CLI in its own process group. On timeout the whole group is stopped: the orchestrator's
+    workers run in their own sessions, so that is done with PR #62's own stop_group (it finds them by pid)."""
     env = {**os.environ, "GROUNDWORK_ORCH_HOME": str(home), "GROUNDWORK_ORCH_TELEMETRY": "off"}
-    return subprocess.run([sys.executable, "-m", "groundwork_orchestrator", *args], cwd=ORCH_DIR, env=env,
-                          capture_output=True, text=True, timeout=timeout_s)
+    proc = subprocess.Popen([sys.executable, "-m", "groundwork_orchestrator", *args], cwd=ORCH_DIR, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        _stop_workers(home)
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+
+def _stop_workers(home: Path) -> None:
+    db = home / "state.db"
+    if not db.exists():
+        return
+    con = sqlite3.connect(db)
+    try:
+        pids = [p for (p,) in con.execute("select pid from sessions where pid is not null and ended_at is null")]
+    finally:
+        con.close()
+    for pid in pids:
+        stop_group(pid)
 
 
 def b_visible_text(contract: dict) -> str:
     """What PR #62 shows the user as the answer: the result text plus its sources and stated unknowns. The harness's
     own status line is left out, so the grader cannot be swayed by it."""
     r = contract.get("result") or {}
-    parts = [r[k].strip() for k in ("answer", "document", "summary", "root_cause") if r.get(k)]
+    parts = [str(r[k]).strip() for k in ("answer", "document", "summary", "root_cause") if r.get(k)]
     if r.get("sources"):
-        parts.append("sources: " + ", ".join(r["sources"]))
+        parts.append("sources: " + ", ".join(map(str, r["sources"])))
     for k in ("unknowns", "unverified_claims"):
         if r.get(k):
-            parts.append(f"{k}: " + "; ".join(r[k]))
+            parts.append(f"{k}: " + "; ".join(map(str, r[k])))
     return "\n\n".join(parts)
 
 
@@ -136,7 +162,7 @@ def _b_sessions(home: Path) -> dict:
     return out
 
 
-def run_arm_b(ws: Path, instruction: str, home: Path, timeout_s: int = 1800) -> dict:
+def run_arm_b(ws: Path, instruction: str, home: Path, timeout_s: int = TIMEOUT_S) -> dict:
     home.mkdir(parents=True, exist_ok=True)
     _orch(["allow", str(ws)], home, 60)
     start = time.monotonic()

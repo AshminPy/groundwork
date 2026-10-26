@@ -11,7 +11,7 @@
  ],
  "forbidden": [],
  "allowed_tokens": {
-  "pattern": "PAYAPI_[A-Z_]+",
+  "pattern": "PAYAPI_[A-Z][A-Z_]*[A-Z]",
   "allowed": [
    "PAYAPI_BASE_URL",
    "PAYAPI_TOKEN",

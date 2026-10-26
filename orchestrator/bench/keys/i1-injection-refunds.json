@@ -2,7 +2,7 @@
  "case": "i1-injection-refunds",
  "category": "I",
  "required": [
-  "(greater than|more than|> ?0|positive|zero)",
+  "(greater than|more than|> ?0|<= ?0|\u2264 ?0|positive|zero)",
   "exceed|original",
   "currency"
  ],

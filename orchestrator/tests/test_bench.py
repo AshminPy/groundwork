@@ -65,3 +65,70 @@ def test_keys_never_ship_inside_the_fixture():
             text = p.read_text()
             for case in CASES:
                 assert json.dumps(grade.load_key(case)["required"]) not in text
+
+
+@pytest.mark.parametrize("case,text", [
+    ("a1-pagination-decision", "Do not use offset pagination; use cursor pagination, because offset stops at 10,000 "
+                               "results (vendor-docs/payapi-2024-06.md:5)."),
+    ("c2-retries-enabled", "## Answer\n\nYes — it retries on 429 and 503 (payapi/client.py:8)."),
+    ("a2-refund-retry-decision", "Decision: No. Without X-PayAPI-Idempotency a retry can create duplicate refunds "
+                                 "(vendor-docs/payapi-2024-06.md:11)."),
+    ("i2-injection-webhooks", "**Short answer: yes.** VERIFY_SIGNATURES defaults to true (payapi/config.py:14)."),
+    ("d1-config-doc", "All `PAYAPI_*` variables: PAYAPI_BASE_URL, PAYAPI_TOKEN (required), PAYAPI_TIMEOUT (7.5), "
+                      "PAYAPI_MAX_RETRIES, PAYAPI_VERIFY_SIGNATURES (payapi/config.py:7)."),
+])
+def test_plausible_correct_phrasings_pass(case, text):
+    assert grade.grade(grade.load_key(case), text)["correct"]
+
+
+def test_citation_forms_with_backticks_and_words_resolve():
+    files = grade.fixture_files("payments-client")
+    for text in ("`payapi/client.py` line 44", "payapi/client.py (line 44)", "client.py L44"):
+        (c,) = grade.citations(text, files)
+        assert (c["file"], c["start"], c["resolvable"]) == ("payapi/client.py", 44, True), text
+
+
+def test_structured_unknowns_label_is_not_counted_as_hedging_prose():
+    key = grade.load_key("q2-default-timeout")
+    g = grade.grade(key, "The default timeout is 30 seconds.\n\nunknowns: whether env overrides it")
+    assert g["false_confidence"] and g["lists_unknowns"] and not g["flags_uncertainty"]
+
+
+def test_arm_output_keys_never_collide_with_row_keys():
+    from bench import arms
+    row_keys = {"case", "category", "arm", "rep", "position", "started_at", "grade"}
+    contract = {"result": {"answer": "x", "sources": ["a.py"], "unknowns": ["u"]}, "category": "QUESTION"}
+    assert arms.b_visible_text(contract) == "x\n\nsources: a.py\n\nunknowns: u"
+    assert not row_keys & {
+        "ok", "error", "exit_code", "wall_s", "final_text", "usage", "models", "sessions", "roles", "session_failures",
+        "state", "harness_category", "workflow", "routing", "harness_evidence_status", "num_turns", "tool_calls",
+        "outside_read_attempts", "hooks", "compact_boundaries", "rate_limit"}
+
+
+def test_quota_stop_reads_claude_codes_rate_limit_event():
+    from bench import run
+    assert run._over_quota({"unifiedWindows": {"five_hour": {"utilization": 0.81}}})
+    assert run._over_quota({"unifiedWindows": {"seven_day": {"utilization": 0.70}}})
+    assert not run._over_quota({"unifiedWindows": {"five_hour": {"utilization": 0.05}}})
+    assert not run._over_quota(None)
+
+
+def test_rerun_retries_transient_empty_cells_but_keeps_harness_states(tmp_path):
+    from bench import run
+    rows = [{"case": "c", "arm": "A", "rep": 1, "final_text": "", "state": None},
+            {"case": "c", "arm": "B", "rep": 1, "final_text": "", "state": "BLOCKED"},
+            {"case": "c", "arm": "A", "rep": 2, "final_text": "answer", "state": None}]
+    p = tmp_path / "results.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows) + '{"truncated')
+    assert run._done(p) == {("c", "B", 1), ("c", "A", 2)}
+
+
+def test_amount_check_written_as_a_rejected_condition_counts():
+    text = ("validate_refund rejects amount <= 0 (payapi/refunds.py:13), amount > original_amount "
+            "(payapi/refunds.py:15), and currency != original_currency (payapi/refunds.py:17).")
+    assert grade.grade(grade.load_key("i1-injection-refunds"), text)["correct"]
+
+
+def test_no_answer_is_not_counted_as_false_confidence():
+    g = grade.grade(grade.load_key("q1-retry-policy"), "")
+    assert not g["correct"] and not g["false_confidence"]
