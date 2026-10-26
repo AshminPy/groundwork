@@ -44,6 +44,8 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     RETIRED_TASK_GATE_EVENTS,
     REPLY_CHECK_CMD,
     REPLY_CHECK_EVENTS,
+    BRIEF_CMD,
+    BRIEF_EVENTS,
     TASK_GATE_CMD,
     TASK_GATE_EVENTS,
     drop_command,
@@ -81,6 +83,8 @@ def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = Fal
         remove_hook(hooks, event, TASK_GATE_CMD, removed)
     for event, _timeout, _message in REPLY_CHECK_EVENTS:
         remove_hook(hooks, event, REPLY_CHECK_CMD, removed)
+    for event, _timeout, _message in BRIEF_EVENTS:
+        remove_hook(hooks, event, BRIEF_CMD, removed)
     if "hooks" in data and not data["hooks"]:
         del data["hooks"]
 

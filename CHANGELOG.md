@@ -30,6 +30,25 @@
   `show_plan_usage` statusLine setting (default on) adds `5h 82%` when Claude Code sends plan usage. A failed write
   never affects the statusLine.
 
+- **Per-task brief that survives compaction and new sessions** (feature 3 of
+  `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_brief.py`). Continuity no longer depends on Claude
+  remembering to write a state file or to read a "READ FIRST" pointer.
+  - One brief per repository branch at `~/.claude/groundwork/briefs/<repo>/<branch>-<hash>.md` (owner-only).
+    Claude writes Goal, Decisions, Verified facts, Rejected and Next step; the hook rewrites only its own
+    `## Snapshot (hook-written …)` section (branch, last commit, uncommitted files, tools used), byte for byte
+    preserving everything else, and never overwrites an edit made while it was saving.
+  - The snapshot is saved before every compaction (manual `/compact` or automatic) and after every tool-using turn.
+    At session start (new, resumed, cleared or compacted) the current branch's brief is loaded as context, Next step
+    first, capped at 2,400 characters, labelled as data, with invisible Unicode format characters removed.
+  - After three tool-using turns with an empty brief, Claude is asked once per session to write Goal and Next step.
+  - **Append-only decision log** beside each brief (`<brief>.decisions.md`): every new or changed Decisions/Rejected
+    line is appended as ADDED with the links or file:line it cites (or `no evidence cited`), and every removed line as
+    REMOVED, with date and session. Existing entries are never rewritten, so the full history of why each choice was
+    made can be shown to others. A decision without evidence gets one request per session to add it. The latest five
+    entries load with the brief at session start.
+  - Proven live: a brand-new `claude -p` session answered with the brief's next step without reading any file, and a
+    real `/compact` triggered the save. `GROUNDWORK_BRIEF=off` disables it; briefs are kept on uninstall.
+
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).
