@@ -14,7 +14,7 @@
 
 ## 3. Task brief continuity
 - [ ] 3.1 Never-case tests (no cross-task overwrite, no cross-repo load, checkpoint never blocks)
-- [ ] 3.2 Per-task brief path, checkpoint hook, snapshot reload
+- [ ] 3.2 Per-task brief path; hook-written Snapshot section (Stop + PreCompact); checkpoint hook; Stop-hook stale-brief check (ask once); snapshot reload
 - [ ] 3.3 Live: forced early compaction reloads the brief verbatim
 
 ## 4. Citation check

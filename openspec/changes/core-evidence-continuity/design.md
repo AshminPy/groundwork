@@ -20,7 +20,13 @@ UNCERTAINTY         The benchmark questions are small and easy; harder, real cas
 ## Principles
 1. **Measure first.** A feature is built only after a benchmark case shows current Groundwork failing at it, and kept only if it closes the gap.
 2. **Never-cases first.** Each requirement lists what must never happen. Those are written as failing tests before code.
-3. **Hooks enforce; prompts suggest.** Anything that must hold on every task is a hook or a deterministic check, not rule text alone.
+3. **Hooks first (owner direction, 2026-10-26).** Nothing that matters may depend on Claude remembering it. Each requirement gets the strongest available mechanism, in this order:
+   - a hook that does the work itself, deterministically;
+   - a hook that checks the result and asks once when it is missing;
+   - rule text only when neither is possible, stated as such.
+
+   Every feature lists which of the three applies to each part.
+5. **Existing workflows stay as they are.** Doc and task creation in Obsidian is unchanged. No feature writes into an Obsidian vault or replaces that workflow. Groundwork state files live under `~/.claude/groundwork/`.
 4. **Standard library only, small changes, one PR per feature.**
 
 ## 1. Benchmark in core (`bench/`)
@@ -52,6 +58,10 @@ Source: the statusLine stdin JSON (Claude Code statusline docs, checked 2026-10-
 
 ## 3. Task brief continuity
 - **Brief:** `~/.claude/groundwork/briefs/<repo-key>/<task-key>.md`. The task key is the ledger task (GW-n) when one exists; otherwise the repo-level investigation file is kept as today. Sections: objective, decisions (with evidence), verified facts (with sources), rejected hypotheses (with reasons), next step. Current state only; it is not a log.
+- **Who writes what (hooks first):**
+  - **Hook-written, deterministic, no model needed:** a `## Snapshot` section at the top of the brief, refreshed by the hooks at each Stop and at PreCompact. It holds the session ID, time, git branch, HEAD, dirty files, the active ledger task and its OpenSpec task progress, the context %, and the commands and tests run this session (from the existing tool telemetry). This part is always current, even if Claude forgets everything.
+  - **Claude-written, judgment that a hook cannot produce:** decisions (with evidence), verified facts (with sources), rejected hypotheses (with reasons), next step. Hooks enforce that it is written: the checkpoint prompt below, plus a Stop-hook check. When context is at or above the checkpoint and the judgment sections have not changed since the last checkpoint, Claude is asked once to update them.
+- **Where it lives:** `~/.claude/groundwork/briefs/<repo-key>/<task-key>.md`, on the machine where the work happens. It is outside the repository and never committed. It is not synced between the work Mac and the personal Mac.
 - **Checkpoint:** a UserPromptSubmit hook reads the session's latest `ctx_pct` from the usage record. At or above `brief_checkpoint_pct` (default 65, configurable), it adds one line of context: "Context is N%: update the task brief now." It fires at most once per 10 percentage points per session.
 - **Reload:** the existing SessionStart snapshot (registered with no matcher, so it also runs after compaction) includes the brief for the active task, within its existing size cap and with "Rejected hypotheses" first.
 - **Never:**
