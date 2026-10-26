@@ -397,6 +397,11 @@ def test_invalid_symbol_set_and_separator_fall_back_safely() -> None:
         mod.VERSION_PATH = mod.CLAUDE_DIR / "groundwork" / "VERSION"
         mod.STATUSLINE_CONFIG_PATH = mod.CLAUDE_DIR / "groundwork" / "statusline-config.json"
         _write_three_state_integrations_cache(mod)
+        # Freeze the clock: each render prints the cache's age in whole seconds, so two renders that straddle a
+        # second boundary differed ("0s" vs "1s") and failed this equality check intermittently.
+        frozen = time.time()
+        real_time = mod.time.time
+        mod.time.time = lambda: frozen
 
         # Direct render() call with an in-memory bogus value.
         try:
@@ -425,6 +430,7 @@ def test_invalid_symbol_set_and_separator_fall_back_safely() -> None:
               not crashed_on_disk, on_disk_bogus)
         check("a malformed on-disk symbol_set/separator value degrades to the real defaults' rendering",
               not crashed_on_disk and on_disk_bogus == default_out, (on_disk_bogus, default_out))
+        mod.time.time = real_time
     finish()
 
 
