@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.5.0 — 2026-10-26
 
 - **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
   design D2). Release blockers, each with a regression test from the scan's proof of concept:
