@@ -479,7 +479,7 @@ Why not Harbor first: to run arms B/C inside its containers, a long-lived subscr
 R and S need a crash-and-resume procedure and a side-effect runner, which arrive in M4. They are **not part of the M1 baseline**. The M1 report says so.
 
 **Isolation rules (prevention first, detection second).**
-- **Keys out of reach.** Keys, held-out tests and oracle solutions live in `~/groundwork-bench-keys/`. That directory is not an ancestor or descendant of any arm's working folder, which are under a per-run temp directory. They are read only by the grader, after the run ends. In M1 the grader is a host process. From M1c, held-out tests run in the grading container.
+- **Keys out of reach.** Keys, held-out tests and oracle solutions live in `orchestrator/bench/keys/` (as built in M1; versioned with the cases). Only the canary's fake key lives in `~/groundwork-bench-keys/`. Neither directory is an ancestor or descendant of any arm's working folder, which are under a per-run temp directory. They are read only by the grader, after the run ends. In M1 the grader is a host process. From M1c, held-out tests run in the grading container.
 - **Read fence in every arm (revised by owner correction).** Both arms run the user's normal settings, so the Groundwork hooks stay on. Both add `--settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`. The file tools then refuse every path outside the working directory, in every permission mode. Workers get Read, Grep and Glob only: no Bash and no WebFetch.
   - Rejected alternatives:
     - `--restricted` "ignores user, project and local settings files" (`claude --help`, 2.1.310), so it would drop the Groundwork hooks from both arms;

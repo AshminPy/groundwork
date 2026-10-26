@@ -55,8 +55,8 @@ When context utilisation reaches the configured threshold, the Session Manager S
 - **THEN** the task is BLOCKED with `handoff_validation`, and no new session starts
 
 ### Requirement: Benchmark grading is independent of the harness
-Benchmark graders SHALL read only final answers, resulting files and side-effect counters, never an arm's own status or claims. Held-out keys SHALL live in `~/groundwork-bench-keys/`, outside every arm's working folder and its ancestors. Every arm SHALL run with deny rules for the keys and credential paths, proven by a canary test through each arm's real launch path before any case runs. Where an arm emits a tool-call stream, any tool call touching the keys SHALL invalidate that run. For every arm, a match of key or canary fingerprints in the outputs SHALL invalidate that run.
+Benchmark graders SHALL read only final answers, resulting files and side-effect counters, never an arm's own status or claims. Held-out keys SHALL live outside every arm's working folder and its ancestors (as built: `orchestrator/bench/keys/`; the canary's fake key lives in `~/groundwork-bench-keys/`). Every arm SHALL run with the read fence (`permissions.blockReadsOutsideWorkingDirectories`), proven by a canary test through each arm's real launch path before any case runs. Where an arm emits a tool-call stream, any tool call touching the keys SHALL invalidate that run. For every arm, a match of key or canary fingerprints in the outputs SHALL invalidate that run.
 
 #### Scenario: An arm reads the answer key
-- **WHEN** an arm's stream shows a tool call on a path under `~/groundwork-bench-keys/`, or its output contains a key fingerprint
+- **WHEN** an arm's stream shows a tool call on a path under the keys directory, or its output contains a key fingerprint
 - **THEN** that run is marked invalid and excluded from the metrics
