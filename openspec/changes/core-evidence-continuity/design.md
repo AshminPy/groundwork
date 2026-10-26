@@ -26,6 +26,12 @@ UNCERTAINTY         The benchmark questions are small and easy; harder, real cas
    - rule text only when neither is possible, stated as such.
 
    Every feature lists which of the three applies to each part.
+6. **Installs everywhere (owner direction, 2026-10-26).** Every feature ships through Groundwork's normal install and update path (`install.sh`, `groundwork update` from a published release). It works on any Mac with `python3` and Claude Code, and needs no manual step.
+   - Hooks are registered by the installer's settings merge.
+   - Every option has a safe default in Groundwork config.
+   - Paths come from `~` or `CLAUDE_CONFIG_DIR`, never from one machine's layout.
+   - Workflows travel with the install. Per-machine state (briefs, usage records) stays local to the machine where the work happened.
+   - A feature that depends on something a laptop may lack degrades with a clear message instead of failing. Examples: plan-usage fields, which are absent on Team and Enterprise plans; or a managed-settings policy that restricts hooks.
 5. **Existing workflows stay as they are.** Doc and task creation in Obsidian is unchanged. No feature writes into an Obsidian vault or replaces that workflow. Groundwork state files live under `~/.claude/groundwork/`.
 4. **Standard library only, small changes, one PR per feature.**
 
@@ -115,6 +121,15 @@ Design:
   - it asks more than once per turn;
   - it changes the meaning of an answer (it only asks for missing sections);
   - it adds a playbook the rules did not select with confidence.
+
+## Portability acceptance (all features)
+- **Clean-install test, automated, no login needed:** install into a temporary `CLAUDE_CONFIG_DIR`, then check that:
+  - every new hook is registered;
+  - every new command runs;
+  - every config default is present;
+  - uninstall removes it all.
+- **Fresh-laptop smoke test:** the existing `docs/MACOS-SMOKE-TEST.md`, extended with one live check per feature.
+- **Work laptop:** the same steps on a Team or Enterprise login, confirming graceful degradation where plan-usage fields or hooks are restricted. Whether work-laptop managed settings allow user hooks is UNVERIFIED and must be checked there.
 
 ## Verification
 - `python3 -m pytest tests -q`: all existing and new tests pass. New tests are written from each never-case.

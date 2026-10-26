@@ -22,6 +22,11 @@
 - [ ] 4.2 Never-case tests; port the locate logic to core
 - [ ] 4.3 Live: planted wrong citation reported
 
+## 7. Portability (applies to every feature)
+- [ ] 7.1 Clean-install test into a temporary CLAUDE_CONFIG_DIR: hooks registered, commands run, defaults present, uninstall clean
+- [ ] 7.2 Extend docs/MACOS-SMOKE-TEST.md with one live check per feature
+- [ ] 7.3 Work laptop: verify managed settings allow the hooks; plan-usage degradation message
+
 ## 6. Response contract enforcement
 - [ ] 6.1 Verify Stop-hook "ask once" behaviour (stop_hook_active) against the hooks docs
 - [ ] 6.2 Never-case tests (no block without tool use, at most one ask, no loop, low-confidence route adds nothing)

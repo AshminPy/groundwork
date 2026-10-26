@@ -47,6 +47,17 @@ For a turn that used tools, Groundwork SHALL load the routed playbook's output f
 - **WHEN** a turn used no tools
 - **THEN** no section is required and the turn is never blocked
 
+### Requirement: Every feature installs and works on any laptop
+Every feature SHALL be delivered by Groundwork's standard install and update path with safe defaults and no manual step, and SHALL degrade with a clear message when a laptop lacks something it depends on.
+
+#### Scenario: Fresh install
+- **WHEN** Groundwork is installed into an empty Claude configuration directory
+- **THEN** every new hook is registered, every new command runs, and every option has its default, with no manual edit
+
+#### Scenario: Plan without usage fields
+- **WHEN** the login's plan does not provide plan-usage fields (for example Team or Enterprise)
+- **THEN** `groundwork usage` still ranks sessions by cost estimate and states that plan percentages are not available for this login
+
 ### Requirement: Every feature is measured against current Groundwork
 Each feature SHALL be compared with Groundwork as installed on held-out benchmark cases graded by a frozen grader that never reads an arm's own status.
 
