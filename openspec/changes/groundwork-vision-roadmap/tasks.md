@@ -22,29 +22,29 @@ Each task carries a work class (design D10):
 
 ## 2. M1: Task-gate hardening (F7, F8, F11, F12)
 
-- [ ] 2.1 [release-critical: blocker] F7: `[[` in argument position no longer hides the commands after it. Verify: a regression test with the report's proof of concept gets `ask`.
-- [ ] 2.2 [release-critical: blocker] F8: a carriage return is not treated as a comment boundary. Verify: a regression test gets `ask`.
-- [ ] 2.3 [product-critical] F11: a relative or computed `cd` into the Claude config directory, followed by an edit or write there, gets `ask`. Verify: regression tests for the relative and computed forms.
-- [ ] 2.4 [release-critical: blocker] F12: bare `~/.ssh`, `~/.gnupg`, `~/.aws` and gcloud config directory arguments count as credential access. Verify: regression tests, plus false-positive tests showing that ordinary commands (`ls src`, `git status`, `pytest`) still run without a prompt.
-- [ ] 2.5 [release-critical] Update `docs/TASK-LIFECYCLE.md` "Limits" to reflect the fixes. Verify: `python3 tests/test_task_lifecycle.py` passes.
+- [x] 2.1 [release-critical: blocker] F7: `[[` in argument position no longer hides the commands after it. Verify: a regression test with the report's proof of concept gets `ask`. Done: #61, merged as 0fca8a2.
+- [x] 2.2 [release-critical: blocker] F8: a carriage return is not treated as a comment boundary. Verify: a regression test gets `ask`. Done: #61, merged as 0fca8a2.
+- [x] 2.3 [product-critical] F11: a relative or computed `cd` into the Claude config directory, followed by an edit or write there, gets `ask`. Verify: regression tests for the relative and computed forms. Done: #61, merged as 0fca8a2.
+- [x] 2.4 [release-critical: blocker] F12: bare `~/.ssh`, `~/.gnupg`, `~/.aws` and gcloud config directory arguments count as credential access. Verify: regression tests, plus false-positive tests showing that ordinary commands (`ls src`, `git status`, `pytest`) still run without a prompt. Done: #61, merged as 0fca8a2.
+- [x] 2.5 [release-critical] Update `docs/TASK-LIFECYCLE.md` "Limits" to reflect the fixes. Verify: `python3 tests/test_task_lifecycle.py` passes. Done: #61, merged as 0fca8a2.
 
 ## 3. M1: Push guard, settings mode and snapshot (F4, F5, F6, F9, F10, F13)
 
-- [ ] 3.1 [release-critical: blocker] F4: newline-separated and tightly chained commands are split before the push check. Verify: a regression test is denied.
-- [ ] 3.2 [release-critical: blocker] F5: nested shells accept combined flags such as `-lc` and `-ec`. Verify: a regression test is denied.
-- [ ] 3.3 [release-critical: blocker] F6: combined short flags such as `-uf` and `-fu` count as force. Verify: a regression test is denied.
-- [ ] 3.4 [product-critical] F10: branch resolution honours `git -C <dir>` and an in-command `cd`. Verify: regression tests are denied.
-- [ ] 3.5 [release-critical: blocker] F13: `merge_settings.py` keeps the file mode of an existing `settings.json`. Verify: a test with a 0600 file still shows 0600 after the merge.
-- [ ] 3.6 [product-critical] F9: replace the quadratic `tasks.md` regex in the snapshot with a linear parse. Verify: a test with a large adversarial `tasks.md` finishes in under 1 s and produces the same counts as before on normal files.
-- [ ] 3.7 [release-critical] Update the push-guard row in `docs/ARCHITECTURE.md`. Verify: `python3 -m pytest tests/test_hooks.py -q` passes.
+- [x] 3.1 [release-critical: blocker] F4: newline-separated and tightly chained commands are split before the push check. Verify: a regression test is denied. Done: #61, merged as 0fca8a2.
+- [x] 3.2 [release-critical: blocker] F5: nested shells accept combined flags such as `-lc` and `-ec`. Verify: a regression test is denied. Done: #61, merged as 0fca8a2.
+- [x] 3.3 [release-critical: blocker] F6: combined short flags such as `-uf` and `-fu` count as force. Verify: a regression test is denied. Done: #61, merged as 0fca8a2.
+- [x] 3.4 [product-critical] F10: branch resolution honours `git -C <dir>` and an in-command `cd`. Verify: regression tests are denied. Done: #61, merged as 0fca8a2.
+- [x] 3.5 [release-critical: blocker] F13: `merge_settings.py` keeps the file mode of an existing `settings.json`. Verify: a test with a 0600 file still shows 0600 after the merge. Done: #61, merged as 0fca8a2.
+- [x] 3.6 [product-critical] F9: replace the quadratic `tasks.md` regex in the snapshot with a linear parse. Verify: a test with a large adversarial `tasks.md` finishes in under 1 s and produces the same counts as before on normal files. Done: #61, merged as 0fca8a2 (the regression test bounds a 400,000-line `tasks.md` at 5 s, not 1 s).
+- [x] 3.7 [release-critical] Update the push-guard row in `docs/ARCHITECTURE.md`. Verify: `python3 -m pytest tests/test_hooks.py -q` passes. Done: #61, merged as 0fca8a2.
 
 ## 4. M1: Routines (F1–F3, F14 and the schedule bug)
 
-- [ ] 4.1 [release-critical: blocker] F1 and F2: list the git subcommands each routine's prompt uses. Replace `Bash(git *)` with exactly those read-only subcommands, using permission-rule syntax checked against current Claude Code documentation. Verify: unit tests assert each routine's grant set.
-- [ ] 4.2 [product-critical] F3: remove `Read` from the `news` routine if its prompt does not need it; otherwise scope it to the paths it does need. Verify: a unit test asserts the grant set.
-- [ ] 4.3 [product-critical] `groundwork routines schedule` saves the new hour and minute to `config.json`. Verify: a test shows `routines list` printing the new time after `schedule`.
+- [x] 4.1 [release-critical: blocker] F1 and F2: list the git subcommands each routine's prompt uses. Replace `Bash(git *)` with exactly those read-only subcommands, using permission-rule syntax checked against current Claude Code documentation. Verify: unit tests assert each routine's grant set. Done: #61, merged as 0fca8a2.
+- [x] 4.2 [product-critical] F3: remove `Read` from the `news` routine if its prompt does not need it; otherwise scope it to the paths it does need. Verify: a unit test asserts the grant set. Done: #61, merged as 0fca8a2.
+- [x] 4.3 [product-critical] `groundwork routines schedule` saves the new hour and minute to `config.json`. Verify: a test shows `routines list` printing the new time after `schedule`. Done: #61, merged as 0fca8a2.
 - [ ] 4.4 [release-critical] Re-run each narrowed routine live in a sandbox config directory. Verify: each run's result file shows success, or a documented, expected "not configured" state.
-- [ ] 4.5 [release-critical] Record F14 (`jira_eod` MCP grant) as a known limitation in the routines documentation, with the deferral justification from design D2. Verify: the docs line exists and names the justification.
+- [x] 4.5 [release-critical] Record F14 (`jira_eod` MCP grant) as a known limitation in the routines documentation, with the deferral justification from design D2. Verify: the docs line exists and names the justification. Done: #61, merged as 0fca8a2.
 
 ## 5. M1: Release 2.5.0
 
