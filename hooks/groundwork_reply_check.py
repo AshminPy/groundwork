@@ -13,10 +13,10 @@ Stop: when the turn used a real tool (bookkeeping tools such as ToolSearch do no
 final reply (`last_assistant_message`) must have:
   - a plain-language result first (not a Technical details / Evidence / metadata heading);
   - a `Technical details` section when Bash ran;
-  - at least one reference: a URL, file:line or file path. The reminder asks for an
-    `Evidence & references` section, but the check accepts references anywhere: on the 40 saved
-    benchmark answers every one cited file:line inline and 34 had no such heading, so blocking on
-    the heading would cost a follow-up on most turns for style, not evidence;
+  - an `Evidence & references` section (or `Evidence`) with at least one URL, file:line or
+    file path inside it, so every reply carries the sources a reader can check and reuse. The owner
+    asked for this after first measuring that 34 of 40 saved benchmark answers cited file:line only
+    inline: a reference anywhere is not enough, it must be in the section;
   - the `HARNESS METADATA` block.
 If anything is missing it returns `decision: "block"` once, naming the missing parts; Claude
 then adds them. It never asks twice: when `stop_hook_active` is true (Claude is already
@@ -46,6 +46,8 @@ TECH_HEAD = re.compile(HEADING.format(name=r"Technical details"), re.MULTILINE |
 EVID_HEAD = re.compile(HEADING.format(name=r"Evidence(?:[ \t]*(?:&|and)[ \t]*references)?"), re.MULTILINE | re.IGNORECASE)
 # Every repeat is bounded and the file:line form starts only at a token start: an unbounded form
 # backtracked cubically on one long token (a pasted hash took >80 s at 4,000 characters, review finding).
+# The Evidence section ends at the next heading line or code fence (so the metadata block never counts).
+SECTION_END = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+\S|\*\*[^*\n]{1,80}\*\*[ \t]*:?[ \t]*$|```)", re.MULTILINE)
 REFERENCE = re.compile(
     r"https?://\S+"                                         # a link
     r"|(?<![\w./-])[\w./-]{1,200}\.\w{1,10}:\d+"             # file:line (file:line-range too)
@@ -61,7 +63,7 @@ REMINDER = (
 MISSING_TEXT = {
     "explanation": "a plain-language result first (the reply opens with a section heading instead)",
     "technical_details": "a `Technical details` section (commands ran this turn)",
-    "evidence": "an `Evidence & references` section with at least one link or file:line (the reply cites no source)",
+    "evidence": "an `Evidence & references` section listing at least one link or file:line that supports the result",
     "metadata": "the fenced `HARNESS METADATA` block at the end",
 }
 
@@ -85,6 +87,15 @@ def real_tools(tools) -> list:
     return [t for t in tools or [] if t not in BOOKKEEPING and not str(t).startswith(BOOKKEEPING_PREFIXES)]
 
 
+def evidence_ok(text: str) -> bool:
+    """An Evidence heading followed, before the next section or code fence, by at least one reference."""
+    for m in EVID_HEAD.finditer(text):
+        end = SECTION_END.search(text, m.end() + 1)
+        if REFERENCE.search(text[m.end():end.start() if end else len(text)][:20_000]):
+            return True
+    return False
+
+
 def check_reply(text: str, tools) -> list:
     """Missing parts of a final reply, in reading order. Empty when the turn used no real tool."""
     used = real_tools(tools)
@@ -98,7 +109,7 @@ def check_reply(text: str, tools) -> list:
         missing.append("explanation")
     if "Bash" in used and not TECH_HEAD.search(text):
         missing.append("technical_details")
-    if not REFERENCE.search(text):
+    if not evidence_ok(text):
         missing.append("evidence")
     if META_HEADING is None or not META_HEADING.search(text):
         missing.append("metadata")

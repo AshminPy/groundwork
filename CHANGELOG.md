@@ -13,8 +13,10 @@
     missing it asks Claude once to add only that part. It never asks twice (`stop_hook_active`), never touches chat
     turns, and fails open. Claude Code labels this one-time request "Stop hook error" in the app; that is its label for
     any Stop-hook request, not a failure. `GROUNDWORK_REPLY_CHECK=off` disables it.
-  - References are accepted anywhere in the reply: all 40 saved benchmark answers cited `file:line` inline and 34 had
-    no `Evidence & references` heading, so blocking on the heading would cost a follow-up on most turns for style.
+  - Every tool-using reply must have an `Evidence & references` section with at least one link or file:line in it,
+    so each answer carries sources a reader can check and reuse when explaining a decision. Cost, measured: 34 of 40
+    saved benchmark answers cited only inline and would get one follow-up; in a live run the reminder alone did not
+    produce the section and one follow-up did.
 
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,

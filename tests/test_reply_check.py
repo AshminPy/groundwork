@@ -88,8 +88,15 @@ def test_check_reply() -> None:
     check("reply with no reference anywhere is reported", m.check_reply(no_ref, ["Bash"]) == ["evidence"])
     check("no Evidence section and no reference is reported", m.check_reply(FULL.replace(EVID, ""), ["Bash"]) == ["evidence"])
     inline = FULL.replace(EVID, "").replace("Complete.", "Complete. The fix is at `hooks/parser.py:42`.")
-    check("inline file:line without a section is accepted (baseline: 40/40 real answers cite inline)",
-          m.check_reply(inline, ["Bash"]) == [], str(m.check_reply(inline, ["Bash"])))
+    check("inline file:line without an Evidence & references section is reported (owner: links in every reply)",
+          m.check_reply(inline, ["Bash"]) == ["evidence"], str(m.check_reply(inline, ["Bash"])))
+    empty_section = FULL.replace("- `hooks/parser.py:42` — the new empty-input branch", "- see above")
+    check("an Evidence section with no link or file:line inside it is reported",
+          m.check_reply(empty_section + "\nAlso `hooks/parser.py:42`.", ["Bash"]) == ["evidence"])
+    in_meta = FULL.replace(EVID, "").replace("Validation:  verified", "Validation:  verified https://example.com/x")
+    check("a link inside the metadata block does not count as the Evidence section", "evidence" in m.check_reply(in_meta, ["Bash"]))
+    read_only = FULL.replace(TECH, "").replace(EVID, "")
+    check("read-only tool turns need the Evidence section too", m.check_reply(read_only, ["Read"]) == ["evidence"])
     for heading in ("## Evidence & references", "Evidence and references", "**Evidence**", "### Evidence & References"):
         variant = FULL.replace("**Evidence & references**", heading)
         check(f"evidence heading variant accepted: {heading}", m.check_reply(variant, ["Bash"]) == [])
