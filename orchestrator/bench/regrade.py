@@ -29,6 +29,7 @@ def main(argv: list[str]) -> int:
     meta = json.loads((run_dir / "meta.json").read_text())
     meta["regraded"] = True
     meta["graded_with_fingerprint"] = freeze.current()   # the grader that produced these grades
+    (run_dir / "meta.json").write_text(json.dumps(meta, indent=1))
     (run_dir / "report.md").write_text(report.render(dst, meta))
     changed = [(r["case"], r["arm"], r["rep"]) for r in rows if r["grade"]["correct"] != r["grade_original"]["correct"]]
     print(f"regraded {len(rows)} rows; correctness changed for {len(changed)}: {changed}")

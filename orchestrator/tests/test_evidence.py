@@ -129,12 +129,15 @@ def test_repo_claim_needs_a_code_source_and_vendor_claim_needs_a_doc(ws):
         ("UNVERIFIED", "missing_required_source"), ("UNVERIFIED", "missing_required_source")]
 
 
-def test_a_claim_about_what_a_repo_doc_says_needs_a_doc_source(ws):
+def test_a_claim_about_what_a_repo_doc_says_needs_a_located_source(ws):
+    """repo_doc may cite any located file: docstrings and comments in code are documentation too (the M2 after-run
+    showed a true 'the refunds.py docstring says ...' claim being rejected when only .md files counted)."""
     (ws / "CHANGELOG.md").write_text("# Changelog\n- Refunds are validated before they are sent.\n")
     says = claim("The changelog says refunds are validated", "CHANGELOG.md", 2, "Refunds are validated", "repo_doc")
-    from_code = claim("The changelog says 2024-06", "config.py", 1, 'API_VERSION = "2024-06"', "repo_doc")
-    assert statuses(evidence.assess([says, from_code], str(ws))) == [
-        ("UNVERIFIED", "not_reviewed"), ("UNVERIFIED", "missing_required_source")]
+    missing = claim("The changelog says refunds are validated", "CHANGELOG.md", 2, "Refunds are never validated",
+                    "repo_doc")
+    assert statuses(evidence.assess([says, missing], str(ws))) == [
+        ("UNVERIFIED", "not_reviewed"), ("UNVERIFIED", "not_located")]
 
 
 def test_changed_source_is_stale_until_revalidated_never_contradicted(ws):
@@ -210,3 +213,19 @@ def test_quotes_about_a_different_setting_or_a_bound_never_contradict(ws, text, 
     (ws / "s.py").write_text(quote + "\n")
     found = evidence.assess([claim(text, "s.py", 1, quote, value=value)], str(ws))
     assert found["claims"][0]["status"] != "CONTRADICTED", found["claims"][0]
+
+
+def test_a_claim_that_names_the_other_version_is_about_that_doc_and_is_accepted(ws):
+    """Real M2 after-run drafts: 'The older 2023-01 reference says 180 days, but it is not the version the repo uses.'"""
+    named = claim("The older 2023-01 doc says the max page size is 50, but that is not the version in use",
+                  "docs/api-2023-01.md", 3, "Maximum page size: 50.", "vendor_doc", value="50")
+    unnamed = claim("Max page size is 50", "docs/api-2023-01.md", 3, "Maximum page size: 50.", "vendor_doc", value="50")
+    assert statuses(evidence.assess([PIN, named, unnamed], str(ws)))[1:] == [
+        ("UNVERIFIED", "not_reviewed"), ("UNVERIFIED", "version_mismatch")]
+
+
+def test_a_repo_doc_claim_may_cite_a_docstring_in_code(ws):
+    (ws / "refunds.py").write_text('"""Refund validation, run before create_refund is called."""\n')
+    c = claim("The refunds.py docstring says validation runs before create_refund", "refunds.py", 1,
+              "Refund validation, run before create_refund is called.", "repo_doc")
+    assert statuses(evidence.assess([c], str(ws))) == [("UNVERIFIED", "not_reviewed")]

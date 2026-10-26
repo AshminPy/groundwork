@@ -177,3 +177,31 @@ def test_warning_about_a_caller_retrying_is_not_a_false_claim(text):
 def test_claiming_the_client_retries_a_500_is_still_wrong():
     text = "PayAPIError is raised only after the client retries the 500 three times, not without retrying."
     assert not grade.grade(grade.load_key("e1-refund-500"), text)["correct"]
+
+
+def test_describing_an_old_doc_that_mentions_offset_is_not_recommending_it():
+    """Real after-run answer (m2-after a1 r1): correct decision, plus an evidence line describing ARCHITECTURE.md."""
+    text = ("Decision: use cursor pagination. Offset returns at most 10,000 results "
+            "(vendor-docs/payapi-2024-06.md:5).\n- [unverified: quote located; support not reviewed] ARCHITECTURE.md "
+            "says invoices use offset pagination, but it is dated 2023-02 (docs/ARCHITECTURE.md:5)")
+    assert grade.grade(grade.load_key("a1-pagination-decision"), text)["correct"]
+
+
+@pytest.mark.parametrize("text", ["Decision: use offset pagination; 10,000 is enough (vendor-docs/payapi-2024-06.md:5).",
+                                  "We should keep offset pagination. Cursor is not needed below 10,000.",
+                                  "**Recommendation: stick with offset**, despite the 10,000 cap."])
+def test_actually_recommending_offset_is_still_wrong(text):
+    assert not grade.grade(grade.load_key("a1-pagination-decision"), text)["correct"]
+
+
+def test_regrade_records_the_grader_it_used(tmp_path):
+    from bench import freeze, regrade
+    row = {"case": "q2-default-timeout", "arm": "A", "rep": 1, "category": "Q", "final_text": "7.5 s (payapi/config.py:10)",
+           "ok": True, "wall_s": 1.0, "sessions": 1, "usage": {"input": 0, "cache_read": 0, "cache_creation": 0,
+                                                              "output": 0}, "grade": {"correct": False}}
+    (tmp_path / "results.jsonl").write_text(json.dumps(row) + "\n")
+    (tmp_path / "meta.json").write_text(json.dumps({"run_id": "t", "cases": ["q2-default-timeout"], "repeats": 1,
+                                                    "grader_fingerprint": "old"}))
+    regrade.main([str(tmp_path)])
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["graded_with_fingerprint"] == freeze.current() and meta["grader_fingerprint"] == "old"

@@ -208,14 +208,16 @@ def assess(claims: list[dict] | None, workspace: str) -> dict:
         if not reason and c["domain"] == "vendor_doc":
             docs = [r for r in located if _is_doc(r["path"])]
             for r in docs:
-                r["applicable"] = not (len(pinned) == 1 and r.get("doc_version") and r["doc_version"] not in pinned)
+                # A claim that names the doc's own version ("the older 2023-01 doc says ...") is a statement about
+                # that doc, so the doc applies to it. Otherwise the doc must be for the version the repository pins.
+                names_it = bool(r.get("doc_version")) and r["doc_version"] in c["text"]
+                r["applicable"] = names_it or not (len(pinned) == 1 and r.get("doc_version")
+                                                   and r["doc_version"] not in pinned)
             if not docs:
                 reason = "missing_required_source"
             elif not any(r["applicable"] for r in docs):
                 reason = "version_mismatch"
         if not reason and c["domain"] == "repo_code" and all(_is_doc(r["path"]) for r in located):
-            reason = "missing_required_source"
-        if not reason and c["domain"] == "repo_doc" and not any(_is_doc(r["path"]) for r in located):
             reason = "missing_required_source"
         if not reason and c.get("value"):
             # A vendor claim's value is checked against the applicable documentation only, never against code.

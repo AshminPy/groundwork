@@ -6,7 +6,9 @@
   "10[,.]?000"
  ],
  "forbidden": [
-  "(?<!not )(?<!n't )(?<!never )(?<!than )\\b(use|recommend|choose|go with|stick with|keep)\\s+(\\*\\*)?offset"
+  "\\b(decision|recommendation|verdict|answer)\\b\\W{0,4}(use|keep|stick with|go with|choose)\\s+(\\*\\*)?offset",
+  "\\b(we|you) should (use|keep|stick with|go with|choose)\\s+(\\*\\*)?offset",
+  "\\b(recommend|suggest)\\w*\\s+(using |keeping |the )?offset"
  ],
  "expected_files": [
   "payapi/client.py",
