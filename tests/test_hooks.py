@@ -1290,9 +1290,9 @@ def test_settings_merge() -> None:
         data = load(fresh)
         events = ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "PreCompact")
         cmds = [h["command"] for ev in events for g in data["hooks"][ev] for h in g["hooks"]]
-        check("fresh: thirteen hook entries registered (six hook scripts; telemetry three times, task gate four times, brief three times)",
-              len(cmds) == 13 and sum(1 for c in cmds if "telemetry" in c) == 3 and sum(1 for c in cmds if "task_gate" in c) == 4
-              and sum(1 for c in cmds if "groundwork_brief" in c) == 3
+        check("fresh: fifteen hook entries registered (seven hook scripts; telemetry three times, task gate four times, reply check twice, brief three times)",
+              len(cmds) == 15 and sum(1 for c in cmds if "telemetry" in c) == 3 and sum(1 for c in cmds if "task_gate" in c) == 4
+              and sum(1 for c in cmds if "reply_check" in c) == 2 and sum(1 for c in cmds if "groundwork_brief" in c) == 3
               and any("snapshot" in c for c in cmds) and "UserPromptExpansion" not in data["hooks"], r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))
         tel = [g for ev in ("PostToolUse", "PostToolUseFailure") for g in data["hooks"][ev] if "telemetry" in g["hooks"][0]["command"]]

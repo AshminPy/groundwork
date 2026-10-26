@@ -158,6 +158,7 @@ groundwork routines doctor           # readiness detail for every routine
 groundwork routines doctor jira_eod  # readiness detail for just one routine
 groundwork routines schedule news daily --hour 8 --minute 0   # change a routine's schedule
 groundwork statusline config list    # every statusLine display setting and its current value
+groundwork usage --window 5h         # which sessions used the plan most (also: --window 7d)
 groundwork statusline config set show_cost true   # change one setting (`config unset KEY` reverts it)
 groundwork task list                 # open tasks in this repository (--all: every repository)
 groundwork task show COR-123         # one task: phase, progress, verification, review, history

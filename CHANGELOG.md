@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Reply format is now checked by a hook, not only asked for by rules** (feature 6 of
+  `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_reply_check.py`). Measured gap: in this repo's own
+  sessions, 31 of 51 tool-using turns ended without the `HARNESS METADATA` block.
+  - At prompt time it adds a short format reminder. When a conservative keyword route picks exactly one task type it
+    also adds that playbook's Output Format, so playbook formats finally reach the session. Ambiguous prompts get the
+    reminder only.
+  - At Stop, for turns that used a real tool, it checks the final reply for a plain-language opening, `Technical
+    details` when commands ran, at least one reference (link, file:line or path), and the metadata block. If a part is
+    missing it asks Claude once to add only that part. It never asks twice (`stop_hook_active`), never touches chat
+    turns, and fails open. Claude Code labels this one-time request "Stop hook error" in the app; that is its label for
+    any Stop-hook request, not a failure. `GROUNDWORK_REPLY_CHECK=off` disables it.
+  - Every tool-using reply must have an `Evidence & references` section with at least one link or file:line in it,
+    so each answer carries sources a reader can check and reuse when explaining a decision. Cost, measured: 34 of 40
+    saved benchmark answers cited only inline and would get one follow-up; in a live run the reminder alone did not
+    produce the section and one follow-up did.
+
+- **Usage visibility: which sessions used the plan** (feature 2 of `openspec/changes/core-evidence-continuity/`).
+  The statusLine now appends at most one record per session per minute to
+  `~/.claude/groundwork/telemetry/usage.jsonl` (owner-only): session id, project folder name, model id,
+  Claude Code's cumulative cost estimate, context %, and the account-wide 5-hour/7-day plan usage % (Pro/Max only),
+  or the spend-limit % behind a Claude apps gateway (typical for a work account; shown as `spend 62%`).
+  No prompt, reply, path or command text, and no session name (it can come from the first prompt); records older
+  than 8 days are trimmed once the file passes 1 MB. `groundwork usage [--window 5h|7d]` ranks sessions by how much their cost
+  estimate grew in the window (a lower bound: a counter reset such as `/clear` is skipped, never guessed). Plan
+  limits are shared by every session and claude.ai, so the report never says one session exceeded a limit. A new
+  `show_plan_usage` statusLine setting (default on) adds `5h 82%` when Claude Code sends plan usage. A failed write
+  never affects the statusLine.
+
 - **Per-task brief that survives compaction and new sessions** (feature 3 of
   `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_brief.py`). Continuity no longer depends on Claude
   remembering to write a state file or to read a "READ FIRST" pointer.

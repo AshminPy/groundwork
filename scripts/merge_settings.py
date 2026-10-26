@@ -6,10 +6,11 @@ Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwr
 the file wholesale — only adds/updates the specific keys Groundwork owns:
   - hooks.PreToolUse / hooks.Stop / hooks.SessionStart / hooks.PostToolUse /
     hooks.PostToolUseFailure / hooks.UserPromptSubmit:
-    appends Groundwork's thirteen hook entries (six hook scripts;
+    appends Groundwork's fifteen hook entries (seven hook scripts;
     groundwork_telemetry.py is registered three times — Stop for its per-turn
     record, PostToolUse/PostToolUseFailure for its per-tool-call record —
-    groundwork_task_gate.py four times, see TASK_GATE_EVENTS, and
+    groundwork_task_gate.py four times, see TASK_GATE_EVENTS,
+    groundwork_reply_check.py twice, see REPLY_CHECK_EVENTS, and
     groundwork_brief.py three times, see BRIEF_EVENTS) if not already
     present (matched by command string, so re-running never duplicates). A task-gate
     entry left by an older install under an event no longer listed is removed.
@@ -60,6 +61,13 @@ TASK_GATE_EVENTS = (  # (event, matcher, timeout seconds, status message)
     ("PostToolUseFailure", "Bash", 20, "Groundwork task evidence..."),
 )
 RETIRED_TASK_GATE_EVENTS = ("UserPromptExpansion",)
+# Reply format check (feature 6 of openspec/changes/core-evidence-continuity): a format reminder at prompt time and
+# a once-only check of the final reply at Stop.
+REPLY_CHECK_CMD = "python3 ~/.claude/hooks/groundwork_reply_check.py"
+REPLY_CHECK_EVENTS = (  # (event, timeout seconds, status message)
+    ("UserPromptSubmit", 5, "Groundwork reply format reminder..."),
+    ("Stop", 10, "Checking Groundwork reply format..."),
+)
 # Per-task brief (feature 3 of openspec/changes/core-evidence-continuity): reload at session start, snapshot before
 # compaction and after tool-using turns, and one request per session for Goal/Next step.
 BRIEF_CMD = "python3 ~/.claude/hooks/groundwork_brief.py"
@@ -243,6 +251,11 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
         if not has_command(groups, TASK_GATE_CMD):
             groups.append(hook_entry(TASK_GATE_CMD, message, matcher=matcher, timeout=timeout))
             changed.append(f"hooks.{event}: groundwork_task_gate.py")
+    for event, timeout, message in REPLY_CHECK_EVENTS:
+        groups = hooks.setdefault(event, [])
+        if not has_command(groups, REPLY_CHECK_CMD):
+            groups.append(hook_entry(REPLY_CHECK_CMD, message, timeout=timeout))
+            changed.append(f"hooks.{event}: groundwork_reply_check.py")
     for event, timeout, message in BRIEF_EVENTS:
         groups = hooks.setdefault(event, [])
         if not has_command(groups, BRIEF_CMD):
