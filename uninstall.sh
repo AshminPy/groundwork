@@ -11,11 +11,12 @@
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py,
-#     groundwork_task_gate.py, groundwork_tasks.py, and the retired owner commands
+#     groundwork_task_gate.py, groundwork_tasks.py, groundwork_reply_check.py, and the retired owner commands
 #     ~/.claude/commands/gw-approve.md and gw-cancel.md that earlier builds installed
 #     (the task ledger under ~/.claude/groundwork/tasks/ is kept — it is your data)
-#   - the hook entries (five hook scripts; groundwork_telemetry.py registers three — Stop,
-#     PostToolUse, PostToolUseFailure — and groundwork_task_gate.py four), the deny rules,
+#   - the hook entries (six hook scripts; groundwork_telemetry.py registers three — Stop,
+#     PostToolUse, PostToolUseFailure — groundwork_task_gate.py four, and
+#     groundwork_reply_check.py two), the deny rules,
 #     and the env defaults this repo's install.sh added to settings.json (via
 #     scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
@@ -79,6 +80,7 @@ rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/hooks/groundwork_shared.py" \
       "$CLAUDE_DIR/hooks/groundwork_task_gate.py" \
       "$CLAUDE_DIR/hooks/groundwork_tasks.py" \
+      "$CLAUDE_DIR/hooks/groundwork_reply_check.py" \
       "$CLAUDE_DIR/commands/gw-approve.md" \
       "$CLAUDE_DIR/commands/gw-cancel.md"
 rmdir "$CLAUDE_DIR/commands" 2>/dev/null || true
@@ -121,7 +123,8 @@ rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_telemetry.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_task_gate.*.pyc \
-      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_tasks.*.pyc 2>/dev/null || true
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_tasks.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_reply_check.*.pyc 2>/dev/null || true
 rmdir "$CLAUDE_DIR/hooks/__pycache__" 2>/dev/null || true
 if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ] || [ -d "$CLAUDE_DIR/groundwork/tasks" ]; then
   for kept in telemetry reports investigations tasks; do
