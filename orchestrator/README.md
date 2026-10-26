@@ -35,13 +35,21 @@ groundwork query ─► groundwork_cli.py (pass-through) ─► orchestrator ven
 
 | Category | Worker tools | Writes | Validated by |
 |---|---|---|---|
-| QUESTION | Read, Grep, Glob | never | workspace unchanged; every cited file exists |
+| QUESTION | Read, Grep, Glob | never | workspace unchanged; every cited file exists; each claim's quote is found at its cited lines (Evidence Engine, below) |
 | DOCUMENTATION | read tools (+Edit/Write with `--allow-write`) | worktree, after approval | cited files exist; write scope |
 | TROUBLESHOOTING | read tools (+Edit/Write/Bash for your checks with `--allow-write`) | worktree, after approval | checks run before (symptom) and after (fix) |
 | PROJECT | read + Edit/Write + Bash for your checks | worktree, after approval | your checks; write scope; non-empty diff |
 
 - **Writes.** They happen only in `~/.claude/groundwork/orchestrator/worktrees/<task>` on branch `gw/<task>`. The orchestrator never commits, pushes, merges or releases. You review and merge the branch yourself.
 - **Repairs.** A failed check sends its real output back to the **same** worker session (`--resume`), at most twice. Login, quota, permission, model and timeout failures never trigger a repair. They block the task until you resume it.
+- **Answer evidence (QUESTION).** The worker lists each claim with a verbatim quote and its file and lines. `evidence.py` checks in code:
+  - the quote is at those lines;
+  - provenance: the commit, the file's git hash, whether it is dirty, and when it was checked;
+  - the file has not changed by the time the final status is given;
+  - the right kind of source: code for code claims, docs for doc claims, and the vendor doc for the API version the repository pins;
+  - a contradiction only when a located, current quote about the same setting states a different value.
+
+  A claim that fails gets one repair turn. If it still fails, it is shown as UNVERIFIED with its reason, not as a task failure. With no independent reviewer yet, a claim whose quote was found is "quote located; support not reviewed", never "verified". The answer gets CONTRADICTED, UNVERIFIED or PARTIALLY_SUPPORTED, printed with each claim's status and an "Uncertain:" list.
 - **Final status.**
   - `VERIFIED`: your checks passed on the changed code, and the diff matches what the worker reported.
   - `PARTIALLY_VERIFIED`: the deterministic checks passed, but the content itself (an answer, a document) is not machine-checked, or the diff has files the worker did not report.
@@ -121,7 +129,7 @@ python3 -m venv orchestrator/.venv && orchestrator/.venv/bin/pip install -r orch
 - [!] **Groundwork's task-intake hook runs inside each worker.** In a worktree it can create a separate ledger task and `openspec/` files. They are reported as unaccounted changes, so such a task is at most PARTIALLY_VERIFIED. The planned fix is an intake-only switch in the task gate, after the pending 2.5.0 work lands.
 - A worker may be unable to run your check itself when the check has quoted arguments (`python3 -c "…"`). The allow rule or the task gate denies it in `-p`. The orchestrator still runs the check and decides. Prefer simple check commands such as `python3 check.py`.
 - `total_cost_usd` is Claude Code's client-side estimate. Whether a call draws from plan limits or from a plan's monthly API credits is not visible from the CLI.
-- An answer's correctness is not machine-checked: only that it changed nothing and that every cited file exists.
+- An answer's correctness is not machine-checked. The Evidence Engine proves that each quoted line exists and fits the claim's value. It does not prove that the quote supports the claim's meaning: that needs the independent reviewer (M3). Only file sources are checked: no URLs and no command probes.
 - [!] Checks run code the worker wrote, as you, before you review the diff. Secret-looking environment variables are removed, but files in your home directory (for example `~/.aws`) are readable. The approval screen says so. A real sandbox is later work.
 - If a task is blocked and you edit the workspace yourself meanwhile, a read-only task will report `unauthorized_write`, because the workspace fingerprint was taken before the worker ran.
 - Write tasks start from the workspace's last commit. Uncommitted changes in your workspace are not in the worktree.
