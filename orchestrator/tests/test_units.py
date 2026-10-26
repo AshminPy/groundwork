@@ -278,3 +278,47 @@ def test_stop_group_waits_for_every_member():
     stop_group(p.pid, grace_s=2)
     p.wait(timeout=5)
     assert not group_alive(p.pid)
+
+
+# ---------------------------------------------------------------- change requests vs questions (M2 classifier fix)
+CITE = " Cite the files (with line numbers) that support each part of your answer."
+
+
+@pytest.mark.parametrize("text", [
+    # The two M1 benchmark questions PR #62 misrouted to PROJECT because "support" is a change keyword.
+    "We need a nightly export of about 50,000 invoices. Given the documented limits of the PayAPI version this "
+    "repository uses and the existing client, should we use offset pagination or cursor pagination? Give a decision "
+    "and the evidence." + CITE,
+    "As the code is today, is it safe for create_refund to be retried automatically on a 503? Start with yes or no, "
+    "then give the decision and the evidence." + CITE,
+    "Which HTTP status codes does this client retry on?" + CITE,
+    "Should we add retries to create_refund?",
+    "Does the client support cursor pagination?",
+])
+def test_questions_that_mention_change_words_stay_questions(text):
+    c = classifier.rule_classify(text)
+    assert c is not None and c["category"] == "QUESTION", (classifier.scores(text), c)
+
+
+@pytest.mark.parametrize("text", [
+    "Add retries to create_refund.",
+    "Please refactor the client into smaller modules",
+    "Can you add a --dry-run flag to the CLI?",
+    "We need you to support cursor pagination in list_invoices.",
+    "Read the client and then replace offset pagination with cursor pagination.",
+])
+def test_requested_changes_are_projects(text):
+    c = classifier.rule_classify(text)
+    assert c is not None and c["category"] == "PROJECT", (classifier.scores(text), c)
+
+
+@pytest.mark.parametrize("text,cat", [
+    ("According to the vendored PayAPI documentation for the API version this repository uses, what is the maximum "
+     "page size when listing invoices?" + CITE, "QUESTION"),
+    ("What does the README say about installation?", "QUESTION"),
+    ("Document each public function in payapi/client.py with a one-line description.", "DOCUMENTATION"),
+    ("Write a short 'Configuration' section for the README.", "DOCUMENTATION"),
+])
+def test_documentation_means_a_request_to_write_docs(text, cat):
+    c = classifier.rule_classify(text)
+    assert c is not None and c["category"] == cat, (classifier.scores(text), c)
