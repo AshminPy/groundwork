@@ -85,21 +85,22 @@ def render(results: Path, meta: dict) -> str:
     rows = _rows(results)
     s = summarize(rows)
     arms = sorted(s)
-    lines = [f"# M1 pilot report — {meta['run_id']}", "", f"> {PILOT_NOTE}", "", f"> {FAIRNESS_NOTE}", ""]
+    lines = [f"# M1 pilot report — {meta['run_id']}", "", f"> {PILOT_NOTE}", "", f"> {meta.get('fairness_note') or FAIRNESS_NOTE}", ""]
     if meta.get("stop_reason"):
         lines += [f"[!] Stopped early: {meta['stop_reason']}", ""]
     lines += ["| Metric | " + " | ".join(f"Arm {a}" for a in arms) + " |", "|---|" + "---|" * len(arms)]
     for k, label in LABELS:
         lines.append(f"| {label} | " + " | ".join(str(s[a][k]) for a in arms) + " |")
     reps = range(1, meta.get("repeats", 2) + 1)
-    heads = [f"{arm} r{rep}" for arm in ("A", "B") for rep in reps]
+    run_arms = meta.get("arms") or ["A", "B"]
+    heads = [f"{arm} r{rep}" for arm in run_arms for rep in reps]
     lines += ["", "## Per case (✓ correct, ✗ wrong, ∅ no answer, — not run)", "",
               "| Case | Cat | " + " | ".join(heads) + " |", "|---|---|" + "---|" * len(heads)]
     cell = {(r["case"], r["arm"], r["rep"]): r for r in rows}
     for case in meta["cases"]:
         cat = next((r["category"] for r in rows if r["case"] == case), "")
         marks = []
-        for arm in ("A", "B"):
+        for arm in run_arms:
             for rep in reps:
                 r = cell.get((case, arm, rep))
                 if not r:

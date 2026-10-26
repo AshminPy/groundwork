@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,36 @@ def _done(results: Path) -> set[tuple]:
     return done
 
 
+CONFIG_ARMS = {"V": ("GW_BENCH_VANILLA", "~/gw-bench/vanilla"), "G": ("GW_BENCH_GROUNDWORK", "~/gw-bench/groundwork")}
+
+
+def arm_config_dir(arm: str) -> str | None:
+    """V = vanilla Claude Code, G = Groundwork 2.5.0: each a separate, logged-in CLAUDE_CONFIG_DIR. A and B: None."""
+    if arm not in CONFIG_ARMS:
+        return None
+    var, default = CONFIG_ARMS[arm]
+    return os.path.expanduser(os.environ.get(var) or default)
+
+
+def pair_order(wanted: set, k: int) -> list[str]:
+    """The two arms of one case x repeat, alternating which goes first so caching and timing even out."""
+    pair = ["V", "G"] if wanted & set(CONFIG_ARMS) else ["A", "B"]
+    return pair if k % 2 == 0 else pair[::-1]
+
+
+def preflight_dir(config_dir: str) -> tuple[bool, str]:
+    """The subscription preflight, run against one config dir's own login."""
+    old = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = config_dir
+    try:
+        return preflight()
+    finally:
+        if old is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = old
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs-dir", required=True)
@@ -87,6 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print(f"BLOCKED: {detail}", file=sys.stderr)
         return 4
+    for arm in sorted(set(a.arms.split(",")) & set(CONFIG_ARMS)):
+        ok, detail = preflight_dir(arm_config_dir(arm))
+        if not ok:
+            print(f"BLOCKED: arm {arm} ({arm_config_dir(arm)}): {detail}", file=sys.stderr)
+            return 4
     run_dir.mkdir(parents=True, exist_ok=True)
     with (run_dir / "canary.log").open("a") as log:
         passed = canary.run_gate(out=log)
@@ -106,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         key = grade.load_key(case)
         instruction = (BENCH / "tasks" / case / "instruction.md").read_text().strip()
         for rep in range(1, a.repeats + 1):
-            order = ["A", "B"] if (ci + rep) % 2 == 0 else ["B", "A"]
+            order = pair_order(wanted, ci + rep)
             pending_stop = None
             for pos, arm in enumerate(order):
                 if arm not in wanted or (case, arm, rep) in done or stop_reason:
@@ -117,8 +153,8 @@ def main(argv: list[str] | None = None) -> int:
                 cell.mkdir(parents=True)
                 ws = _fresh_workspace(cell, "payments-client")
                 started = datetime.now(timezone.utc).isoformat()
-                if arm == "A":
-                    out = arms.run_arm_a(ws, instruction, ARM_A_MODEL, ARM_A_EFFORT)
+                if arm in ("A", *CONFIG_ARMS):
+                    out = arms.run_arm_a(ws, instruction, ARM_A_MODEL, ARM_A_EFFORT, config_dir=arm_config_dir(arm))
                     (cell / "stream.jsonl").write_text(out.pop("raw_stdout"))
                 else:
                     out = arms.run_arm_b(ws, instruction, cell / "orch-home")
@@ -130,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                 g = row["grade"]
                 print(f"{case} {arm} r{rep}: {'correct' if g['correct'] else 'WRONG'} "
                       f"({g['facts_found']}/{g['facts_required']} facts, {out['wall_s']}s, ok={out['ok']})", flush=True)
-                if arm == "A":
+                if arm in ("A", *CONFIG_ARMS):
                     pending_stop = _over_quota(out.get("rate_limit")) or pending_stop
             if pending_stop:
                 stop_reason = pending_stop          # stop only after the A/B pair for this repeat is complete
@@ -139,6 +175,11 @@ def main(argv: list[str] | None = None) -> int:
             "cases": cases, "stop_reason": stop_reason, "arm_a": {"model": ARM_A_MODEL, "effort": ARM_A_EFFORT},
             "new_ledger_entries": sorted(ledger_after - ledger_before), "arms": sorted(wanted),
             "grader_fingerprint": freeze.current(), "code_commit": _git_head()}
+    if wanted & set(CONFIG_ARMS):
+        meta["config_dirs"] = {arm: arm_config_dir(arm) for arm in sorted(wanted & set(CONFIG_ARMS))}
+        meta["fairness_note"] = ("Same request text, read-only tools, read fence, model (sonnet/medium) and plain `claude -p` "
+                                 "launch in both arms. The only difference is the Claude Code config dir: V is a fresh "
+                                 "vanilla install; G is the same plus Groundwork 2.5.0 (rules, hooks, ECC, OpenSpec).")
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=1))
     (run_dir / "report.md").write_text(report.render(results, meta))
     print(f"report: {run_dir / 'report.md'}" + (f" (stopped early: {stop_reason})" if stop_reason else ""))

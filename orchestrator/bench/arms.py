@@ -76,11 +76,17 @@ def _outside(ws: Path, tool_input: dict) -> bool:
     return not str(p.resolve()).startswith(str(ws.resolve()))
 
 
-def run_arm_a(ws: Path, instruction: str, model: str, effort: str, timeout_s: int = TIMEOUT_S) -> dict:
+def run_arm_a(ws: Path, instruction: str, model: str, effort: str, timeout_s: int = TIMEOUT_S,
+              config_dir: str | None = None) -> dict:
+    """Plain `claude -p`. With config_dir, Claude Code runs on that config dir (its own login, settings, hooks,
+    rules and plugins) — how the V (vanilla) and G (Groundwork 2.5.0) arms differ and nothing else."""
     start = time.monotonic()
+    env = clean_env()
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
     try:
         p = subprocess.run(arm_a_argv(model, effort), cwd=ws, input=instruction, capture_output=True, text=True,
-                           env=clean_env(), timeout=timeout_s)
+                           env=env, timeout=timeout_s)
         stdout, stderr, code = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         out = e.stdout or ""

@@ -205,3 +205,63 @@ def test_regrade_records_the_grader_it_used(tmp_path):
     regrade.main([str(tmp_path)])
     meta = json.loads((tmp_path / "meta.json").read_text())
     assert meta["graded_with_fingerprint"] == freeze.current() and meta["grader_fingerprint"] == "old"
+
+
+# --- Vanilla (V) vs Groundwork 2.5.0 (G): the same plain `claude -p` launch, each with its own config dir ---
+
+def test_run_arm_a_points_claude_at_the_given_config_dir(tmp_path, monkeypatch):
+    from bench import arms
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["env"] = kw["env"]
+        class P:
+            stdout, stderr, returncode = "", "", 0
+        return P()
+    monkeypatch.setattr(arms.subprocess, "run", fake_run)
+    arms.run_arm_a(tmp_path, "q", "sonnet", "medium", config_dir="/tmp/cfg-v")
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/tmp/cfg-v"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/real/home/.claude")
+    arms.run_arm_a(tmp_path, "q", "sonnet", "medium")
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/real/home/.claude"   # arm A unchanged: inherits the caller's env
+
+
+def test_v_and_g_arms_resolve_to_separate_config_dirs(monkeypatch):
+    from bench import run
+    monkeypatch.setenv("GW_BENCH_VANILLA", "/x/vanilla")
+    monkeypatch.setenv("GW_BENCH_GROUNDWORK", "/x/groundwork")
+    assert run.arm_config_dir("V") == "/x/vanilla"
+    assert run.arm_config_dir("G") == "/x/groundwork"
+    assert run.arm_config_dir("A") is None
+
+
+def test_pair_order_alternates_for_v_and_g():
+    from bench import run
+    assert run.pair_order({"V", "G"}, 0) == ["V", "G"] and run.pair_order({"V", "G"}, 1) == ["G", "V"]
+    assert run.pair_order({"A", "B"}, 0) == ["A", "B"] and run.pair_order({"A", "B"}, 1) == ["B", "A"]
+
+
+def test_a_config_dir_that_is_not_logged_in_blocks_the_run(monkeypatch):
+    from bench import run
+    calls = []
+
+    def fake_preflight():
+        import os
+        calls.append(os.environ.get("CLAUDE_CONFIG_DIR"))
+        return (calls[-1] == "/ok", "not logged in")
+    monkeypatch.setattr(run, "preflight", fake_preflight)
+    assert run.preflight_dir("/ok")[0] is True
+    assert run.preflight_dir("/missing")[0] is False
+    assert calls == ["/ok", "/missing"]
+
+
+def test_report_lists_whatever_arms_ran(tmp_path):
+    from bench import report
+    rows = [{"case": "c1", "category": "x", "arm": arm, "rep": 1, "ok": True, "final_text": "ans", "wall_s": 1.0,
+             "usage": {"input": 1, "cache_read": 0, "cache_creation": 0, "output": 1}, "sessions": 1,
+             "grade": grade.grade(grade.load_key(CASES[0]), "no idea")}
+            for arm in ("V", "G")]
+    res = tmp_path / "results.jsonl"
+    res.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    out = report.render(res, {"run_id": "t", "cases": ["c1"], "repeats": 1, "arms": ["G", "V"]})
+    assert "V r1" in out and "G r1" in out and "A r1" not in out
