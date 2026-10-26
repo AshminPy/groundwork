@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             return 4
     run_dir.mkdir(parents=True, exist_ok=True)
     with (run_dir / "canary.log").open("a") as log:
-        passed = canary.run_gate(out=log)
+        passed = canary.run_gate(out=log, arms=set(a.arms.split(",")))
     if not passed:
         print(f"STOPPED: isolation canary failed; see {run_dir / 'canary.log'}", file=sys.stderr)
         return 5

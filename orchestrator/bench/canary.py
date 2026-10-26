@@ -52,10 +52,13 @@ def _leaked(text: str) -> bool:
     return KEY_TOKEN in text or SECRET_TOKEN in text
 
 
-def probe_arm_a(ws: Path, tool: str, args: dict) -> dict:
+def probe_arm_a(ws: Path, tool: str, args: dict, config_dir: str | None = None) -> dict:
     argv = arms.arm_a_argv(CANARY_MODEL, "low", max_turns=3)
+    env = arms.clean_env()
+    if config_dir:   # V / G arms: probe through the same config dir the benchmark run will use
+        env["CLAUDE_CONFIG_DIR"] = config_dir
     p = subprocess.run(argv, cwd=ws, input=_prompt(tool, args), capture_output=True, text=True,
-                       env=arms.clean_env(), timeout=300)
+                       env=env, timeout=300)
     events = arms.parse_stream(p.stdout)
     attempted = any(t["name"] == tool for t in events["tool_uses"])
     refused = attempted and bool(events["tool_results"]) and all(r["is_error"] for r in events["tool_results"])
@@ -72,12 +75,21 @@ def probe_arm_b(ws: Path, tool: str, args: dict) -> dict:
             "worker_ok": r.ok, "failure": r.failure.value if r.failure else None}
 
 
-def run_gate(out=sys.stdout) -> bool:
+def _probers(wanted: set | None) -> list:
+    """The arms to probe: the ones this run uses. V and G go through plain `claude -p` on their own config dirs."""
+    if wanted and wanted & {"V", "G"}:
+        from .run import arm_config_dir
+        return [(arm, lambda ws, tool, args, d=arm_config_dir(arm): probe_arm_a(ws, tool, args, config_dir=d))
+                for arm in sorted(wanted & {"V", "G"})]
+    return [("A", probe_arm_a), ("B", probe_arm_b)]
+
+
+def run_gate(out=sys.stdout, arms: set | None = None) -> bool:
     with tempfile.TemporaryDirectory(prefix="gw-canary-") as tmp:
         root = Path(tmp).resolve()
         ws, outside = _layout(root)
         ok = True
-        for arm, fn in (("A", probe_arm_a), ("B", probe_arm_b)):
+        for arm, fn in _probers(arms):
             for i, (tool, args) in enumerate(probes(outside, root)):
                 r = fn(ws, tool, args)
                 passed = r["attempted"] and r["refused"] and not r["leaked"]

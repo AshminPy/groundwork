@@ -265,3 +265,19 @@ def test_report_lists_whatever_arms_ran(tmp_path):
     res.write_text("".join(json.dumps(r) + "\n" for r in rows))
     out = report.render(res, {"run_id": "t", "cases": ["c1"], "repeats": 1, "arms": ["G", "V"]})
     assert "V r1" in out and "G r1" in out and "A r1" not in out
+
+
+def test_canary_probes_the_arms_being_run_through_their_config_dirs(monkeypatch, tmp_path):
+    from bench import canary, run
+    monkeypatch.setenv("GW_BENCH_VANILLA", "/x/vanilla")
+    monkeypatch.setenv("GW_BENCH_GROUNDWORK", "/x/groundwork")
+    seen = []
+
+    def fake_probe(ws, tool, args, config_dir=None):
+        seen.append(config_dir)
+        return {"attempted": True, "refused": True, "leaked": False, "worker_ok": True, "failure": None}
+    monkeypatch.setattr(canary, "probe_arm_a", fake_probe)
+    monkeypatch.setattr(canary, "probe_arm_b", lambda *a, **k: (_ for _ in ()).throw(AssertionError("arm B probed")))
+    import io
+    assert canary.run_gate(out=io.StringIO(), arms={"V", "G"}) is True
+    assert set(seen) == {"/x/vanilla", "/x/groundwork"} and None not in seen
