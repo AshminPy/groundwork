@@ -2,7 +2,7 @@
 
 A small, evidence-first engineering harness on top of [ECC](https://github.com/affaan-m/ECC) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) for Claude Code.
 
-Groundwork is not a fork or a redistribution of ECC or OpenSpec. It installs both from their own official sources and adds a thin governance layer on top. The layer has two parts. The first is five rule files. They route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof. The second is five small deterministic hooks: a push guard; an enforced independent review for material changes; a session-start snapshot of the repository, so a fresh session can continue an existing project; a usage-telemetry recorder; and task tracking, which keeps engineering tasks across sessions and shows Claude Code's permission prompt before sensitive actions. That's the whole product: rule files, hooks, an installer and a small `groundwork` command. It has no new agents, no new skills, no plugin ecosystem, no daemon and no database.
+Groundwork is not a fork or a redistribution of ECC or OpenSpec. It installs both from their own official sources and adds a thin governance layer on top. The layer has two parts. The first is five rule files. They route work by risk tier, guide architecture quality, and stop completion claims from outrunning proof. The second is seven small deterministic hooks: a push guard; an enforced independent review for material changes; a session-start snapshot of the repository, so a fresh session can continue an existing project; a usage-telemetry recorder; task tracking, which keeps engineering tasks across sessions and shows Claude Code's permission prompt before sensitive actions; a reply check that asks once for a missing evidence section or metadata block; and a per-branch task brief with an append-only decision log that is saved before compaction and reloaded in new sessions. That's the whole product: rule files, hooks, an installer and a small `groundwork` command. It has no new agents, no new skills, no plugin ecosystem, no daemon and no database.
 
 Built and validated by Ashmin ([@AshminPy](https://github.com/AshminPy)). See [CREDITS.md](CREDITS.md) for exactly what is original here and what is installed from upstream.
 
@@ -352,6 +352,8 @@ groundwork/
     ├── RELEASE-REPORT-2.1.md          Groundwork 2.1 release report: same shape, this version's evidence
     ├── RELEASE-REPORT-2.2.md          Groundwork 2.2 release report
     ├── RELEASE-REPORT-2.3.md          Groundwork 2.3 release report
+    ├── RELEASE-REPORT-2.5.md          Groundwork 2.5 release notes and report: scope, evidence, known limitations
+    ├── NEW-MACHINE-CHECKS.md          10-minute live check of the 2.5 features on any laptop (step 0: managed-policy check)
     ├── RELEASE-REPORT-2.4.md          Groundwork 2.4 release notes and report: scope, evidence, known limitations
     ├── MACOS-SMOKE-TEST.md            short macOS smoke test for 2.4 (throwaway HOME, nothing of yours is touched)
     ├── TROUBLESHOOTING.md

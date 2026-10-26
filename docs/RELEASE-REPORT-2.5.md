@@ -41,7 +41,7 @@ Groundwork 2.5.0 moves the evidence and continuity rules from "asked for" to "ch
 
 ## 1. Scope
 
-Derived from `git log --merges v2.4.0..main`. Every pull request was reviewed before merge.
+Derived from `git log --merges v2.4.0..main`. Every code pull request was reviewed before merge.
 
 | PR | What | Recorded review |
 |---|---|---|
@@ -113,5 +113,5 @@ Derived from `git log --merges v2.4.0..main`. Every pull request was reviewed be
 ## 7. Release and tag information
 
 - **Tag**: `v2.5.0`, annotated, on the merge of `release/2.5.0` into `main`.
-- **Version mechanism**: `install.sh` writes `VERSION` from the first `## X.Y.Z` heading of `CHANGELOG.md`, and `groundwork update` checks that the same heading matches the tag (`scripts/groundwork_update.py:180-185`). The top entry is `## 2.5.0 — 2026-10-26`.
+- **Version mechanism**: `install.sh` writes `VERSION` from the first `## X.Y.Z` heading of `CHANGELOG.md`, and `groundwork update` checks that the same heading matches the tag (`scripts/groundwork_update.py:180-186`). The top entry is `## 2.5.0 — 2026-10-26`.
 - **Approval**: the owner approved "Merge #61, then release 2.5.0" on 2026-10-26.
