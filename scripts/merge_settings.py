@@ -43,6 +43,7 @@ Usage: python3 merge_settings.py [--agent-teams] [path to settings.json]
 """
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -108,9 +109,22 @@ PROFILE_ENV = "GROUNDWORK_PROFILE"  # machine-specific label recorded by telemet
 
 
 def write_atomic(path: Path, text: str) -> None:
-    """Write via a temp file + os.replace so a crash mid-write never truncates settings.json."""
+    """Write via a temp file + os.replace so a crash mid-write never truncates settings.json. An existing file keeps
+    its permission bits: the temp file is created with them before any content is written, so a settings.json the
+    user restricted to 0600 (it can hold tokens in `env`) is never widened (2026-10-12 security scan, F13)."""
     tmp = path.with_name(path.name + ".groundwork.tmp")
-    tmp.write_text(text)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = None
+    if mode is None:
+        tmp.write_text(text)
+    else:
+        tmp.unlink(missing_ok=True)  # a temp file left by a crash keeps its old mode under O_CREAT
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
     os.replace(tmp, path)
 
 

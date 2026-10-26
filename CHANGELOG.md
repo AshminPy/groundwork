@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
+  design D2). Release blockers, each with a regression test from the scan's proof of concept:
+  - Push guard (F4, F5, F6): pushes hidden by newlines, separators touching a word, subshells, `{ }`, `if … then`,
+    substitutions, wrapper options, `bash -lc`, line continuations, `$'…'` quoting, or a force flag inside `-uf` are
+    now denied. Also F10: the branch of a bare push is checked where the push runs (`cd`, also through `builtin`,
+    `command` or `eval`, and `git -C`), and a bare push that picks its repository or destination another way
+    (`--git-dir`, `GIT_DIR`, `GIT_CONFIG*`, `-c push.default`, `-c remote.<name>.push`) is denied. A push whose
+    destination the shell or git computes (`origin $B`, `HEAD:$(…)`, a glob or brace expansion, xargs, a computed
+    `git` or subcommand, a `-c alias.*`) is denied, and so is a `+refspec` force, the refspec `:`, and a bare push
+    where the current branch cannot be read. `$(git branch --show-current)` is read as the current branch.
+    Substitutions inside double quotes or an unquoted here-document are checked (`out="$(git push … 2>&1)"`), a
+    push after a branch switch in the same command (`git switch main && … && git push origin HEAD`) is denied, and
+    one after `git checkout -b <name> && …` is checked against `<name>`. A here-document is read as data unless it
+    feeds a shell or has no terminator line, so an apostrophe in a commit message no longer blocks the push after
+    it. A command taken from a variable that holds git or push (`C='git push origin main'; $C`), a shell alias that
+    pushes, `find -execdir git push`, and a `cd` while CDPATH is set are denied; `git send-pack` and the
+    `git-push` program count as pushes. A command over 10 KB that mentions push, or one whose check would take
+    longer than 20 seconds, is denied instead of timing out.
+  - Task gate (F7, F8, F12, and F6): `echo [[ ; cmd ; echo ]]`, a carriage return before `#`, bare credential
+    directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and `git push -uf` now ask. Also F11: a `cd` into
+    the Claude config directory through earlier `cd`s or assignments, also after a `cd` the gate cannot compute
+    (`cd "$X" && cd .claude`, a glob, CDPATH), now asks before settings or hooks change. Relative paths are
+    resolved against every directory the command may be in (`cd ~ && rm .claude/hooks/x`, a session started in
+    the config directory, `env -C`, `of=PATH`, `-t.claude/hooks`), `sh -c` / `eval` strings are checked the same
+    way, and removing or
+    moving the config directory itself asks.
+  - Settings (F13): merging or unmerging `settings.json` keeps its file mode, so an owner-only file stays 0600.
+  - Routines (F1, F2, and F3): read-only git subcommands instead of `Bash(git *)`, `git … --output` denied, `news`
+    gets web tools only, and every routine prompt marks what it reads as untrusted data.
+  - F9: the checkbox pattern used on `tasks.md` is linear, so a repository's `tasks.md` cannot stall session start.
+  - Accepted limits of the local push guard (deliberately obfuscated or run-time-assembled pushes) are documented
+    in docs/ARCHITECTURE.md; GitHub's `protect-main` ruleset is the authoritative boundary.
+  - Deferred with a justification: F14 (`jira_eod` read/write boundary; see docs/ROUTINES.md).
+- **Fix: `groundwork routines schedule … --hour H --minute M` now records the time**, so `groundwork routines list`
+  shows the time the job runs. An hour or minute out of range is refused, and so is a `config.json` that cannot be
+  read (nothing is scheduled or overwritten).
+
 - **Reply format is now checked by a hook, not only asked for by rules** (feature 6 of
   `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_reply_check.py`). Measured gap: in this repo's own
   sessions, 31 of 51 tool-using turns ended without the `HARNESS METADATA` block.
@@ -48,7 +85,6 @@
     entries load with the brief at session start.
   - Proven live: a brand-new `claude -p` session answered with the brief's next step without reading any file, and a
     real `/compact` triggered the save. `GROUNDWORK_BRIEF=off` disables it; briefs are kept on uninstall.
-
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

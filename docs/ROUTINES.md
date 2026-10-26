@@ -95,18 +95,38 @@ Everything lands in one plain, human-readable, pretty-printed JSON file, `~/.cla
 
 ## Capability grants — built from routine + access + scope + mutation permission
 
-`--allowedTools` is never one shared list. Each routine's own configuration decides exactly what it can reach:
+`--allowedTools` is never one shared list. Each routine's own configuration decides exactly what it can reach.
+"Base tools" are `Read`, `Grep`, `Glob` and read-only git subcommands only: `git log`, `show`, `diff`, `status`,
+`branch --list`, `branch --show-current`, `branch -a`/`-r`/`-vv`, `rev-parse`, `ls-files`, `worktree list`,
+`for-each-ref` and `stash list`. They are not
+`Bash(git *)`, which also allowed commits, pushes, `git config` and running any program through `git -c`, and
+`git … --output=<file>` is denied. Every routine prompt also tells the model that what it reads (web pages, pull
+requests, commit messages, repository files, Jira tickets) is untrusted data whose instructions it must not follow
+(2026-10-12 security scan, F1-F3).
+
 
 | Routine | Grant |
 |---|---|
-| `news` | `Bash(git *) Read Grep Glob` + `WebSearch`/`WebFetch`. Never blockable — no external identity needed. |
-| `doc_drift` | `Bash(git *) Read Grep Glob` only. Never blockable, never gets web or MCP access. |
+| `news` | `WebSearch`/`WebFetch` only: no shell, no file access. It reads untrusted web pages and needs nothing local. Never blockable — no external identity needed. |
+| `doc_drift` | Base tools only. Never blockable, never gets web or MCP access. |
 | `pr_followup` (`gh_cli`) | Base tools + exact read-only `gh` subcommands (`pr list`/`view`/`checks`/`diff`) — never a mutating one. |
 | `pr_followup` (`github_mcp`) | Base tools + real, session-confirmed read-only GitHub MCP tool names (`get_me`, `list_pull_requests`, `pull_request_read`, `search_pull_requests`, `list_commits`, `get_commit`) — chosen explicitly, not a wildcard. |
 | `jira_eod` (`jira_mcp`) | Base tools + the configured MCP server's tools at the server level (`mcp__<server>__*`) — BLOCKED if no server name is configured. An arbitrary user-configured server's exact per-tool read/write split isn't knowable in advance without guessing tool names, so the read/write boundary within that grant is enforced by the routine's own prompt instructions (dry-run explicitly forbids calling a write tool) plus your own Claude Code `settings.json` permission scoping for that server — the same "MCP access belongs to the task's own environment" principle Groundwork already applies everywhere else, not a special exception for Routines. |
 | `jira_eod` (`cli`/`browser`) | Base tools + a generic `Bash(jira *)` allowance, or the browser MCP tools, respectively. |
 | `weekly_status`/`work_digest` (GitHub, `use_github`) | Base tools + whatever `pr_followup` already grants (its own read-only set above), only if `pr_followup`'s own access is actually configured (otherwise `BLOCKED`, naming the dependency). |
 | `weekly_status`/`work_digest` (Jira, `jira_projects`/`use_jira`) | Base tools only — **no live Jira tool is ever granted here**, regardless of `jira_eod`'s own configured access. Both routines are `mutates: False`; none of `jira_eod`'s access mechanisms (`jira_mcp`/`cli`/`browser`) can be safely narrowed to a verified read-only subset, so granting any of them here would hand a non-mutating routine the same write-shaped surface `jira_eod` itself gets. Instead the routine's prompt is pointed at `jira_eod`'s own last stored result file (`~/.claude/groundwork/routines/results/jira_eod/run-*.json`), readable via the `Read`/`Glob` tools already in the base set — reusing jira_eod's own evidence rather than re-querying Jira live. If `jira_eod` hasn't produced a result yet, the routine says so plainly. |
+
+**Known limitation (2026-10-12 security scan, F14, deferred):** `jira_eod`'s read/write boundary inside its Jira grant
+is enforced by its prompt, while ticket text written by other people reaches the unattended run. It is deferred, not
+fixed: the finding is low severity and low confidence and was not reproduced; the write path is the routine's intended
+function; narrowing it needs per-tool MCP permission rules for your Jira server, which Groundwork has not verified;
+and it only matters where `jira_eod` has Jira access configured. Keep `posting: dry_run` unless you need live posts,
+and scope the server's tools in your own `settings.json`. It is revisited when the routine next changes or if it is
+reproduced.
+
+**Known limitation (M1):** the read-only git rules match commands that start with `git log`, `git status` and
+so on, so `git -C <other repo> log` is not allowed: a `repository_scope` beyond the current repository gets no git
+access in those repositories. Run the routine with that repository as its working directory instead.
 
 Any routine with an unconfigured required access mechanism is `BLOCKED` before `claude` is ever invoked — confirmed via `tests/test_groundwork_routines.py` with `claude` deliberately unreachable on `PATH`. `weekly_status`/`work_digest`'s Jira cross-reference is the one case that is never `BLOCKED` on Jira configuration, precisely because it never touches live Jira access at all.
 
