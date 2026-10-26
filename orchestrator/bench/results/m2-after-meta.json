@@ -1,0 +1,26 @@
+{
+ "run_id": "m2-after-v2",
+ "finished_at": "2026-10-26T05:34:07.598360+00:00",
+ "repeats": 2,
+ "cases": [
+  "a1-pagination-decision",
+  "a2-refund-retry-decision",
+  "c1-idempotency-header",
+  "e1-refund-500",
+  "k2-refund-window",
+  "u2-validate-called"
+ ],
+ "stop_reason": null,
+ "arm_a": {
+  "model": "sonnet",
+  "effort": "medium"
+ },
+ "new_ledger_entries": [],
+ "arms": [
+  "B"
+ ],
+ "grader_fingerprint": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79",
+ "code_commit": "eb7f8dfd85521b2834bc7892b7362b371aac9e87",
+ "regraded": true,
+ "graded_with_fingerprint": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79"
+}
