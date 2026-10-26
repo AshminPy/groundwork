@@ -60,6 +60,7 @@ LOG_SECTIONS = ("decisions", "rejected")
 LOG_LINE_CAP = 500
 LOG_TAIL = 5
 LOG_RESERVE = 700  # room kept for the decision-log tail when the brief itself is long
+# Concurrent sessions on one branch can both append the same entry (or header): duplicates, never loss.
 # Same reference shapes the reply check accepts (hooks/groundwork_reply_check.py), every repeat bounded.
 REFERENCE = re.compile(
     r"https?://[^\s)>\]]+"
@@ -237,7 +238,7 @@ def decision_lines(text: str) -> list:
         if head.strip().lower() not in LOG_SECTIONS:
             continue
         for ln in _body_text(body).splitlines():
-            line = " ".join(clean(ln).split()).lstrip("-*• ").strip()[:LOG_LINE_CAP]
+            line = re.sub(r"^[-*•][ \t]+", "", " ".join(clean(ln).split())).strip()[:LOG_LINE_CAP]
             if line:
                 out.append((head.strip(), line))
     return out
@@ -269,7 +270,8 @@ def update_decision_log(brief: Path, text: str, session_id: str) -> int:
     for sec, line in added:
         refs = references(line)
         evidence = ", ".join(refs) if refs else "no evidence cited"
-        entries.append(f"- {stamp} · ADDED · {sec} · session {sid} · {line} · evidence: {evidence}\n")
+        # Evidence before the text, so shortening an entry for reload never drops its links.
+        entries.append(f"- {stamp} · ADDED · {sec} · session {sid} · evidence: {evidence} · {line}\n")
     log = log_path(brief)
     header = "" if log.exists() else (
         f"# Decision log: {brief.stem}\n<!-- Append-only history written by a Groundwork hook from the brief's "

@@ -248,6 +248,12 @@ def test_decision_log() -> None:
         check("session start shows the log path and the latest entries", str(log) in ctx and "REMOVED" in ctx, ctx)
         check("context stays capped", len(ctx) <= 2600, str(len(ctx)))
 
+        long = "- " + ("x" * 400) + " (https://example.com/long-evidence)\n- *Bold* decision (README.md:3)\n"
+        brief(long)
+        m.refresh(str(repo), "sess-5", "Stop", ["Bash"])
+        ctx = m.render_context(path, path.read_text())
+        check("a long entry keeps its evidence link when shortened for reload", "https://example.com/long-evidence" in ctx, ctx[-600:])
+        check("only one bullet marker is stripped", "*Bold* decision" in log.read_text(), log.read_text()[-300:])
         hidden = "- Choose A" + chr(0xE0041) + chr(0x202E) + " (README.md:1)\n"
         brief(hidden)
         m.refresh(str(repo), "sess-4", "Stop", ["Bash"])
