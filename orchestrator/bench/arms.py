@@ -138,6 +138,9 @@ def b_visible_text(contract: dict) -> str:
     for k in ("unknowns", "unverified_claims"):
         if r.get(k):
             parts.append(f"{k}: " + "; ".join(map(str, r[k])))
+    if contract.get("evidence"):   # the evidence section the CLI prints under the answer (M2 and later)
+        from groundwork_orchestrator import evidence
+        parts.append(evidence.render(contract["evidence"]))
     return "\n\n".join(parts)
 
 
@@ -189,4 +192,5 @@ def run_arm_b(ws: Path, instruction: str, home: Path, timeout_s: int = TIMEOUT_S
             "sessions": s["sessions"], "roles": s["roles"], "session_failures": s["session_failures"],
             "state": state, "harness_category": c.get("category"), "workflow": c.get("workflow"),
             "routing": {k: v.get("model") for k, v in (c.get("routing") or {}).items()},
-            "harness_evidence_status": c.get("evidence_status")}
+            "harness_evidence_status": c.get("evidence_status"), "answer_evidence": c.get("answer_evidence"),
+            "claims": [{k: x.get(k) for k in ("id", "status", "reason")} for x in (c.get("evidence") or {}).get("claims", [])]}

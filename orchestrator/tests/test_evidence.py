@@ -1,0 +1,168 @@
+"""Question Evidence Engine (M2): deterministic claim checks, statuses, and the answer workflow around them."""
+import subprocess
+
+import pytest
+
+from groundwork_orchestrator import evidence
+from groundwork_orchestrator.contract import new_contract
+from groundwork_orchestrator.store import new_task_id
+
+CONFIG = 'API_VERSION = "2024-06"\nMAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))\n'
+DOC_NEW = "# Reference — API version 2024-06\n\nMaximum page size: 100.\n"
+DOC_OLD = "# Reference — API version 2023-01\n\nMaximum page size: 50.\n"
+
+
+@pytest.fixture
+def ws(tmp_path):
+    r = tmp_path / "ws"
+    (r / "docs").mkdir(parents=True)
+    (r / "config.py").write_text(CONFIG)
+    (r / "docs" / "api-2024-06.md").write_text(DOC_NEW)
+    (r / "docs" / "api-2023-01.md").write_text(DOC_OLD)
+    for args in (["init", "-q"], ["add", "."], ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "i"]):
+        subprocess.run(["git", "-C", str(r), *args], check=True)
+    return r
+
+
+def claim(text, path, start, quote, domain="repo_code", value=None, end=None):
+    c = {"text": text, "domain": domain, "refs": [{"path": path, "line_start": start, "line_end": end or start,
+                                                   "quote": quote}]}
+    return {**c, "value": value} if value else c
+
+
+PIN = claim("The repository uses API version 2024-06", "config.py", 1, 'API_VERSION = "2024-06"', value="2024-06")
+
+
+def statuses(found):
+    return [(c["status"], c["reason"]) for c in found["claims"]]
+
+
+def test_located_quote_records_provenance_and_is_not_reviewed(ws):
+    found = evidence.assess([claim("Max retries default is 3", "config.py", 2, 'get("MAX_RETRIES", "3")', value="3")],
+                            str(ws))
+    (c,) = found["claims"]
+    assert (c["status"], c["reason"]) == ("UNVERIFIED", "not_reviewed")
+    ref = c["refs"][0]
+    assert ref["located"] and len(ref["blob_sha"]) == 40 and ref["dirty"] is False and ref["checked_at"]
+    assert len(found["repo_commit"]) == 40
+    assert evidence.answer_status(found) == "PARTIALLY_SUPPORTED"
+
+
+@pytest.mark.parametrize("ref,detail", [
+    ({"path": "config.py", "line_start": 1, "line_end": 1, "quote": "MAX_RETRIES = int"}, "not in the cited lines"),
+    ({"path": "config.py", "line_start": 9, "line_end": 9, "quote": 'API_VERSION = "2024-06"'}, "outside"),
+    ({"path": "../outside.py", "line_start": 1, "line_end": 1, "quote": "anything at all"}, "not inside"),
+    ({"path": "missing.py", "line_start": 1, "line_end": 1, "quote": "anything at all"}, "not inside"),
+    ({"path": "config.py", "line_start": 1, "line_end": 1, "quote": "API"}, "shorter"),
+])
+def test_quote_must_be_verbatim_at_the_cited_lines(ws, ref, detail):
+    found = evidence.assess([{"text": "x", "domain": "repo_code", "refs": [ref]}], str(ws))
+    (c,) = found["claims"]
+    assert (c["status"], c["reason"]) == ("UNVERIFIED", "not_located") and detail in c["refs"][0]["detail"]
+    assert evidence.answer_status(found) == "UNVERIFIED"
+
+
+def test_whitespace_differences_do_not_break_location(ws):
+    found = evidence.assess([claim("pin", "config.py", 1, 'API_VERSION   =\n"2024-06"')], str(ws))
+    assert statuses(found) == [("UNVERIFIED", "not_reviewed")]
+
+
+def test_no_claims_or_no_refs_is_unverified(ws):
+    assert evidence.answer_status(evidence.assess([], str(ws))) == "UNVERIFIED"
+    found = evidence.assess([{"text": "x", "domain": "other", "refs": []}], str(ws))
+    assert statuses(found) == [("UNVERIFIED", "no_refs")]
+
+
+def test_vendor_doc_for_another_version_is_inapplicable_not_contradicted(ws):
+    old = claim("Max page size is 50", "docs/api-2023-01.md", 3, "Maximum page size: 50.", "vendor_doc", value="50")
+    found = evidence.assess([PIN, old], str(ws))
+    assert statuses(found)[1] == ("UNVERIFIED", "version_mismatch")
+    assert evidence.answer_status(found) != "CONTRADICTED"
+
+
+def test_vendor_doc_for_the_version_in_use_is_accepted(ws):
+    new = claim("Max page size is 100", "docs/api-2024-06.md", 3, "Maximum page size: 100.", "vendor_doc", value="100")
+    assert statuses(evidence.assess([PIN, new], str(ws)))[1] == ("UNVERIFIED", "not_reviewed")
+
+
+def test_value_contradicted_by_its_own_located_applicable_quote(ws):
+    wrong = claim("Max page size is 500", "docs/api-2024-06.md", 3, "Maximum page size: 100.", "vendor_doc",
+                  value="500")
+    found = evidence.assess([PIN, wrong], str(ws))
+    c = found["claims"][1]
+    assert c["status"] == "CONTRADICTED" and c["contradictions"][0]["states"] == "100"
+    assert evidence.answer_status(found) == "CONTRADICTED"
+
+
+def test_value_missing_without_a_single_competing_value_is_unverified_not_contradicted(ws):
+    found = evidence.assess([claim("The pin is v9", "config.py", 1, 'API_VERSION = "2024-06"', value="production")],
+                            str(ws))
+    assert statuses(found) == [("UNVERIFIED", "value_not_in_quote")]
+
+
+def test_repo_claim_needs_a_code_source_and_vendor_claim_needs_a_doc(ws):
+    repo_from_doc = claim("The client uses 100", "docs/api-2024-06.md", 3, "Maximum page size: 100.", "repo_code")
+    vendor_from_code = claim("Docs say 2024-06", "config.py", 1, 'API_VERSION = "2024-06"', "vendor_doc")
+    assert statuses(evidence.assess([repo_from_doc, vendor_from_code], str(ws))) == [
+        ("UNVERIFIED", "missing_required_source"), ("UNVERIFIED", "missing_required_source")]
+
+
+def test_changed_source_is_stale_until_revalidated_never_contradicted(ws):
+    found = evidence.assess([claim("pin", "config.py", 1, 'API_VERSION = "2024-06"', value="2024-06")], str(ws))
+    (ws / "config.py").write_text('API_VERSION = "2025-01"\n')
+    found = evidence.refresh(found, str(ws))
+    assert statuses(found) == [("UNVERIFIED", "stale")]
+
+
+def test_render_shows_each_status_and_lists_uncertain_claims(ws):
+    old = claim("Max page size is 50", "docs/api-2023-01.md", 3, "Maximum page size: 50.", "vendor_doc", value="50")
+    text = evidence.render(evidence.assess([PIN, old], str(ws)))
+    assert "Evidence: PARTIALLY_SUPPORTED (1 of 2 claims have a located quote" in text
+    assert "[unverified: quote located; support not reviewed] The repository uses API version 2024-06" in text
+    assert "[unverified: source is for a different API version than the one in use]" in text
+    assert "Uncertain: C2 Max page size is 50" in text
+    assert "%" not in text
+
+
+def test_repair_detail_tells_the_worker_what_to_fix(ws):
+    found = evidence.assess([claim("x", "config.py", 1, "not in the file")], str(ws))
+    detail = evidence.repair_detail(found)
+    assert 'C1 "x": quote not found at the cited lines' in detail and "remove the claim" in detail
+
+
+# ---------------------------------------------------------------- the answer workflow around the engine
+def _submit(orch, request, repo):
+    return orch.start(new_contract(new_task_id(), request, str(repo), [], False))
+
+
+GOOD = {"answer": "add() subtracts", "sources": ["app.py:2"], "unknowns": [],
+        "claims": [{"text": "add returns a - b", "domain": "repo_code", "value": "a - b",
+                    "refs": [{"path": "app.py", "line_start": 2, "line_end": 2, "quote": "return a - b"}]}]}
+BAD = {**GOOD, "claims": [{**GOOD["claims"][0], "refs": [{"path": "app.py", "line_start": 1, "line_end": 1,
+                                                          "quote": "return a * b"}]}]}
+
+
+def test_answer_with_located_claims_passes_without_repair(orch, fake, repo):
+    fake.plan([{"result": GOOD}])
+    st = _submit(orch, "How does the add function work?", repo)
+    c = st["contract"]
+    assert st["state"] == "PASSED" and c["retry_count"] == 0 and c["answer_evidence"] == "PARTIALLY_SUPPORTED"
+    assert c["evidence"]["claims"][0]["refs"][0]["blob_sha"]
+
+
+def test_unlocated_claim_gets_one_evidence_repair_then_passes(orch, fake, repo):
+    fake.plan([{"result": BAD}, {"result": GOOD}])
+    st = _submit(orch, "How does the add function work?", repo)
+    calls = fake.calls()
+    assert st["state"] == "PASSED" and st["contract"]["retry_count"] == 1
+    assert "--resume" in calls[-1]["argv"] and "quote not found at the cited lines" in calls[-1]["stdin"]
+    assert st["contract"]["answer_evidence"] == "PARTIALLY_SUPPORTED"
+
+
+def test_claims_still_unsupported_after_the_repair_are_flagged_not_failed(orch, fake, repo):
+    fake.plan([{"result": BAD}, {"result": BAD}])
+    st = _submit(orch, "How does the add function work?", repo)
+    c = st["contract"]
+    assert st["state"] == "PASSED" and c["retry_count"] == 1        # one evidence repair, not MAX_REPAIRS
+    assert c["answer_evidence"] == "UNVERIFIED" and "not backed by located sources" in c["outcome"]
+    assert c["evidence"]["claims"][0]["reason"] == "not_located"

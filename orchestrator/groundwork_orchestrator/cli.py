@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import routing, workspace
+from . import evidence, routing, workspace
 from .claude_adapter import preflight
 from .contract import new_contract
 from .store import Store, TaskBusy, new_task_id
@@ -50,6 +50,8 @@ def render(status: dict, store: Store) -> str:
     for k in ("unknowns", "unverified_claims"):
         if result.get(k):
             lines.append(f"{k}: " + "; ".join(result[k]))
+    if c.get("evidence"):
+        lines += ["", evidence.render(c["evidence"])]
     if c.get("validation"):
         lines += ["", "validation (deterministic):"]
         for i in c["validation"][-1]["items"]:

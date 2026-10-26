@@ -18,9 +18,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command, interrupt
 
-from . import classifier, routing, validation, workspace
+from . import classifier, evidence, routing, validation, workspace
 from .claude_adapter import Failure, WorkerRequest, WorkerResult, preflight, run_worker
-from .contract import (CLASSIFICATION_SCHEMA, MAX_REPAIRS, OUTPUT_SCHEMAS, Evidence, State, validate_classification)
+from .contract import (CLASSIFICATION_SCHEMA, EVIDENCE_REPAIRS, MAX_REPAIRS, OUTPUT_SCHEMAS, Evidence, State,
+                       validate_classification)
 from .store import InterruptedWrite, Store, task_lock
 
 READ_TOOLS = ["Read", "Grep", "Glob"]
@@ -305,7 +306,18 @@ class Orchestrator:
         if wf == "answer":
             return (req + "Answer it from the code and files in the current working directory. Cite every file you "
                     "relied on in `sources` as a path relative to the working directory (optionally with :line). "
-                    "Put anything you could not confirm in `unknowns`. Do not change any file.")
+                    "Put anything you could not confirm in `unknowns`. Do not change any file.\n"
+                    "Evidence rules — the orchestrator checks each one in code:\n"
+                    "- List every factual statement your answer relies on in `claims`. Give each claim the exact "
+                    "lines that show it: path, line_start, line_end, and a quote copied verbatim from those lines.\n"
+                    "- If a claim asserts a specific number, version or name, put it in `value` exactly as the source "
+                    "writes it.\n"
+                    "- For what vendor documentation says, quote the documentation for the version this repository "
+                    "actually uses, and also cite where the repository sets that version.\n"
+                    "- If the files do not answer the question, or only partly, say so plainly in `answer`, and list "
+                    "what is missing in `unknowns`. Do not guess and do not fill gaps from general knowledge.\n"
+                    "- When two sources disagree (for example a doc and the code), say which one the code follows and "
+                    "cite both.")
         if wf == "document":
             where = ("Write it to the file(s) the request names inside the working directory and list them in "
                      "files_changed." if write else "Do not change any file; return the document text.")
@@ -354,6 +366,16 @@ class Orchestrator:
         out = res.structured if isinstance(res.structured, dict) else None
         items.append({"check": "structured result", "ok": out is not None,
                       "detail": None if out is not None else res.reason})
+        if out is not None and c["workflow"] == "answer":
+            root = c["worktree"]["cwd"] if c["needs_write"] else c["workspace"]
+            found = evidence.assess(out.get("claims"), root)
+            self.store.update_contract(tid, evidence=found)
+            todo = evidence.repair_needed(found)
+            # One repair turn for unsupported claims. After it, they are reported as UNVERIFIED, never as a failure.
+            last_try = attempt >= EVIDENCE_REPAIRS
+            items.append({"check": "claims backed by located sources", "ok": not todo or last_try,
+                          "warning": bool(todo) and last_try,
+                          "detail": evidence.repair_detail(found) if todo else None})
         if out is not None and c["workflow"] in ("answer", "investigate", "document"):
             root = c["worktree"]["cwd"] if c["needs_write"] else c["workspace"]
             cited = validation.checkable_sources(out.get("sources"))
@@ -444,10 +466,18 @@ class Orchestrator:
             outcome = reason
         elif ev is Evidence.VERIFIED:
             outcome = "all declared checks passed on the changed code"
+        elif warnings and c["workflow"] == "answer":
+            outcome = "answer delivered; some claims are not backed by located sources (shown as UNVERIFIED)"
         elif warnings:
             outcome = "declared checks passed, but review the diff: " + "; ".join(warnings)
         else:
             outcome = "deterministic checks passed; the answer's content itself is not machine-verified"
+        if c["workflow"] == "answer" and c.get("evidence"):
+            root = c["worktree"]["cwd"] if c["needs_write"] else c["workspace"]
+            found = evidence.refresh(c["evidence"], root)
+            found["answer_status"] = evidence.answer_status(found)
+            self.store.update_contract(tid, evidence=found, answer_evidence=found["answer_status"])
+            outcome += f"; answer evidence: {found['answer_status']}"
         self.store.update_contract(tid, evidence_status=ev.value, outcome=outcome)
         self.store.transition(tid, state, outcome)
         self.store.emit("task_finished", tid, category=c["category"], state=state.value, evidence=ev.value,

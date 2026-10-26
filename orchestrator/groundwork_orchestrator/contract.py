@@ -64,15 +64,19 @@ def validate_classification(obj) -> list[str]:
     return errors
 
 
+from .evidence import CLAIM_SCHEMA  # noqa: E402  (stdlib-only module; no cycle)
+
 _LIST = {"type": "array", "items": {"type": "string"}}
+# Answers get one repair turn for unsupported claims; what is still unsupported after it is shown as UNVERIFIED.
+EVIDENCE_REPAIRS = 1
 _SOURCES = {"type": "array", "items": {"type": "string"},
             "description": "workspace-relative paths of files you actually read and relied on, optionally with :line"}
 
 OUTPUT_SCHEMAS = {
     "answer": {
         "type": "object",
-        "properties": {"answer": {"type": "string"}, "sources": _SOURCES, "unknowns": _LIST},
-        "required": ["answer", "sources", "unknowns"],
+        "properties": {"answer": {"type": "string"}, "claims": CLAIM_SCHEMA, "sources": _SOURCES, "unknowns": _LIST},
+        "required": ["answer", "claims", "sources", "unknowns"],
     },
     "investigate": {
         "type": "object",
@@ -111,5 +115,5 @@ def new_contract(task_id: str, request: str, workspace: str, checks: list[str], 
         "dependencies": [], "roles": [], "routing": {}, "needs_write": False,
         "approval": "not_required", "plan": None, "worktree": None, "session_id": None,
         "retry_count": 0, "symptoms": [], "validation": [], "result": None, "outcome": None,
-        "evidence_status": None, "ledger_key": None,
+        "evidence_status": None, "ledger_key": None, "evidence": None, "answer_evidence": None,
     }
