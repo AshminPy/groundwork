@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import grade, report
+from . import freeze, grade, report
 
 
 def main(argv: list[str]) -> int:
@@ -28,6 +28,7 @@ def main(argv: list[str]) -> int:
     dst.write_text("".join(json.dumps(r) + "\n" for r in rows))
     meta = json.loads((run_dir / "meta.json").read_text())
     meta["regraded"] = True
+    meta["graded_with_fingerprint"] = freeze.current()   # the grader that produced these grades
     (run_dir / "report.md").write_text(report.render(dst, meta))
     changed = [(r["case"], r["arm"], r["rep"]) for r in rows if r["grade"]["correct"] != r["grade_original"]["correct"]]
     print(f"regraded {len(rows)} rows; correctness changed for {len(changed)}: {changed}")

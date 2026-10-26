@@ -162,3 +162,18 @@ def test_grader_and_keys_are_frozen_for_the_m2_comparison():
     """The M2 before/after comparison is only valid if grading did not change between the two runs."""
     from bench import freeze
     assert freeze.current() == json.loads((grade.BENCH / "FROZEN.json").read_text())["sha256"]
+
+
+@pytest.mark.parametrize("text", [
+    "On HTTP 500, create_refund raises PayAPIError(500, body). There is no retry (payapi/client.py:32, :36). "
+    "Risk if the caller retries a 500: a duplicate refund.",
+    "A 500 is not retried: the client raises PayAPIError (payapi/client.py:36). A caller that retries a 500 may "
+    "double-refund.",
+])
+def test_warning_about_a_caller_retrying_is_not_a_false_claim(text):
+    assert grade.grade(grade.load_key("e1-refund-500"), text)["correct"]
+
+
+def test_claiming_the_client_retries_a_500_is_still_wrong():
+    text = "PayAPIError is raised only after the client retries the 500 three times, not without retrying."
+    assert not grade.grade(grade.load_key("e1-refund-500"), text)["correct"]

@@ -7,7 +7,7 @@
   "(not|no|isn't|never|without)\\b[^.\\n]{0,40}\\bretr"
  ],
  "forbidden": [
-  "(?<!not )(?<!n't )\\bretries\\b[^.\\n]{0,20}\\b500\\b"
+  "(?<!not )(?<!n't )\\b(client|it|_request|create_refund|the code)\\s+(retries|will retry|does retry)\\b[^.\\n]{0,20}\\b500\\b"
  ],
  "anchors": {
   "payapi/client.py": [

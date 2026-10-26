@@ -58,7 +58,8 @@ def render(base: list[dict], after: list[dict], meta_b: dict, meta_a: dict) -> s
     lines = [f"# M2 comparison — baseline {meta_b['run_id']} vs after {meta_a['run_id']}", "",
              f"> Pilot, not statistical proof: {n_cases} cases × {meta_b.get('repeats', 2)} repeats per arm. A "
              "difference of one or two cases is within noise.", "",
-             f"Grader fingerprint (identical in both runs): `{meta_b['grader_fingerprint'][:16]}…`. "
+             f"Grader fingerprint (identical in both runs): "
+             f"`{(meta_b.get('graded_with_fingerprint') or meta_b['grader_fingerprint'])[:16]}…`. "
              f"Baseline code `{meta_b.get('code_commit', '?')[:12]}`; after `{meta_a.get('code_commit', '?')[:12]}`.",
              ""]
     for title, pick in (("All cases", lambda r: True), ("M1 cases", lambda r: not _hard(r["case"])),
@@ -91,7 +92,9 @@ def main(argv: list[str]) -> int:
     base_dir, after_dir = Path(argv[0]).resolve(), Path(argv[1]).resolve()
     base, meta_b = _load(base_dir)
     after, meta_a = _load(after_dir)
-    if meta_b.get("grader_fingerprint") != meta_a.get("grader_fingerprint"):
+    def graded_with(meta: dict) -> str | None:
+        return meta.get("graded_with_fingerprint") or meta.get("grader_fingerprint")
+    if graded_with(meta_b) != graded_with(meta_a):
         print("refusing: the two runs were graded with a different grader, keys or fixture", file=sys.stderr)
         return 2
     out = after_dir / "comparison.md"
