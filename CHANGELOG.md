@@ -13,6 +13,11 @@
     At session start (new, resumed, cleared or compacted) the current branch's brief is loaded as context, Next step
     first, capped at 2,400 characters, labelled as data, with invisible Unicode format characters removed.
   - After three tool-using turns with an empty brief, Claude is asked once per session to write Goal and Next step.
+  - **Append-only decision log** beside each brief (`<brief>.decisions.md`): every new or changed Decisions/Rejected
+    line is appended as ADDED with the links or file:line it cites (or `no evidence cited`), and every removed line as
+    REMOVED, with date and session. Existing entries are never rewritten, so the full history of why each choice was
+    made can be shown to others. A decision without evidence gets one request per session to add it. The latest five
+    entries load with the brief at session start.
   - Proven live: a brand-new `claude -p` session answered with the brief's next step without reading any file, and a
     real `/compact` triggered the save. `GROUNDWORK_BRIEF=off` disables it; briefs are kept on uninstall.
 

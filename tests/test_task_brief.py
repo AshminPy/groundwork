@@ -199,6 +199,93 @@ def test_round_trip_and_races() -> None:
     finish()
 
 
+def test_decision_log() -> None:
+    print("append-only decision log")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        home = tmp / "home"
+        repo = make_repo(tmp, "proj")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+        m = load(HOOK, "groundwork_brief")
+        path = m.brief_path(str(repo))
+        log = m.log_path(path)
+        check("log sits beside the brief, per branch", log.parent == path.parent and log.name.startswith(path.stem), str(log))
+
+        def brief(decisions, rejected=""):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("## Goal\ng\n\n## Decisions\n" + decisions + "\n## Rejected\n" + rejected +
+                            "\n## Next step\nn\n")
+
+        brief("- Use hooks, not rules (https://code.claude.com/docs/en/hooks)\n- Park the harness\n")
+        m.refresh(str(repo), "sess-1", "Stop", ["Bash"])
+        text = log.read_text()
+        check("new decisions are logged as ADDED with session and time",
+              text.count("ADDED") == 2 and "sess-1" in text and "Use hooks, not rules" in text, text)
+        check("the decision's link is kept in the log", "https://code.claude.com/docs/en/hooks" in text, text)
+        check("a decision without a link or file:line is flagged", "Park the harness" in text and "no evidence cited" in text, text)
+        first = log.read_bytes()
+        m.refresh(str(repo), "sess-1", "Stop", ["Bash"])
+        check("no change: nothing appended (no duplicates)", log.read_bytes() == first)
+
+        brief("- Use hooks, not rules (https://code.claude.com/docs/en/hooks)\n- Park the harness (bench: m2-comparison.md:12)\n",
+              "- Separate harness: 39/40 vs 40/40, slower\n")
+        m.refresh(str(repo), "sess-2", "PreCompact", [])
+        text = log.read_text()
+        check("log is append-only: earlier bytes never change", log.read_bytes().startswith(first))
+        check("a changed decision records the old text as REMOVED and the new one as ADDED",
+              "REMOVED" in text and "m2-comparison.md:12" in text, text)
+        check("rejected hypotheses are logged too", "Rejected" in text and "Separate harness" in text, text)
+
+        brief("- Use hooks, not rules (https://code.claude.com/docs/en/hooks)\n")
+        m.refresh(str(repo), "sess-3", "Stop", ["Bash"])
+        text = log.read_text()
+        check("a deleted decision is never lost: logged as REMOVED", text.count("REMOVED") >= 2 and "Separate harness" in text, text)
+        check("log file is owner-only", oct(log.stat().st_mode & 0o777) == "0o600")
+        check("each entry is one line (no injected newlines)",
+              all(ln.startswith(("- ", "#", "<!--")) or not ln.strip() for ln in text.splitlines()), text)
+
+        ctx = m.render_context(path, path.read_text())
+        check("session start shows the log path and the latest entries", str(log) in ctx and "REMOVED" in ctx, ctx)
+        check("context stays capped", len(ctx) <= 2600, str(len(ctx)))
+
+        hidden = "- Choose A" + chr(0xE0041) + chr(0x202E) + " (README.md:1)\n"
+        brief(hidden)
+        m.refresh(str(repo), "sess-4", "Stop", ["Bash"])
+        check("invisible characters never reach the log", chr(0xE0041) not in log.read_text() and chr(0x202E) not in log.read_text())
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    finish()
+
+
+def test_evidence_ask() -> None:
+    print("ask once for missing decision evidence")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        home = tmp / "home"
+        home.mkdir()
+        repo = make_repo(tmp, "proj")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+        m = load(HOOK, "groundwork_brief")
+        path = m.brief_path(str(repo))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        path.parent.mkdir(parents=True)
+        path.write_text("## Goal\ng\n\n## Decisions\n- Pin the runner to 0.14.0\n\n## Next step\nn\n")
+        t = transcript(tmp, ["Bash"])
+        stop = {"hook_event_name": "Stop", "cwd": str(repo), "session_id": "e1", "transcript_path": str(t),
+                "stop_hook_active": False, "last_assistant_message": "done"}
+        r = run(stop, home)
+        out = json.loads(r.stdout) if r.stdout.strip() else {}
+        check("a decision without evidence: asked once to add a link or file:line",
+              out.get("decision") == "block" and "Pin the runner" in out.get("reason", ""), r.stdout)
+        check("never asked twice in a session", run(stop, home).stdout.strip() == "")
+        check("never when stop_hook_active", run({**stop, "session_id": "e2", "stop_hook_active": True}, home).stdout.strip() == "")
+        path.write_text("## Goal\ng\n\n## Decisions\n- Pin the runner to 0.14.0 (https://example.com/issue/1)\n\n## Next step\nn\n")
+        check("decision with evidence: no ask", run({**stop, "session_id": "e3"}, home).stdout.strip() == "")
+        log = m.log_path(path)
+        check("the ask and the evidence fix both reached the log", "no evidence cited" in log.read_text()
+              and "https://example.com/issue/1" in log.read_text(), log.read_text())
+    finish()
+
+
 def test_events() -> None:
     print("hook events")
     with tempfile.TemporaryDirectory() as d:
@@ -273,7 +360,7 @@ def test_events() -> None:
 
 
 if __name__ == "__main__":
-    for fn in (test_paths, test_refresh, test_round_trip_and_races, test_events):
+    for fn in (test_paths, test_refresh, test_round_trip_and_races, test_decision_log, test_evidence_ask, test_events):
         try:
             fn()
         except AssertionError:

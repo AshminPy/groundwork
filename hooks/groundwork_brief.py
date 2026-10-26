@@ -15,14 +15,22 @@ The brief has two kinds of content:
   - a `## Snapshot (hook-written ...)` section that this hook rewrites. Nothing outside it is
     ever changed.
 
+Decision log: beside each brief, `<brief>.decisions.md` is an append-only history of the
+Decisions and Rejected sections. On every save the hook compares those sections with what it saw
+last time (sidecar `<brief>.decisions-state.json`): a new or changed line is appended as ADDED, with
+the links or file:line references it cites (or "no evidence cited"); a line that disappeared is
+appended as REMOVED. Existing log bytes are never rewritten, so a decision is never lost even when
+the brief is edited, and the log can be shown to others to explain why each choice was made.
+
 Events:
   PreCompact   refresh the snapshot (creating the brief from the template when missing). Never blocks.
   Stop         after a turn that used a real tool: refresh the snapshot. If the session is
                substantive (3+ tool-using turns in Groundwork telemetry), the judgment sections are
                still empty, and this session was not asked before, ask once (`decision: "block"`) for
-               Goal and Next step. Never when `stop_hook_active`.
+               Goal and Next step; separately, if a Decisions or Rejected line cites no link or
+               file:line, ask once per session to add one. Never when `stop_hook_active`.
   SessionStart load the current branch's brief as context (startup, resume, clear and compact),
-               Next step first, capped, labelled as data to verify.
+               Next step first, then the latest decision-log entries, capped, labelled as data to verify.
 
 Fail-open: any error means no output and exit 0. GROUNDWORK_BRIEF=off disables it.
 """
@@ -48,11 +56,23 @@ SUBSTANTIVE_TURNS = 3
 TELEMETRY_TAIL = 2 * 1024 * 1024
 MARKER_KEEP_S = 8 * 86400
 JUDGMENT_ORDER = ("Next step", "Goal", "Decisions", "Verified facts", "Rejected")
+LOG_SECTIONS = ("decisions", "rejected")
+LOG_LINE_CAP = 500
+LOG_TAIL = 5
+LOG_RESERVE = 700  # room kept for the decision-log tail when the brief itself is long
+# Same reference shapes the reply check accepts (hooks/groundwork_reply_check.py), every repeat bounded.
+REFERENCE = re.compile(
+    r"https?://[^\s)>\]]+"
+    r"|(?<![\w./-])[\w./-]{1,200}\.\w{1,10}:\d+(?:-\d+)?"
+    r"|`[^`\s]{0,200}/[^`\s]{0,200}\.\w{1,10}`"
+)
 BOOKKEEPING = {"ToolSearch", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
 TEMPLATE = (
     "<!-- Claude writes the sections above the Snapshot. The Snapshot section is rewritten by a "
     "Groundwork hook; nothing else in this file is changed by it. -->\n\n"
-    "## Goal\n\n## Decisions\n\n## Verified facts\n\n## Rejected\n\n## Next step\n\n"
+    "## Goal\n\n## Decisions\n<!-- One decision per line, each with its evidence: a link or file:line. -->\n\n"
+    "## Verified facts\n\n## Rejected\n<!-- One rejected option per line, with the evidence that rejected it. -->\n\n"
+    "## Next step\n\n"
 )
 HEADING = re.compile(r"^##[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 # Only the exact heading this hook writes; "## Snapshot hook decisions" written by Claude must never match (review finding).
@@ -194,8 +214,72 @@ def refresh(cwd: str, session_id: str, event: str, tools: list) -> Path | None:
         except UnicodeDecodeError:
             return path
         if write_private(path, refresh_snapshot(current, facts).encode("utf-8"), expected=before):
+            try:
+                update_decision_log(path, current, session_id)
+            except Exception:
+                pass  # the log must never break the snapshot save
             return path
     return path
+
+
+def log_path(brief: Path) -> Path:
+    return brief.with_name(brief.stem + ".decisions.md")
+
+
+def _state_path(brief: Path) -> Path:
+    return brief.with_name(brief.stem + ".decisions-state.json")
+
+
+def decision_lines(text: str) -> list:
+    """[(section, line)] for every non-empty line of the Decisions and Rejected sections, cleaned to one line."""
+    out = []
+    for head, body in sections(text):
+        if head.strip().lower() not in LOG_SECTIONS:
+            continue
+        for ln in _body_text(body).splitlines():
+            line = " ".join(clean(ln).split()).lstrip("-*• ").strip()[:LOG_LINE_CAP]
+            if line:
+                out.append((head.strip(), line))
+    return out
+
+
+def references(line: str) -> list:
+    return list(dict.fromkeys(m.group(0).strip("`") for m in REFERENCE.finditer(line)))
+
+
+def missing_evidence(text: str) -> list:
+    return [f"{sec}: {line}" for sec, line in decision_lines(text) if not references(line)]
+
+
+def update_decision_log(brief: Path, text: str, session_id: str) -> int:
+    """Append ADDED/REMOVED entries for changes since the last save; return how many were appended."""
+    state = _state_path(brief)
+    try:
+        prev = [tuple(x) for x in json.loads(state.read_text())]
+    except Exception:
+        prev = []
+    cur = decision_lines(text)
+    removed = [x for x in prev if x not in cur]
+    added = [x for x in cur if x not in prev]
+    if not removed and not added:
+        return 0
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    sid = re.sub(r"[^A-Za-z0-9_-]+", "-", session_id)[:12] or "unknown"
+    entries = [f"- {stamp} · REMOVED · {sec} · session {sid} · {line}\n" for sec, line in removed]
+    for sec, line in added:
+        refs = references(line)
+        evidence = ", ".join(refs) if refs else "no evidence cited"
+        entries.append(f"- {stamp} · ADDED · {sec} · session {sid} · {line} · evidence: {evidence}\n")
+    log = log_path(brief)
+    header = "" if log.exists() else (
+        f"# Decision log: {brief.stem}\n<!-- Append-only history written by a Groundwork hook from the brief's "
+        "Decisions and Rejected sections. Do not edit; correct a decision in the brief instead. -->\n\n")
+    # Log first, then state: a failed state write can repeat an entry later, but can never lose one.
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(header + "".join(entries))
+    write_private(state, json.dumps([list(x) for x in cur]).encode("utf-8"))
+    return len(entries)
 
 
 def real_tools(data: dict) -> list:
@@ -231,13 +315,13 @@ def tool_turns(session_id: str) -> int:
     return count
 
 
-def asked_marker(session_id: str) -> Path:
+def asked_marker(session_id: str, kind: str = "") -> Path:
     safe = re.sub(r"[^A-Za-z0-9_-]+", "-", session_id)[:80] or "unknown"
-    return config_dir() / "groundwork" / "briefs" / ".asked" / safe
+    return config_dir() / "groundwork" / "briefs" / ".asked" / (f"{kind}-{safe}" if kind else safe)
 
 
-def mark_asked(session_id: str) -> None:
-    marker = asked_marker(session_id)
+def mark_asked(session_id: str, kind: str = "") -> None:
+    marker = asked_marker(session_id, kind)
     marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -260,7 +344,16 @@ def on_stop(data: dict) -> None:
     path = refresh(cwd, session_id, "Stop", tools)
     if path is None or data.get("stop_hook_active") or not session_id:
         return
-    if judgment_filled(path.read_text(encoding="utf-8", errors="replace")):
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if judgment_filled(text):
+        missing = missing_evidence(text)
+        if missing and not asked_marker(session_id, "evidence").exists():
+            mark_asked(session_id, "evidence")
+            listed = "; ".join(m[:160] for m in missing[:5])
+            print(json.dumps({"decision": "block", "reason": (
+                f"Groundwork task brief: these decisions in {path} cite no evidence: {listed}. Add the link or "
+                "file:line that supports each one (or move it to Rejected with the evidence that rejected it). "
+                "Every change is kept in the append-only decision log beside the brief. Asked once per session.")}))
         return
     if asked_marker(session_id).exists() or tool_turns(session_id) < SUBSTANTIVE_TURNS:
         return
@@ -281,13 +374,24 @@ def render_context(path: Path, text: str) -> str:
               "Verify against the repository before relying on it; update it as the task changes.]\n")
     if not ordered:
         header += "No Goal or Next step written yet.\n"
+    log = log_path(path)
+    tail = []
+    try:
+        tail = [ln for ln in clean(log.read_text(encoding="utf-8", errors="replace")).splitlines()
+                if ln.startswith("- ")][-LOG_TAIL:]
+    except Exception:
+        pass
+    budget = MAX_CONTEXT - (LOG_RESERVE if tail else 0)
     out = header
     for h in ordered:
         piece = f"## {h}\n{parts[h]}\n"
-        room = MAX_CONTEXT - len(out)
+        room = budget - len(out)
         if room <= 40:
             break
         out += piece if len(piece) <= room else piece[: room - 15] + "\n[truncated]\n"
+    if tail:
+        piece = f"## Decision log (latest {len(tail)}; full history: {log})\n" + "\n".join(t[:200] for t in tail) + "\n"
+        out += piece[: MAX_CONTEXT - len(out)]
     snap = next((body for head, body in sections(text) if SNAPSHOT_TITLE.match(head)), "")
     if snap and MAX_CONTEXT - len(out) > 80:
         out += "## Snapshot\n" + snap[: MAX_CONTEXT - len(out) - 15] + "\n"
