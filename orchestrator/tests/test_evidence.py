@@ -107,6 +107,14 @@ def test_repo_claim_needs_a_code_source_and_vendor_claim_needs_a_doc(ws):
         ("UNVERIFIED", "missing_required_source"), ("UNVERIFIED", "missing_required_source")]
 
 
+def test_a_claim_about_what_a_repo_doc_says_needs_a_doc_source(ws):
+    (ws / "CHANGELOG.md").write_text("# Changelog\n- Refunds are validated before they are sent.\n")
+    says = claim("The changelog says refunds are validated", "CHANGELOG.md", 2, "Refunds are validated", "repo_doc")
+    from_code = claim("The changelog says 2024-06", "config.py", 1, 'API_VERSION = "2024-06"', "repo_doc")
+    assert statuses(evidence.assess([says, from_code], str(ws))) == [
+        ("UNVERIFIED", "not_reviewed"), ("UNVERIFIED", "missing_required_source")]
+
+
 def test_changed_source_is_stale_until_revalidated_never_contradicted(ws):
     found = evidence.assess([claim("pin", "config.py", 1, 'API_VERSION = "2024-06"', value="2024-06")], str(ws))
     (ws / "config.py").write_text('API_VERSION = "2025-01"\n')

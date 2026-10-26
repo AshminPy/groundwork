@@ -33,8 +33,9 @@ CLAIM_SCHEMA = {
         "type": "object",
         "properties": {
             "text": {"type": "string", "description": "the claim, one statement"},
-            "domain": {"type": "string", "enum": ["repo_code", "vendor_doc", "other"],
-                       "description": "repo_code: what this repository's code or config does; vendor_doc: what a "
+            "domain": {"type": "string", "enum": ["repo_code", "repo_doc", "vendor_doc", "other"],
+                       "description": "repo_code: what this repository's code or config does; repo_doc: what this "
+                                      "repository's own docs (README, CHANGELOG, docs/) say; vendor_doc: what a "
                                       "vendor's documentation says; other: anything else"},
             "value": {"type": "string", "description": "the specific value the claim asserts (a number, version, "
                                                        "name), exactly as it appears in the source; omit if none"},
@@ -176,6 +177,8 @@ def assess(claims: list[dict] | None, workspace: str) -> dict:
             elif not any(r["applicable"] for r in docs):
                 reason = "version_mismatch"
         if not reason and c["domain"] == "repo_code" and all(_is_doc(r["path"]) for r in located):
+            reason = "missing_required_source"
+        if not reason and c["domain"] == "repo_doc" and not any(_is_doc(r["path"]) for r in located):
             reason = "missing_required_source"
         if not reason and c.get("value"):
             reason, contradiction = _value_check(str(c["value"]), [r for r in located if r.get("applicable", True)])

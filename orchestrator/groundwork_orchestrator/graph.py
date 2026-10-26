@@ -317,7 +317,7 @@ class Orchestrator:
                     "- If the files do not answer the question, or only partly, say so plainly in `answer`, and list "
                     "what is missing in `unknowns`. Do not guess and do not fill gaps from general knowledge.\n"
                     "- When two sources disagree (for example a doc and the code), say which one the code follows and "
-                    "cite both.")
+                    "cite both: a repo_code claim for what the code does, a repo_doc claim for what the doc says.")
         if wf == "document":
             where = ("Write it to the file(s) the request names inside the working directory and list them in "
                      "files_changed." if write else "Do not change any file; return the document text.")
