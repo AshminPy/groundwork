@@ -36,6 +36,17 @@ When the decision gate is enabled, a recommendation to act SHALL state its premi
 - **WHEN** an answer recommends pinning back to a previous version and its premise ("the new version causes the failure") has no supporting evidence
 - **THEN** the recommendation is presented as "test first" with the cheapest discriminating test, and the challenge review's result is attached
 
+### Requirement: Task replies follow the response contract
+For a turn that used tools, Groundwork SHALL load the routed playbook's output format at prompt time when the rules select a category with confidence, and SHALL ask once at Stop for any missing required section (plain-language explanation, technical details when commands ran, evidence and references when sources were used, HARNESS METADATA), never looping and never blocking a conversational answer.
+
+#### Scenario: Metadata block missing
+- **WHEN** a tool-using turn ends without the HARNESS METADATA block
+- **THEN** Claude is asked once to add only the missing block, and the turn then ends whether or not it was added
+
+#### Scenario: Conversational answer
+- **WHEN** a turn used no tools
+- **THEN** no section is required and the turn is never blocked
+
 ### Requirement: Every feature is measured against current Groundwork
 Each feature SHALL be compared with Groundwork as installed on held-out benchmark cases graded by a frozen grader that never reads an arm's own status.
 

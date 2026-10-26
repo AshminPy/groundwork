@@ -82,6 +82,30 @@ Source: the statusLine stdin JSON (Claude Code statusline docs, checked 2026-10-
   - a "do X" recommendation built on a HYPOTHESIS reaches the user without the challenge result attached;
   - the gate rewrites the user's facts.
 
+## 6. Response contract enforcement (owner request, 2026-10-26)
+Evidence that the gap is real:
+- The playbooks exist (`~/.claude/groundwork/playbooks/*.md`, 10 files), but routing to them is rule text only (`rules/groundwork/task-routing.md`). No hook loads a playbook.
+- `scripts/check_routing.py` tests the category Claude picks, not whether the playbook is used.
+- In the session that produced this plan, no playbook was read at all.
+- The HARNESS METADATA block is parsed by the telemetry Stop hook, but nothing checks that it, the explanation, or the evidence section is present.
+
+Design:
+- **Load the playbook.** A UserPromptSubmit hook routes the prompt with deterministic rules: change words count only when used as a request (the PR #65 classifier lesson). It then adds the selected playbook's *Output Format* section, about 20 lines, as context, so the format reaches the model every time. When the rules cannot decide, nothing is added and the model routes itself, as today.
+- **Check the reply.** A Stop hook checks the final message of any turn that used tools. Required:
+  - a plain-language explanation first;
+  - `Technical details` when commands ran;
+  - `Evidence & references`, with at least one link or `file:line` when the answer relied on sources;
+  - the HARNESS METADATA block.
+
+  When something is missing, the hook asks Claude once to add only the missing parts. It uses Claude Code's `stop_hook_active` flag, so it can never loop. The exact Stop-hook blocking behaviour is verified against the hooks docs before building (UNVERIFIED now).
+- **Check the references.** The references in that section go through the citation check from feature 4.
+- **Visible checklist.** Every task that edits files or runs more than one command keeps a task list: the app's right-hand panel, or the CLI task list. A persistent per-task checklist lives in OpenSpec `tasks.md` and the ledger. A hook cannot see the app panel, so this part remains a rule, plus the persistent checklist.
+- **Never:**
+  - the hook blocks a conversational answer that used no tools;
+  - it asks more than once per turn;
+  - it changes the meaning of an answer (it only asks for missing sections);
+  - it adds a playbook the rules did not select with confidence.
+
 ## Verification
 - `python3 -m pytest tests -q`: all existing and new tests pass. New tests are written from each never-case.
 - `openspec validate core-evidence-continuity --strict`.
