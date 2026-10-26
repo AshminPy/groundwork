@@ -59,12 +59,18 @@ TELEMETRY_PATH = (
 INTEGRATIONS_CACHE_PATH = CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
 VERSION_PATH = CLAUDE_DIR / "groundwork" / "VERSION"
 STATUSLINE_CONFIG_PATH = CLAUDE_DIR / "groundwork" / "statusline-config.json"
-USAGE_PATH = (
-    Path(os.path.expanduser(os.environ["GROUNDWORK_USAGE_PATH"]))
-    if os.environ.get("GROUNDWORK_USAGE_PATH")
-    else CLAUDE_DIR / "groundwork" / "telemetry" / "usage.jsonl"
-)
-USAGE_STATE_PATH = USAGE_PATH.with_name("usage-state.json")  # session_id -> last record time (throttle)
+
+
+def _usage_path() -> Path:
+    """Resolved at call time from CLAUDE_DIR (not fixed at import), so anything that redirects the config dir —
+    CLAUDE_CONFIG_DIR, or a test that patches CLAUDE_DIR — also redirects usage records. A constant here let the
+    statusLine tests write into the real ~/.claude (found after the 2.5 merge)."""
+    override = os.environ.get("GROUNDWORK_USAGE_PATH")
+    return Path(os.path.expanduser(override)) if override else CLAUDE_DIR / "groundwork" / "telemetry" / "usage.jsonl"
+
+
+def _usage_state_path() -> Path:
+    return _usage_path().with_name("usage-state.json")  # session_id -> last record time (throttle)
 USAGE_MIN_INTERVAL_S = 60
 USAGE_STATE_KEEP_S = 8 * 86400
 USAGE_KEEP_S = 8 * 86400          # usage.jsonl keeps 8 days (the 7d report window plus a baseline day)
@@ -559,27 +565,27 @@ def record_usage(stdin: dict, now: Optional[float] = None) -> bool:
     if rec is None:
         return False
     try:
-        state = json.loads(USAGE_STATE_PATH.read_text())
+        state = json.loads(_usage_state_path().read_text())
         state = state if isinstance(state, dict) else {}
     except Exception:
         state = {}
     last = state.get(rec["session_id"])
     if isinstance(last, (int, float)) and now - last < USAGE_MIN_INTERVAL_S:
         return False
-    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _usage_path().parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # State first: if it cannot be written, nothing is appended, so a broken throttle can never turn
     # every render (about every 300 ms) into a record. The worst case is one lost record.
     state = {k: v for k, v in state.items() if isinstance(v, (int, float)) and now - v < USAGE_STATE_KEEP_S}
     state[rec["session_id"]] = now
-    _write_private(USAGE_STATE_PATH, json.dumps(state))
-    fd = os.open(USAGE_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    _write_private(_usage_state_path(), json.dumps(state))
+    fd = os.open(_usage_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    if now - (state.get("_last_trim") or 0) >= USAGE_TRIM_EVERY_S and USAGE_PATH.stat().st_size >= USAGE_TRIM_BYTES:
+    if now - (state.get("_last_trim") or 0) >= USAGE_TRIM_EVERY_S and _usage_path().stat().st_size >= USAGE_TRIM_BYTES:
         # Races between sessions (no lock on the state file; a trim's replace can drop a record appended
         # meanwhile) lose at most a record, which only lowers the report's lower-bound estimate.
         state["_last_trim"] = now
-        _write_private(USAGE_STATE_PATH, json.dumps(state))
+        _write_private(_usage_state_path(), json.dumps(state))
         trim_usage(now, min_bytes=0)
     return True
 
@@ -596,10 +602,10 @@ def _write_private(path: Path, text: str) -> None:
 def trim_usage(now: float, min_bytes: int = USAGE_TRIM_BYTES) -> None:
     """Drop records older than USAGE_KEEP_S once usage.jsonl reaches min_bytes."""
     try:
-        if USAGE_PATH.stat().st_size < min_bytes:
+        if _usage_path().stat().st_size < min_bytes:
             return
         keep = []
-        with USAGE_PATH.open(encoding="utf-8") as f:
+        with _usage_path().open(encoding="utf-8") as f:
             for line in f:
                 try:
                     t = _epoch(json.loads(line).get("ts"))
@@ -607,7 +613,7 @@ def trim_usage(now: float, min_bytes: int = USAGE_TRIM_BYTES) -> None:
                     continue
                 if t is not None and now - t < USAGE_KEEP_S:
                     keep.append(line if line.endswith("\n") else line + "\n")
-        _write_private(USAGE_PATH, "".join(keep))
+        _write_private(_usage_path(), "".join(keep))
     except Exception:
         pass
 
@@ -622,7 +628,7 @@ def _epoch(ts) -> Optional[float]:
 def _read_usage() -> list:
     out = []
     try:
-        with USAGE_PATH.open(encoding="utf-8") as f:
+        with _usage_path().open(encoding="utf-8") as f:
             for line in f:
                 try:
                     rec = json.loads(line)

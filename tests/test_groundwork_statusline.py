@@ -105,6 +105,8 @@ def test_full_smoke_stdin_to_stdout() -> None:
         check("exit code is 0", rc == 0, rc)
         check("output starts with GROUNDWORK", out.startswith("GROUNDWORK"), out)
         check("output is non-empty and single-line in compact mode", len(out.strip()) > 0 and "\n" not in out.strip(), out)
+        check("the usage record follows the redirected config dir (never the real ~/.claude)",
+              (Path(tmpdir) / "groundwork" / "telemetry" / "usage.jsonl").is_file())
     finish()
 
 
