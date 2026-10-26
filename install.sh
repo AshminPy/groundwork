@@ -97,7 +97,9 @@ chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py \
          "$CLAUDE_DIR"/hooks/groundwork_telemetry.py \
          "$CLAUDE_DIR"/hooks/groundwork_task_gate.py \
-         "$CLAUDE_DIR"/hooks/groundwork_tasks.py
+         "$CLAUDE_DIR"/hooks/groundwork_tasks.py \
+         "$CLAUDE_DIR"/hooks/groundwork_reply_check.py \
+         "$CLAUDE_DIR"/hooks/groundwork_brief.py
 # Earlier builds installed owner commands /gw-approve and /gw-cancel; task tracking no longer uses them.
 rm -f "$CLAUDE_DIR/commands/gw-approve.md" "$CLAUDE_DIR/commands/gw-cancel.md"
 # Health dashboard generator (no server, no LLM): installed beside the playbooks; the configured

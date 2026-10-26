@@ -38,6 +38,53 @@
 - **Fix: `groundwork routines schedule … --hour H --minute M` now records the time**, so `groundwork routines list`
   shows the time the job runs. An hour or minute out of range is refused, and so is a `config.json` that cannot be
   read (nothing is scheduled or overwritten).
+
+- **Reply format is now checked by a hook, not only asked for by rules** (feature 6 of
+  `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_reply_check.py`). Measured gap: in this repo's own
+  sessions, 31 of 51 tool-using turns ended without the `HARNESS METADATA` block.
+  - At prompt time it adds a short format reminder. When a conservative keyword route picks exactly one task type it
+    also adds that playbook's Output Format, so playbook formats finally reach the session. Ambiguous prompts get the
+    reminder only.
+  - At Stop, for turns that used a real tool, it checks the final reply for a plain-language opening, `Technical
+    details` when commands ran, at least one reference (link, file:line or path), and the metadata block. If a part is
+    missing it asks Claude once to add only that part. It never asks twice (`stop_hook_active`), never touches chat
+    turns, and fails open. Claude Code labels this one-time request "Stop hook error" in the app; that is its label for
+    any Stop-hook request, not a failure. `GROUNDWORK_REPLY_CHECK=off` disables it.
+  - Every tool-using reply must have an `Evidence & references` section with at least one link or file:line in it,
+    so each answer carries sources a reader can check and reuse when explaining a decision. Cost, measured: 34 of 40
+    saved benchmark answers cited only inline and would get one follow-up; in a live run the reminder alone did not
+    produce the section and one follow-up did.
+
+- **Usage visibility: which sessions used the plan** (feature 2 of `openspec/changes/core-evidence-continuity/`).
+  The statusLine now appends at most one record per session per minute to
+  `~/.claude/groundwork/telemetry/usage.jsonl` (owner-only): session id, project folder name, model id,
+  Claude Code's cumulative cost estimate, context %, and the account-wide 5-hour/7-day plan usage % (Pro/Max only),
+  or the spend-limit % behind a Claude apps gateway (typical for a work account; shown as `spend 62%`).
+  No prompt, reply, path or command text, and no session name (it can come from the first prompt); records older
+  than 8 days are trimmed once the file passes 1 MB. `groundwork usage [--window 5h|7d]` ranks sessions by how much their cost
+  estimate grew in the window (a lower bound: a counter reset such as `/clear` is skipped, never guessed). Plan
+  limits are shared by every session and claude.ai, so the report never says one session exceeded a limit. A new
+  `show_plan_usage` statusLine setting (default on) adds `5h 82%` when Claude Code sends plan usage. A failed write
+  never affects the statusLine.
+
+- **Per-task brief that survives compaction and new sessions** (feature 3 of
+  `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_brief.py`). Continuity no longer depends on Claude
+  remembering to write a state file or to read a "READ FIRST" pointer.
+  - One brief per repository branch at `~/.claude/groundwork/briefs/<repo>/<branch>-<hash>.md` (owner-only).
+    Claude writes Goal, Decisions, Verified facts, Rejected and Next step; the hook rewrites only its own
+    `## Snapshot (hook-written …)` section (branch, last commit, uncommitted files, tools used), byte for byte
+    preserving everything else, and never overwrites an edit made while it was saving.
+  - The snapshot is saved before every compaction (manual `/compact` or automatic) and after every tool-using turn.
+    At session start (new, resumed, cleared or compacted) the current branch's brief is loaded as context, Next step
+    first, capped at 2,400 characters, labelled as data, with invisible Unicode format characters removed.
+  - After three tool-using turns with an empty brief, Claude is asked once per session to write Goal and Next step.
+  - **Append-only decision log** beside each brief (`<brief>.decisions.md`): every new or changed Decisions/Rejected
+    line is appended as ADDED with the links or file:line it cites (or `no evidence cited`), and every removed line as
+    REMOVED, with date and session. Existing entries are never rewritten, so the full history of why each choice was
+    made can be shown to others. A decision without evidence gets one request per session to add it. The latest five
+    entries load with the brief at session start.
+  - Proven live: a brand-new `claude -p` session answered with the brief's next step without reading any file, and a
+    real `/compact` triggered the save. `GROUNDWORK_BRIEF=off` disables it; briefs are kept on uninstall.
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

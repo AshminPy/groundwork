@@ -5,17 +5,18 @@
 #   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/ and VERSION
 #     (telemetry records under ~/.claude/groundwork/telemetry/ — including Routines' own run
 #      history, routines.jsonl — dashboards under reports/, and investigation-continuity notes
-#      under investigations/ are all kept — they are your data; the launchd report job
+#      under investigations/, and task briefs under briefs/ are all kept — they are your data; the launchd report job
 #      com.groundwork.report and any per-Routine com.groundwork.routine.* jobs are removed)
 #   - ~/.claude/groundwork/config.json (Groundwork 2.1's own capability/Routines selection —
 #     this is Groundwork's config, not your data, unlike telemetry/reports/investigations)
 #   - ~/.claude/hooks/block_protected_push.py, require_material_review.py,
 #     groundwork_session_snapshot.py, groundwork_telemetry.py, groundwork_shared.py,
-#     groundwork_task_gate.py, groundwork_tasks.py, and the retired owner commands
+#     groundwork_task_gate.py, groundwork_tasks.py, groundwork_reply_check.py, groundwork_brief.py, and the retired owner commands
 #     ~/.claude/commands/gw-approve.md and gw-cancel.md that earlier builds installed
 #     (the task ledger under ~/.claude/groundwork/tasks/ is kept — it is your data)
-#   - the hook entries (five hook scripts; groundwork_telemetry.py registers three — Stop,
-#     PostToolUse, PostToolUseFailure — and groundwork_task_gate.py four), the deny rules,
+#   - the hook entries (seven hook scripts; groundwork_telemetry.py registers three — Stop,
+#     PostToolUse, PostToolUseFailure — groundwork_task_gate.py four, groundwork_reply_check.py
+#     two, and groundwork_brief.py three), the deny rules,
 #     and the env defaults this repo's install.sh added to settings.json (via
 #     scripts/unmerge_settings.py)
 #   - with --agent-teams: also env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS when it is "1"
@@ -79,6 +80,8 @@ rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/hooks/groundwork_shared.py" \
       "$CLAUDE_DIR/hooks/groundwork_task_gate.py" \
       "$CLAUDE_DIR/hooks/groundwork_tasks.py" \
+      "$CLAUDE_DIR/hooks/groundwork_reply_check.py" \
+      "$CLAUDE_DIR/hooks/groundwork_brief.py" \
       "$CLAUDE_DIR/commands/gw-approve.md" \
       "$CLAUDE_DIR/commands/gw-cancel.md"
 rmdir "$CLAUDE_DIR/commands" 2>/dev/null || true
@@ -121,10 +124,12 @@ rm -f "$CLAUDE_DIR"/hooks/__pycache__/block_protected_push.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_telemetry.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_shared.*.pyc \
       "$CLAUDE_DIR"/hooks/__pycache__/groundwork_task_gate.*.pyc \
-      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_tasks.*.pyc 2>/dev/null || true
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_tasks.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_reply_check.*.pyc \
+      "$CLAUDE_DIR"/hooks/__pycache__/groundwork_brief.*.pyc 2>/dev/null || true
 rmdir "$CLAUDE_DIR/hooks/__pycache__" 2>/dev/null || true
-if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ] || [ -d "$CLAUDE_DIR/groundwork/tasks" ]; then
-  for kept in telemetry reports investigations tasks; do
+if [ -d "$CLAUDE_DIR/groundwork/telemetry" ] || [ -d "$CLAUDE_DIR/groundwork/reports" ] || [ -d "$CLAUDE_DIR/groundwork/investigations" ] || [ -d "$CLAUDE_DIR/groundwork/tasks" ] || [ -d "$CLAUDE_DIR/groundwork/briefs" ]; then
+  for kept in telemetry reports investigations tasks briefs; do
     [ -d "$CLAUDE_DIR/groundwork/$kept" ] && echo "Kept $CLAUDE_DIR/groundwork/$kept/ (your data) — delete it yourself if you do not want it."
   done
 else
