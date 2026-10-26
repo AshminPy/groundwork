@@ -8,6 +8,7 @@
 - [x] 6.3 hooks/groundwork_reply_check.py: prompt-time reminder + routed playbook Output Format; Stop-time check
 - [x] 6.4 Live: a bare "3" reply after Bash got one request and was completed; a chat turn was untouched
 - Baseline: 31/51 tool turns in this repo lacked HARNESS METADATA; 40/40 saved benchmark answers pass the check (no false asks)
+- [x] 6.5 Owner direction: Evidence & references section with a link or file:line required in every tool-using reply (449d68e; strict baseline 6/40, one follow-up otherwise; live verified)
 
 ## 2. Usage visibility — PR #67
 - [x] 2.1 Never-case tests (no content, no session name, render survives a write failure, no "exceeded" claim) — 35 tests
@@ -18,6 +19,7 @@
 - [x] 3.1 Never-case tests (no cross-branch/cross-repo load, byte-exact outside the snapshot, no overwrite of a concurrent edit, ask once) — 45 tests
 - [x] 3.2 hooks/groundwork_brief.py: per-branch brief; Snapshot rewritten on PreCompact and tool-using Stop; SessionStart reload with its own 2,400-char budget (no change to the #61 snapshot file); ask once for Goal/Next step
 - [x] 3.3 Live: a new session recalled the brief's next step without tools; a real /compact refreshed the snapshot
+- [x] 3.4 Owner direction: append-only decision log with evidence beside each brief; one request per session for a decision without evidence (e5d5f2f, 8523f6f; 66 tests; live verified)
 - Deferred: a context-% checkpoint (hooks do not receive context %; PreCompact covers the loss point)
 
 ## 4. Citation check — NOT BUILT (measured)
