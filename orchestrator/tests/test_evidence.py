@@ -77,7 +77,29 @@ def test_vendor_doc_for_another_version_is_inapplicable_not_contradicted(ws):
     old = claim("Max page size is 50", "docs/api-2023-01.md", 3, "Maximum page size: 50.", "vendor_doc", value="50")
     found = evidence.assess([PIN, old], str(ws))
     assert statuses(found)[1] == ("UNVERIFIED", "version_mismatch")
-    assert evidence.answer_status(found) != "CONTRADICTED"
+    assert found["claims"][1]["status"] != "CONTRADICTED" and evidence.answer_status(found) != "CONTRADICTED"
+
+
+def test_v_prefixed_version_agreeing_with_the_quote_is_not_contradicted(ws):
+    (ws / "version.py").write_text('VERSION = "1.2.3"\n')
+    found = evidence.assess([claim("The package version is v1.2.3", "version.py", 1, 'VERSION = "1.2.3"',
+                                   value="v1.2.3")], str(ws))
+    assert statuses(found) == [("UNVERIFIED", "not_reviewed")]
+
+
+def test_a_mis_cited_unrelated_number_is_not_a_contradiction(ws):
+    found = evidence.assess([claim("The timeout is 30 seconds", "config.py", 2, 'get("MAX_RETRIES", "3")',
+                                   value="30")], str(ws))
+    assert statuses(found) == [("UNVERIFIED", "value_not_in_quote")]
+
+
+def test_vendor_value_is_never_contradicted_by_a_code_quote(ws):
+    (ws / "client.py").write_text("PAGE = 60\n")
+    c = {"text": "Max page size is 500", "domain": "vendor_doc", "value": "500",
+         "refs": [{"path": "client.py", "line_start": 1, "line_end": 1, "quote": "PAGE = 60"},
+                  {"path": "docs/api-2024-06.md", "line_start": 1, "line_end": 1, "quote": "Reference — API version"}]}
+    found = evidence.assess([PIN, c], str(ws))
+    assert found["claims"][1]["status"] != "CONTRADICTED"
 
 
 def test_vendor_doc_for_the_version_in_use_is_accepted(ws):

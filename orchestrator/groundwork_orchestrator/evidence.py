@@ -92,6 +92,20 @@ def _numbers(text: str) -> set[str]:
     return {n.replace(",", "") for n in _NUMBER.findall(text)}
 
 
+def _ver(v: str) -> str:
+    return v.lower().removeprefix("v")
+
+
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
+_STOP = {"that", "this", "with", "from", "which", "there", "their", "when", "will", "into", "than", "then", "does",
+         "have", "uses", "used", "using", "value", "default", "about", "only", "also", "they", "were", "been"}
+
+
+def _subject_words(text: str) -> set[str]:
+    """Name-like words of four or more letters, split on underscores, lowercased: the claim's subject."""
+    return {w.lower() for part in re.split(r"[_\W]+", text) for w in _WORD.findall(part)} - _STOP
+
+
 def locate(ref: dict, root: Path) -> dict:
     """One ref → provenance plus `located` and, when it fails, `reason` and `detail`."""
     raw = str(ref.get("path") or "").strip()
@@ -127,23 +141,29 @@ def _pinned_versions(claims: list[dict]) -> set[str]:
             for v in _VERSION.findall(r["quote"])}
 
 
-def _value_check(value: str, refs: list[dict]) -> tuple[str | None, dict | None]:
-    """(reason, contradiction). The value must appear in a located quote. A contradiction needs a located quote that
-    states exactly one value of the same kind, and that value differs."""
+def _value_check(text: str, value: str, refs: list[dict]) -> tuple[str | None, dict | None]:
+    """(reason, contradiction). The value must appear in a located quote. A contradiction needs a located quote that is
+    about the same subject (it shares a name-like word with the claim) and states exactly one value of the same kind,
+    and that value differs. A quote about something else is a mis-citation (value_not_in_quote), never a
+    contradiction."""
     v = _norm(value)
     if not v or not refs:
         return None, None
-    if any(v.lower() in _norm(r["quote"]).lower() for r in refs):
-        return None, None
     if _VERSION.fullmatch(v):
-        kind = "version"
+        kind, want = "version", _ver(v)
+        if any(want in {_ver(x) for x in _VERSION.findall(r["quote"])} or v.lower() in r["quote"].lower()
+               for r in refs):
+            return None, None
     elif _numbers(v) == {v.replace(",", "")}:
-        kind = "number"
+        kind, want = "number", v.replace(",", "")
+        if any(want in _numbers(r["quote"]) for r in refs):
+            return None, None
     else:
-        return "value_not_in_quote", None
+        return (None, None) if any(v.lower() in _norm(r["quote"]).lower() for r in refs) else ("value_not_in_quote", None)
+    subject = _subject_words(text)
     for r in refs:
-        found = set(_VERSION.findall(r["quote"])) if kind == "version" else _numbers(r["quote"])
-        if len(found) == 1 and next(iter(found)) != v.replace(",", ""):
+        found = {_ver(x) for x in _VERSION.findall(r["quote"])} if kind == "version" else _numbers(r["quote"])
+        if len(found) == 1 and next(iter(found)) != want and subject & _subject_words(r["quote"]):
             return None, {"path": r["path"], "line_start": r["line_start"], "quote": r["quote"],
                           "states": next(iter(found)), "claim_value": v, "detected_by": "rule:value_differs"}
     return "value_not_in_quote", None
@@ -181,7 +201,9 @@ def assess(claims: list[dict] | None, workspace: str) -> dict:
         if not reason and c["domain"] == "repo_doc" and not any(_is_doc(r["path"]) for r in located):
             reason = "missing_required_source"
         if not reason and c.get("value"):
-            reason, contradiction = _value_check(str(c["value"]), [r for r in located if r.get("applicable", True)])
+            # A vendor claim's value is checked against the applicable documentation only, never against code.
+            usable = [r for r in located if r.get("applicable")] if c["domain"] == "vendor_doc" else located
+            reason, contradiction = _value_check(c["text"], str(c["value"]), usable)
         c["contradictions"] = [contradiction] if contradiction else []
         c["status"], c["reason"] = ("CONTRADICTED", None) if contradiction else ("UNVERIFIED", reason or "not_reviewed")
     return {"repo_commit": _git(root, "rev-parse", "HEAD"), "pinned_versions": sorted(pinned), "claims": out}

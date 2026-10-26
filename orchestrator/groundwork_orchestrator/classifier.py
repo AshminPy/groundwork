@@ -27,7 +27,7 @@ SIGNALS = {
                  (r"\b(should (we|i)|is it (safe|ok|okay|better|worth)|give a decision|recommend(ation)?)\b", 1)],
 }
 # A change request: a change verb at a sentence start or right after a request phrase.
-_REQUEST = (r"(?:^|[.!;:\n]\s*|\b(?:please|(?:can|could|would|will) you|i want(?: you)? to|i'?d like(?: you)? to|"
+_REQUEST = (r"(?:^|[.!;:]\s+|\n\s*|\b(?:please|(?:can|could|would|will) you|i want(?: you)? to|i'?d like(?: you)? to|"
             r"(?:we|i) need you to|need you to|let'?s|help me|and|then|also)\s+)")
 STRONG_CHANGE = re.compile(_REQUEST + r"(implement|build|create|refactor|migrate|introduce|scaffold)\b", re.I)
 WEAK_CHANGE = re.compile(_REQUEST + r"(add|change|update|rename|remove|support|extend|replace)\b", re.I)

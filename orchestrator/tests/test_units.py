@@ -306,6 +306,7 @@ def test_questions_that_mention_change_words_stay_questions(text):
     "Can you add a --dry-run flag to the CLI?",
     "We need you to support cursor pagination in list_invoices.",
     "Read the client and then replace offset pagination with cursor pagination.",
+    "Context: the export is slow\nAdd cursor pagination to list_invoices",
 ])
 def test_requested_changes_are_projects(text):
     c = classifier.rule_classify(text)
@@ -322,3 +323,8 @@ def test_requested_changes_are_projects(text):
 def test_documentation_means_a_request_to_write_docs(text, cat):
     c = classifier.rule_classify(text)
     assert c is not None and c["category"] == cat, (classifier.scores(text), c)
+
+
+@pytest.mark.parametrize("text", ["Tell me how dict.update works", "How does dict.update handle duplicate keys?"])
+def test_method_names_are_not_change_requests(text):
+    assert classifier.scores(text)["PROJECT"] == 0
