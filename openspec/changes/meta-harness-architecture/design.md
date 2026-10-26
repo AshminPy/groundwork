@@ -299,14 +299,18 @@ Measured for each arm:
 3. **Freshness.** Each located source gets its fingerprint and `version_info`. A source that changed since a reused fact was recorded is stale, and the claim cannot use it until it is re-located.
 4. **Requirement policy (completeness without numbers).** Adapted from `sre-agent-gateway/agent/confidence/policy.py:24` (`EvidenceRequirement`). A small table per claim domain:
    - a claim about this repository's behaviour requires a `repo_code` source at the current HEAD;
-   - a claim about vendor behaviour requires a `vendor_doc` source on the allowlist, and a version match when the repo pins a version;
+   - a claim about vendor behaviour requires a `vendor_doc` source on the allowlist that applies to the version in use. When the repo pins a version and the doc is for another version, the source is **inapplicable**. It cannot support the claim, and it does not contradict it either (reason `version_mismatch`);
    - a claim about the local environment requires a `command` source.
    A missing required domain gives the reason `missing_required_source`. The policy is validated at startup, as `policy.validate()` is.
-5. **Deterministic contradiction checks.**
-   - The vendor doc's version differs from the version the repo pins.
-   - Two located sources of the same priority quote incompatible values for one key. Version strings and numbers are extracted by regex; nothing else is detected, so as not to over-claim.
-   - An observable claim's probe output disagrees with the claim.
-   - A file changed after it was quoted.
+5. **Contradiction means demonstrably contradicted.** A claim is CONTRADICTED only when applicable, fresh evidence states the opposite of the claim:
+   - an observable claim's probe output disagrees with the claim; or
+   - a located, fresh, version-applicable excerpt states a value incompatible with the value the claim asserts (version strings and numbers, extracted by regex; nothing else is matched by code); or
+   - the reviewer reports `contradicted` with a valid Set B excerpt that passes the same checks.
+
+   These are **not** contradictions. They leave the claim UNVERIFIED with a reason, until it is revalidated:
+   - the cited file changed after it was quoted, or the doc changed or passed its TTL → `stale`;
+   - the doc is for a different version than the one in use → `version_mismatch`;
+   - two applicable sources disagree with each other, but neither demonstrably contradicts the claim → `conflicting_sources`, with both listed.
 6. **Support review (model judgment, bounded).** One batched, fresh, read-only reviewer session per task. It runs when risk ≥ medium or `--verify` is set. The pattern is from `sre-agent-gateway/agent/confidence/verifier.py:284`:
    - **Set A** is the excerpts each claim cites. **Set B** is all other retrieved excerpts, usable only to show a contradiction.
    - Per claim it returns `supported` / `partial` / `unsupported` / `contradicted` / `non_material`, plus `{source_id, excerpt}` pairs.
@@ -317,10 +321,10 @@ Measured for each arm:
 
 | Order | Status | Rule |
 |---|---|---|
-| 1 | CONTRADICTED | a deterministic contradiction (step 5), or a probe disagrees, or the reviewer reports `contradicted` with a valid Set B excerpt |
+| 1 | CONTRADICTED | demonstrably contradicted by applicable, fresh evidence, as defined in step 5 |
 | 2 | VERIFIED | `observable` claim, its probe matches, and every source it cites is fresh |
 | 3 | SOURCE_SUPPORTED | located, fresh, the requirement policy is met, and the reviewer says `supported` |
-| 4 | UNVERIFIED | anything else, with a reason code: `not_located`, `stale`, `missing_required_source`, `not_reviewed`, `partial`, `unsupported`, `review_failed`, `reviewer_suggested_non_material` |
+| 4 | UNVERIFIED | anything else, with a reason code: `not_located`, `stale`, `version_mismatch`, `conflicting_sources`, `missing_required_source`, `not_reviewed`, `partial`, `unsupported`, `review_failed`, `reviewer_suggested_non_material` |
 
 Consequence: a low-risk answer gets no reviewer (Q6), so its interpretive claims stay UNVERIFIED (`not_reviewed`). Such an answer is at best PARTIALLY_SUPPORTED unless all its material claims are observable. The answer says so in one line. `--verify` forces the review.
 
@@ -417,7 +421,7 @@ Each step is its own OpenSpec change and PR: tests first, then live validation, 
 
 | Step | Scope | Reuses | Done when |
 |---|---|---|---|
-| M1a | Deny-only `--settings` passthrough in `claude_adapter.build_argv`, from profile config. A file with anything other than `permissions.deny` is rejected. The only PR #62 change M1 needs; owner approval required | adapter | Unit test: a non-deny settings file is rejected; canary B1 passes through the orchestrator |
+| M1a | **Read fence** (owner correction, 2026-10-25): every worker call passes `--settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`. It is a fixed constant in `claude_adapter.ISOLATION_FLAGS`, so no configurable passthrough is needed. It is passed on every call, including resume. The only PR #62 change M1 needs | adapter | Unit test: every call, including the `--resume` repair, carries the fence; canary B1 passes for both arms |
 | **M1 (first milestone)** | **Benchmark harness and read-only baseline.** `bench/`: a runner, the deny-rule canary test, about 12 pilot cases in Harbor's task layout, deterministic held-out graders, and a run report. It covers only the categories that execute nothing: Q, V, C, A, D (answer only) and I. Arms: A (plain `claude -p`) and B (PR #62 + M1a).<br>• The arm-B runner submits tasks with no checks and no write permission, answers every approval interrupt with "deny", and answers every *blocked* interrupt with `{"cancel": true}`, recording the case as blocked. It never resumes a blocked task, which would re-enter `plan` and block again (`graph.py:462`). A request misclassified as a write task therefore ends with nothing written.<br>• Arm B still uses `--output-format json` until M4, so it has no per-turn usage, no `rate_limit_event` and no tool-call stream. Its secret protection in M1 is the deny rules, canary B1 and the output fingerprint scan. The report lists the metrics arm B lacks.<br>• No worker-written code runs anywhere.<br>• Graders are regex/fact matchers run on the host in a separate process after the run. They need no Docker | PR #62 CLI as a black box; Harbor task format | Canary passes for both arms; baseline report with per-arm, per-category metrics and k=2 repeats; graders validated by an oracle per case and by an owner spot-check |
 | M1b | Close the F gap in PR #62: checks on worker-modified code stop running on the host (`graph.py:390`; reported as "not run: no containment") | `graph.py` validate node | Test proves no worker code runs on the host. Needs owner approval because it changes PR #62 |
 | M1c | Add write categories P, T, X to the baseline. Arm B runs only with M1b applied, and arm A gets no Bash. Held-out tests run only in the grader's Docker container (Docker Desktop started) | M1 runner | Baseline extended; no host execution of worker code in either arm |
@@ -476,15 +480,13 @@ R and S need a crash-and-resume procedure and a side-effect runner, which arrive
 
 **Isolation rules (prevention first, detection second).**
 - **Keys out of reach.** Keys, held-out tests and oracle solutions live in `~/groundwork-bench-keys/`. That directory is not an ancestor or descendant of any arm's working folder, which are under a per-run temp directory. They are read only by the grader, after the run ends. In M1 the grader is a host process. From M1c, held-out tests run in the grading container.
-- **Deny rules in every arm.** Each run gets a `--settings` file whose `permissions.deny` lists Read, Grep and Glob on the paths below.
-  - Arm A passes it on its own `claude -p` command line.
-  - Arms B/C get it through **M1a**: a small, owner-approved passthrough in `claude_adapter.build_argv`. PR #62 never passes `--settings` today (`claude_adapter.py:150`), and editing the user's real `~/.claude/settings.json` is ruled out because it is a global change. The passthrough comes from the profile config, never from an environment variable. It is rejected unless the file contains only `permissions.deny` entries, so it can only narrow permissions. It is passed on **every** call, including `--resume` repair calls, because `--settings` is not restored on resume (unit test). Whether a `--settings` file still applies under `--setting-sources user` is UNVERIFIED. Canary B1, a hard gate, tests exactly that.
-
-  Paths denied:
-  - the keys directory;
-  - `~/.ssh/**`, `~/.aws/**`, `~/.kube/**` and `**/.env`;
-  - the real `~/.claude` credential files.
-  Deny rules merge across settings sources, and deny wins (INFERENCE from the settings docs). M1's first task is the canary test B1. It runs through **each arm's real launch path**: arm A's command, and arm B's orchestrator with M1a. It proves a denied read is refused in `-p` before any case runs. If it fails for any arm, the benchmark does not run.
+- **Read fence in every arm (revised by owner correction).** Both arms run the user's normal settings, so the Groundwork hooks stay on. Both add `--settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`. The file tools then refuse every path outside the working directory, in every permission mode. Workers get Read, Grep and Glob only: no Bash and no WebFetch.
+  - Rejected alternatives:
+    - `--restricted` "ignores user, project and local settings files" (`claude --help`, 2.1.310), so it would drop the Groundwork hooks from both arms;
+    - path-scoped deny rules: `Glob(path)` rules "never match", and `Read` rules reach Grep/Glob only "best-effort" (permissions docs).
+  - Arm A passes the flag on its own command line. Arm B gets it from M1a.
+  - **Canary B1 (hard gate, run before every benchmark).** Six probes — Read, Grep and Glob on a fake key in `~/groundwork-bench-keys/` and on a fake secret beside the workspace — are each attempted in their own call. Each must be refused with nothing leaked, through each arm's real launch path. A control run without the fence must leak, which proves the canary can detect a leak. If any probe fails, the benchmark does not run.
+  - Live result, 2026-10-25: both arms 6 of 6 refused, 0 leaks, Groundwork hooks ran. The control leaked the fake secret through Read.
 - **Detection as a backstop.** The runner scans each arm's stream-json tool calls for the keys path. It also scans all outputs for sha256 fingerprints of key lines and the canary text. Any hit invalidates the run and is reported as a security violation.
 - **Ledger isolation.** Fixtures are their own git repositories. Groundwork's intake hook therefore records any stray tasks under each fixture's own repo key, never in a real project's ledger. The runner lists these entries in the report. They are deleted only with owner approval.
 - Graders never read an arm's own status, claims or confidence. They read only the final answer text, the resulting files and the side-effect counters.
@@ -494,7 +496,7 @@ R and S need a crash-and-resume procedure and a side-effect runner, which arrive
   - optionally, a fresh Claude grader session that has never seen any arm's transcript. It is reported separately and calibrated against the owner labels. It is never the sole grader.
 
 **Safety during the benchmark.**
-- I, C, Q, V, D and A cases run with read-only tools in every arm, plus the deny rules above.
+- I, C, Q, V, D and A cases run with read-only tools in every arm, plus the read fence above.
 - P, X, T and R cases give workers Edit/Write but no Bash on the host. Tests run only in the grader's Docker container. Arm B runs these only after M1b, because unchanged PR #62 runs checks on the host.
 - This makes arm A weaker than normal interactive use, which runs its own tests. The report states this limitation.
 
@@ -512,6 +514,7 @@ R and S need a crash-and-resume procedure and a side-effect runner, which arrive
 | Recovery success | R/S cases that complete with zero duplicated side effects ÷ R/S cases |
 
 **Reporting rules.**
+- [!] **The M1 run (12 cases, 2 arms, 2 repeats) is an initial pilot, not statistical proof** that one harness is better (owner correction, 2026-10-25). With so few cases, a difference of one or two cases is within noise. The pilot is for finding grader bugs, sizing usage, and spotting large gaps only. Claims of superiority need the full suite with more repeats.
 - Per category, per arm, with the k runs shown separately (models are not deterministic).
 - No result is reported as an improvement unless it holds in both repeats and in the majority of the category's cases.
 - A safety bar (no security violation, no duplicated side effect) is reported separately from accuracy. That keeps "passed safely" from being read as "answered correctly", which was SRE lesson 9's 56/56 problem.
@@ -532,7 +535,9 @@ R and S need a crash-and-resume procedure and a side-effect runner, which arrive
 | Q5 | Non-allowlisted URL, redirect off the allowlist, private IP, > 2 MB | not fetched; `not_located` |
 | Q6 | Low-risk question | no reviewer session |
 | Q7 | Empty or all-non-material answer | UNVERIFIED |
-| Q8 | Vendor doc version ≠ repo-pinned version | CONTRADICTED by rule |
+| Q8 | Vendor doc version ≠ repo-pinned version, and nothing applicable states the opposite | UNVERIFIED `version_mismatch` (never CONTRADICTED) |
+| Q8b | Applicable, fresh doc excerpt states a value incompatible with the claim's value | CONTRADICTED |
+| Q8c | Two applicable sources disagree; neither contradicts the claim | UNVERIFIED `conflicting_sources`, both listed |
 | Q9 | Reviewer cites outside Set A, or a contradiction without a valid Set B excerpt | that output rejected; claim stays `not_reviewed` |
 | Q10 | Repo claim with only a vendor-doc source | UNVERIFIED `missing_required_source` |
 | H1 | Utilisation crosses the threshold mid-call | call not interrupted; `handoff_pending`; handoff at the boundary |
@@ -542,7 +547,7 @@ R and S need a crash-and-resume procedure and a side-effect runner, which arrive
 | H5 | Continuation after handoff re-applies an edit already in the diff | `duplicate_or_out_of_scope_edit`; step fails visibly, no auto-repair |
 | H6 | Continuation worker-call op key | `segment` incremented; the old worker call's stored result is not returned for it |
 | H7 | A side-effect op (fixture script, check) requested again after a handoff | same key as before the handoff; the stored result is returned; the counter stays 1 |
-| Q11 | Observable claim whose probe matches but whose cited file changed after it was quoted | CONTRADICTED (order 1 wins over VERIFIED) |
+| Q11 | Observable claim whose probe matches but whose cited file changed after it was quoted | UNVERIFIED `stale` until revalidated (not VERIFIED, not CONTRADICTED) |
 | Q12 | Reviewer returns `non_material` for a claim | claim stays material; the suggestion appears as a warning; status unchanged |
 | B1 | Bench arm attempts to read a denied path (canary test) | read refused in `-p`; if not refused, the benchmark does not start |
 | S1–S6 | Budget, reviewer isolation, failed resume, auth/quota, third worker, SIGKILL slot | as in revision 1 |
@@ -602,7 +607,7 @@ What is not reused: Kubernetes and GCP tool layers, GCS evidence storage, Vertex
 | No independent baseline: improvements cannot be shown | MUST FIX | M1 |
 | Intake hook creates stray ledger tasks (workers, and interactive GW-1) | MUST FIX | M5 (after PR #61) |
 | A second profile's config directory would load no Groundwork hooks | MUST FIX before any second profile runs | preflight check (§3) |
-| Benchmark keys and real secrets readable by arms; injection cases could run harmful commands | MUST FIX before the benchmark | §8.3 isolation rules (deny rules + canary test first) |
+| Benchmark keys and real secrets readable by arms; injection cases could run harmful commands | MUST FIX before the benchmark (done in M1a: read fence + canary B1) | §8.3 isolation rules (read fence rules + canary test first) |
 | Unchanged PR #62 runs checks on worker code on the host, so it cannot join write-category benchmarks | MUST FIX before M1c | M1b |
 | Quota exhaustion handled only after failure | MUST FIX | M4 (quota pause) |
 | Context handoff vs native compaction | NICE TO HAVE until measured | M4 experiment |
@@ -617,7 +622,7 @@ What is not reused: Kubernetes and GCP tool layers, GCS evidence storage, Vertex
 - The Docker runner with `--network none` and no HOME mount on this Mac, with Docker Desktop started (M6).
 - Subgraph crash-resume in LangGraph (M2).
 - Grader validity: the oracle passes and a deliberately wrong answer fails, for every case (M1).
-- `permissions.deny` from a `--settings` file being enforced in `-p` alongside the user's settings: the canary test B1 (M1).
+- The read fence from a `--settings` value being enforced in `-p` alongside the user's settings: **validated live 2026-10-25** (canary B1, both arms).
 - The work profile: not validated, and out of scope by owner decision.
 
 ## Independent review
@@ -651,7 +656,7 @@ What is not reused: Kubernetes and GCP tool layers, GCS evidence storage, Vertex
 
 ## Owner decisions
 
-1. **Approve M1a + M1** as the first milestone: a benchmark harness and a read-only baseline of plain Claude Code vs PR #62. The only PR #62 change is M1a's deny-only settings passthrough.
+1. **Approved 2026-10-25, with corrections: M1a + M1** as the first milestone: a benchmark harness and a read-only baseline of plain Claude Code vs PR #62. The only PR #62 change is M1a's fixed read fence.
 2. **M1b**: allow a small change to PR #62 that stops host-run checks on worker-modified code. It stays unmerged until you decide on PR #62.
 3. Settled by the owner's brief: personal Max profile only, so the work profile is designed but disabled; VERIFIED is reserved for objective checks, and SOURCE_SUPPORTED is used for reviewed sources.
 4. Later (M8 only): whether to mint a `claude setup-token` for containerised Harbor arms.

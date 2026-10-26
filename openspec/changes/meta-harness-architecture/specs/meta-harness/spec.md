@@ -29,11 +29,19 @@ The orchestrator SHALL enforce a per-task session limit, the existing repair lim
 - **THEN** the task is BLOCKED with the reason, and no session starts
 
 ### Requirement: Claim statuses are assigned by code
-Each material claim SHALL receive exactly one status, decided first-match-wins in the order CONTRADICTED, VERIFIED, SOURCE_SUPPORTED, UNVERIFIED: VERIFIED only when an orchestrator-run deterministic probe matches an observable claim whose cited sources are fresh; CONTRADICTED when a deterministic rule or a valid Set B excerpt contradicts it; SOURCE_SUPPORTED when it is located, fresh, meets the requirement policy and is reviewed as supported; otherwise UNVERIFIED with a reason code. Only code rules SHALL mark a claim non-material. No numeric confidence SHALL be shown.
+Each material claim SHALL receive exactly one status, decided first-match-wins in the order CONTRADICTED, VERIFIED, SOURCE_SUPPORTED, UNVERIFIED: VERIFIED only when an orchestrator-run deterministic probe matches an observable claim whose cited sources are fresh; CONTRADICTED only when applicable, fresh evidence demonstrably states the opposite; stale, version-mismatched or mutually conflicting sources leave the claim UNVERIFIED with a reason; SOURCE_SUPPORTED when it is located, fresh, meets the requirement policy and is reviewed as supported; otherwise UNVERIFIED with a reason code. Only code rules SHALL mark a claim non-material. No numeric confidence SHALL be shown.
 
 #### Scenario: Vendor doc version differs from the pinned version
-- **WHEN** a claim's located vendor-doc source states a version different from the version the repository pins
-- **THEN** the claim is CONTRADICTED by rule, and the answer status is CONTRADICTED after the one allowed repair
+- **WHEN** a claim's only vendor-doc source is for a different version than the one the repository pins, and no applicable evidence states the opposite of the claim
+- **THEN** the claim is UNVERIFIED with reason `version_mismatch`, never CONTRADICTED
+
+#### Scenario: Cited source changed
+- **WHEN** a claim's cited file changed after it was quoted
+- **THEN** the claim is UNVERIFIED with reason `stale` until it is revalidated
+
+#### Scenario: Demonstrable contradiction
+- **WHEN** a located, fresh, version-applicable excerpt or a probe output states a value incompatible with the claim's value
+- **THEN** the claim is CONTRADICTED
 
 #### Scenario: Interpretive claim reviewed as supported
 - **WHEN** an interpretive claim is located, fresh, meets its requirement policy, and the reviewer returns supported with a Set A excerpt
