@@ -70,6 +70,8 @@ def test_keys_never_ship_inside_the_fixture():
 @pytest.mark.parametrize("case,text", [
     ("a1-pagination-decision", "Do not use offset pagination; use cursor pagination, because offset stops at 10,000 "
                                "results (vendor-docs/payapi-2024-06.md:5)."),
+    ("a1-pagination-decision", "Use cursor pagination rather than use offset: offset stops at 10,000 results "
+                               "(vendor-docs/payapi-2024-06.md:5)."),
     ("c2-retries-enabled", "## Answer\n\nYes — it retries on 429 and 503 (payapi/client.py:8)."),
     ("a2-refund-retry-decision", "Decision: No. Without X-PayAPI-Idempotency a retry can create duplicate refunds "
                                  "(vendor-docs/payapi-2024-06.md:11)."),
