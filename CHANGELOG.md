@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Reply format is now checked by a hook, not only asked for by rules** (feature 6 of
+  `openspec/changes/core-evidence-continuity/`, `hooks/groundwork_reply_check.py`). Measured gap: in this repo's own
+  sessions, 31 of 51 tool-using turns ended without the `HARNESS METADATA` block.
+  - At prompt time it adds a short format reminder. When a conservative keyword route picks exactly one task type it
+    also adds that playbook's Output Format, so playbook formats finally reach the session. Ambiguous prompts get the
+    reminder only.
+  - At Stop, for turns that used a real tool, it checks the final reply for a plain-language opening, `Technical
+    details` when commands ran, at least one reference (link, file:line or path), and the metadata block. If a part is
+    missing it asks Claude once to add only that part. It never asks twice (`stop_hook_active`), never touches chat
+    turns, and fails open. Claude Code labels this one-time request "Stop hook error" in the app; that is its label for
+    any Stop-hook request, not a failure. `GROUNDWORK_REPLY_CHECK=off` disables it.
+  - References are accepted anywhere in the reply: all 40 saved benchmark answers cited `file:line` inline and 34 had
+    no `Evidence & references` heading, so blocking on the heading would cost a follow-up on most turns for style.
+
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).
