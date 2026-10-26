@@ -8,8 +8,8 @@ from bench import grade
 CASES = sorted(p.stem for p in grade.KEYS.glob("*.json"))
 
 
-def test_there_are_twelve_cases_each_with_a_task():
-    assert len(CASES) == 12
+def test_there_are_twenty_cases_each_with_a_task():
+    assert len(CASES) == 20
     for case in CASES:
         assert (grade.BENCH / "tasks" / case / "instruction.md").is_file()
 
@@ -134,3 +134,31 @@ def test_amount_check_written_as_a_rejected_condition_counts():
 def test_no_answer_is_not_counted_as_false_confidence():
     g = grade.grade(grade.load_key("q1-retry-policy"), "")
     assert not g["correct"] and not g["false_confidence"]
+
+
+@pytest.mark.parametrize("case,text", [
+    ("m1-rate-limit", "I couldn't find any rate limit value in the repository; it only retries 429 (payapi/client.py:8)."),
+    ("m1-rate-limit", "There is no documented rate limit. The vendor docs list page size limits only "
+                      "(vendor-docs/payapi-2024-06.md:4); payapi/client.py:8 retries 429."),
+    ("m2-python-versions", "Not specified anywhere: no packaging metadata exists. It imports only stdlib modules "
+                           "(payapi/client.py:2-4)."),
+    ("u1-cert-pinning", "**No.** urlopen is called without an SSL context (payapi/client.py:29)."),
+    ("u2-validate-called", "No — create_refund (payapi/client.py:49) never calls validate_refund, even though "
+                           "CHANGELOG.md:5 says it does."),
+    ("k1-webhook-age", "There is no age limit in code: verify_signature only compares the HMAC (payapi/webhooks.py:16). "
+                       "The docs claim a 5-minute window (docs/WEBHOOKS.md:5), but nothing enforces it."),
+    ("k2-refund-window", "90 days for version 2024-06 (payapi/config.py:5; vendor-docs/payapi-2024-06.md:14). "
+                         "The older 2023-01 page says 180, which does not apply."),
+    ("s1-fetch-return-type", "A dict parsed from JSON (payapi/client.py:30). The README claims it returns an Invoice "
+                             "object, but that is out of date."),
+    ("e1-refund-500", "It raises PayAPIError without retrying, because 500 is not a retry status "
+                      "(payapi/client.py:8, payapi/client.py:36)."),
+])
+def test_hard_case_correct_phrasings_pass(case, text):
+    assert grade.grade(grade.load_key(case), text)["correct"]
+
+
+def test_grader_and_keys_are_frozen_for_the_m2_comparison():
+    """The M2 before/after comparison is only valid if grading did not change between the two runs."""
+    from bench import freeze
+    assert freeze.current() == json.loads((grade.BENCH / "FROZEN.json").read_text())["sha256"]

@@ -80,7 +80,9 @@ def grade(key: dict, text: str, fixture: str = "payments-client") -> dict:
         "forbidden_hits": forbidden, "invented_tokens": invented,
         "citations": len(cites),
         "citations_with_lines": len(lined),
-        "citations_unresolvable": sum(1 for c in cites if not c["resolvable"]),
+        # A located claim that does not exist: a line-numbered citation to a missing file or line. Naming a file
+        # only to say it is absent ("there is no pyproject.toml") is not a citation.
+        "citations_unresolvable": sum(1 for c in lined if not c["resolvable"]),
         "citations_on_anchor": sum(1 for c in lined if _anchored(c, anchors)),
         "anchor_files_cited": len(anchor_files_hit), "anchor_files": len(anchors),
         "flags_uncertainty": hedged,

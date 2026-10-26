@@ -18,7 +18,7 @@ from pathlib import Path
 
 from groundwork_orchestrator.claude_adapter import preflight
 
-from . import arms, canary, grade, report
+from . import arms, canary, freeze, grade, report
 
 BENCH = Path(__file__).resolve().parent
 REPO_ROOT = BENCH.parents[1]
@@ -35,6 +35,13 @@ def _fresh_workspace(dest: Path, fixture: str) -> Path:
     subprocess.run(git + ["add", "-A"], check=True)
     subprocess.run(git + ["commit", "-qm", "fixture"], check=True)
     return ws
+
+
+def _git_head() -> str:
+    r = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True)
+    dirty = subprocess.run(["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", "orchestrator"],
+                           capture_output=True, text=True).stdout.strip()
+    return r.stdout.strip() + ("+dirty" if dirty else "")
 
 
 def _over_quota(rate_limit: dict | None) -> str | None:
@@ -69,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("m1-%Y%m%dT%H%M%SZ"))
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--cases", default="")
+    ap.add_argument("--arms", default="A,B", help="which arms to run (B is whatever orchestrator code is checked out)")
     a = ap.parse_args(argv)
 
     run_dir = Path(a.runs_dir).resolve() / a.run_id
@@ -89,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     cases = sorted(p.name for p in (BENCH / "tasks").iterdir() if p.is_dir())
     if a.cases:
         cases = [c for c in cases if c in a.cases.split(",")]
+    wanted = set(a.arms.split(","))
     results = run_dir / "results.jsonl"
     done = _done(results)
     ledger_before = set(p.name for p in LEDGER.iterdir()) if LEDGER.exists() else set()
@@ -100,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             order = ["A", "B"] if (ci + rep) % 2 == 0 else ["B", "A"]
             pending_stop = None
             for pos, arm in enumerate(order):
-                if (case, arm, rep) in done or stop_reason:
+                if arm not in wanted or (case, arm, rep) in done or stop_reason:
                     continue
                 cell = run_dir / case / f"{arm}-r{rep}"
                 if cell.exists():
@@ -128,7 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     ledger_after = set(p.name for p in LEDGER.iterdir()) if LEDGER.exists() else set()
     meta = {"run_id": a.run_id, "finished_at": datetime.now(timezone.utc).isoformat(), "repeats": a.repeats,
             "cases": cases, "stop_reason": stop_reason, "arm_a": {"model": ARM_A_MODEL, "effort": ARM_A_EFFORT},
-            "new_ledger_entries": sorted(ledger_after - ledger_before)}
+            "new_ledger_entries": sorted(ledger_after - ledger_before), "arms": sorted(wanted),
+            "grader_fingerprint": freeze.current(), "code_commit": _git_head()}
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=1))
     (run_dir / "report.md").write_text(report.render(results, meta))
     print(f"report: {run_dir / 'report.md'}" + (f" (stopped early: {stop_reason})" if stop_reason else ""))

@@ -1,0 +1,22 @@
+{
+ "case": "s1-fetch-return-type",
+ "category": "S",
+ "set": "m2-hard",
+ "required": [
+  "\\b(dict|dictionary|json\\.loads|parsed JSON|JSON object)\\b"
+ ],
+ "forbidden": [
+  "^\\W*((short )?answer\\W*)?(\\*\\*)?(`?fetch_invoice`?\\s+|it\\s+)?returns?\\s+(an?\\s+)?`?Invoice`?\\s+(object|instance)"
+ ],
+ "anchors": {
+  "payapi/client.py": [
+   30,
+   39
+  ]
+ },
+ "oracle": "A plain dict: _request returns json.loads of the response body (payapi/client.py:30), and fetch_invoice returns that (payapi/client.py:39-41). README.md:12 says it returns an Invoice object, but no Invoice class exists.",
+ "wrong": "It returns an Invoice object with typed fields (README.md:12).",
+ "expected_files": [
+  "payapi/client.py"
+ ]
+}

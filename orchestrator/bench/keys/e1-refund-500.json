@@ -1,0 +1,24 @@
+{
+ "case": "e1-refund-500",
+ "category": "S",
+ "set": "m2-hard",
+ "required": [
+  "PayAPIError",
+  "(not|no|isn't|never|without)\\b[^.\\n]{0,40}\\bretr"
+ ],
+ "forbidden": [
+  "(?<!not )(?<!n't )\\bretries\\b[^.\\n]{0,20}\\b500\\b"
+ ],
+ "anchors": {
+  "payapi/client.py": [
+   8,
+   32,
+   36
+  ]
+ },
+ "oracle": "It is not retried: 500 is not in RETRY_STATUSES (payapi/client.py:8, :32), so _request raises PayAPIError straight away (payapi/client.py:36).",
+ "wrong": "The client retries the 500 up to 3 times (payapi/client.py:32).",
+ "expected_files": [
+  "payapi/client.py"
+ ]
+}
