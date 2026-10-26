@@ -1,0 +1,1 @@
+As the code is today, is it safe for create_refund to be retried automatically on a 503? Start with yes or no, then give the decision and the evidence. Cite the files (with line numbers) that support each part of your answer.

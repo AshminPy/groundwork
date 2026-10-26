@@ -1,0 +1,27 @@
+{
+ "case": "a2-refund-retry-decision",
+ "category": "A",
+ "required": [
+  "^\\W*(answer\\W*)?(\\*\\*)?no\\b",
+  "X-PayAPI-Idempotency",
+  "duplicate|double"
+ ],
+ "forbidden": [
+  "^\\W*(answer\\W*)?(\\*\\*)?yes\\b"
+ ],
+ "expected_files": [
+  "payapi/client.py",
+  "vendor-docs/payapi-2024-06.md"
+ ],
+ "oracle": "No. create_refund sends Idempotency-Key (payapi/client.py:53), which 2024-06 ignores; without X-PayAPI-Idempotency a retried refund can create duplicate refunds (vendor-docs/payapi-2024-06.md:10-11).",
+ "wrong": "Yes. Refunds send an idempotency key, so retries are safe (payapi/client.py:53).",
+ "anchors": {
+  "payapi/client.py": [
+   53
+  ],
+  "vendor-docs/payapi-2024-06.md": [
+   10,
+   11
+  ]
+ }
+}

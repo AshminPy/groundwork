@@ -1,0 +1,1 @@
+We need a nightly export of about 50,000 invoices. Given the documented limits of the PayAPI version this repository uses and the existing client, should we use offset pagination or cursor pagination? Give a decision and the evidence. Cite the files (with line numbers) that support each part of your answer.

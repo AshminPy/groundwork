@@ -395,6 +395,16 @@ def test_review_workers_skip_project_settings_and_mcp(orch, fake, repo):
     assert arg(fake.calls()[0], "--setting-sources") == "user" and "--strict-mcp-config" in argv
 
 
+def test_every_worker_call_fences_file_reads_to_its_working_directory(orch, fake, repo):
+    fake.plan([{"result": {"document": "x", "sources": ["docs/missing.md"], "unverified_claims": []}},
+               {"result": {"document": "x", "sources": ["README.md"], "unverified_claims": []}}])
+    submit(orch, "Write documentation for the add function", repo)
+    calls = fake.calls()
+    assert len(calls) == 2 and "--resume" in calls[1]["argv"]  # --settings is not restored on resume
+    for call in calls:
+        assert json.loads(arg(call, "--settings")) == {"permissions": {"blockReadsOutsideWorkingDirectories": True}}
+
+
 def test_review_unexpected_error_blocks_visibly(home, fake, repo):
     def broken(req, **kw):
         raise RuntimeError("disk full")

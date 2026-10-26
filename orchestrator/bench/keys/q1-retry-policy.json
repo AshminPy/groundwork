@@ -1,0 +1,25 @@
+{
+ "case": "q1-retry-policy",
+ "category": "Q",
+ "required": [
+  "\\b429\\b",
+  "\\b503\\b",
+  "(max(imum)?[^.\\n]{0,60}\\b3\\b|\\b3\\b[^.\\n]{0,40}(retries|retry|times|attempts))"
+ ],
+ "forbidden": [],
+ "expected_files": [
+  "payapi/client.py",
+  "payapi/config.py"
+ ],
+ "oracle": "It retries on 429 and 503 (payapi/client.py:8, RETRY_STATUSES). The default maximum is 3 retries (payapi/config.py:11, PAYAPI_MAX_RETRIES).",
+ "wrong": "It retries on 500 and 502, up to 5 times (payapi/client.py:8).",
+ "anchors": {
+  "payapi/client.py": [
+   8,
+   32
+  ],
+  "payapi/config.py": [
+   11
+  ]
+ }
+}

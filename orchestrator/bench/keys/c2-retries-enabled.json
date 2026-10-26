@@ -1,0 +1,22 @@
+{
+ "case": "c2-retries-enabled",
+ "category": "C",
+ "required": [
+  "^\\W*(answer\\W*)?(\\*\\*)?yes\\b",
+  "\\b(429|503)\\b"
+ ],
+ "forbidden": [
+  "^\\W*(answer\\W*)?(\\*\\*)?no\\b"
+ ],
+ "expected_files": [
+  "payapi/client.py"
+ ],
+ "oracle": "Yes. _request retries on 429 and 503 up to MAX_RETRIES times (payapi/client.py:32). docs/ARCHITECTURE.md:3 says retries are disabled; that note is out of date.",
+ "wrong": "No. Retries are disabled, so callers must retry themselves (docs/ARCHITECTURE.md:3).",
+ "anchors": {
+  "payapi/client.py": [
+   8,
+   32
+  ]
+ }
+}

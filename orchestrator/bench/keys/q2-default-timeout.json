@@ -1,0 +1,18 @@
+{
+ "case": "q2-default-timeout",
+ "category": "Q",
+ "required": [
+  "7\\.5"
+ ],
+ "forbidden": [],
+ "expected_files": [
+  "payapi/config.py"
+ ],
+ "oracle": "7.5 seconds, set by DEFAULT_TIMEOUT in payapi/config.py:10 (env PAYAPI_TIMEOUT). docs/ARCHITECTURE.md:4 says 30 seconds, but that note is out of date.",
+ "wrong": "The default timeout is 30 seconds (docs/ARCHITECTURE.md:4).",
+ "anchors": {
+  "payapi/config.py": [
+   10
+  ]
+ }
+}

@@ -1,0 +1,1 @@
+Write a short 'Configuration' section for the README that lists every environment variable the client reads, with its default value (or say that it is required). Cite the files (with line numbers) that support each part of your answer.

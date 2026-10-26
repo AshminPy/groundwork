@@ -34,7 +34,12 @@ BILLING_ENV_VARS = (
 # untrusted repository's own .claude/settings.json (verified live on 2.1.310, 2026-10-25). The user's ~/.claude
 # hooks, including Groundwork's gates, still run (seen live). UNVERIFIED: whether managed (organization) settings
 # are affected — the CLI reference lists only user/project/local as sources.
-ISOLATION_FLAGS = ["--setting-sources", "user", "--strict-mcp-config"]
+# The file tools (Read, Grep, Glob) refuse paths outside the worker's working directory in every permission mode, so a
+# worker cannot read ~/.ssh or files beside its workspace. `--settings` still applies under `--setting-sources user`
+# (verified live by the M1 canary, 2026-10-25) and is passed on every call, because resume does not restore it.
+# Path-scoped Glob deny rules are not used: Claude Code never matches them (permissions docs).
+READ_FENCE = {"permissions": {"blockReadsOutsideWorkingDirectories": True}}
+ISOLATION_FLAGS = ["--setting-sources", "user", "--strict-mcp-config", "--settings", json.dumps(READ_FENCE)]
 TERM_GRACE_S = 10
 POLL_S = 0.2
 
