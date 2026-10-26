@@ -21,6 +21,18 @@ network call, no cloud/CLI probe) and no unbounded repository scan. Its only sub
 one short-timeout `git status` read. It never raises and never exits non-zero for a rendering
 problem — worst case it prints a minimal fallback line.
 
+Usage visibility (feature 2 of openspec/changes/core-evidence-continuity): after rendering, it
+appends at most one record per session per minute to telemetry/usage.jsonl — session id,
+project folder name, model id, the cumulative cost estimate, context %, and the account-wide 5h/7d
+plan-usage % Claude Code passes on stdin (Pro/Max only), or the spend-limit % behind a Claude apps
+gateway (typical for a work account). No prompt, reply, path or command text,
+and no session name (Claude Code can derive it from the first prompt). Records older than 8 days
+are trimmed once the file passes 1 MB.
+`groundwork usage [--window 5h|7d]` (this script's `usage` argv) ranks sessions by how much their
+cost estimate grew in the window, so you can see which sessions used the plan most. Plan limits are
+account-wide (every session plus claude.ai share one bucket), so the report never says one session
+"exceeded" a limit. A failed write never affects the render.
+
 Usage (as Claude Code's statusLine command): stdin gets the JSON payload; stdout is the rendered
 line(s). Configure via ~/.claude/groundwork/statusline-config.json (compact/detailed, per-section
 show/hide, plain-text-vs-Unicode-symbol) — a small file, deliberately separate from config.json
@@ -47,6 +59,19 @@ TELEMETRY_PATH = (
 INTEGRATIONS_CACHE_PATH = CLAUDE_DIR / "groundwork" / "integrations" / "cache.json"
 VERSION_PATH = CLAUDE_DIR / "groundwork" / "VERSION"
 STATUSLINE_CONFIG_PATH = CLAUDE_DIR / "groundwork" / "statusline-config.json"
+USAGE_PATH = (
+    Path(os.path.expanduser(os.environ["GROUNDWORK_USAGE_PATH"]))
+    if os.environ.get("GROUNDWORK_USAGE_PATH")
+    else CLAUDE_DIR / "groundwork" / "telemetry" / "usage.jsonl"
+)
+USAGE_STATE_PATH = USAGE_PATH.with_name("usage-state.json")  # session_id -> last record time (throttle)
+USAGE_MIN_INTERVAL_S = 60
+USAGE_STATE_KEEP_S = 8 * 86400
+USAGE_KEEP_S = 8 * 86400          # usage.jsonl keeps 8 days (the 7d report window plus a baseline day)
+USAGE_TRIM_BYTES = 1_000_000      # trim only once the file is this large, so the render path rarely pays for it
+USAGE_TRIM_EVERY_S = 3600         # and at most once an hour, so a large file of recent records is not rewritten per render
+USAGE_WINDOWS = {"5h": 5 * 3600, "7d": 7 * 86400}
+NAME_CAP = 60
 
 GIT_TIMEOUT_S = 2.0  # short and bounded — a hang here must never block the statusLine render
 TAIL_INITIAL_BYTES = 65536       # first backward-scan window for events.jsonl
@@ -58,6 +83,7 @@ DEFAULT_STATUSLINE_CONFIG = {
     "show_integrations": True,
     "show_context": True,
     "show_cost": False,
+    "show_plan_usage": True,     # account-wide 5h plan usage ("5h 82%"); shown only when Claude Code sends it
     "show_validation": True,
     "plain_text": False,         # True: ASCII-only fallback, no Unicode symbols — takes precedence
                                  # over symbol_set/separator below (see _fmt_integrations()/render()):
@@ -123,6 +149,7 @@ KEY_SCHEMA = {
     "show_integrations": ("bool", None),
     "show_context": ("bool", None),
     "show_cost": ("bool", None),
+    "show_plan_usage": ("bool", None),
     "show_validation": ("bool", None),
     "plain_text": ("bool", None),
     "symbol_set": ("choice", ["default", "ascii", "emoji"]),
@@ -331,6 +358,21 @@ def _fmt_cost(stdin: dict) -> Optional[str]:
     return f"${usd:.2f}"
 
 
+def _pct(stdin: dict, window: str) -> Optional[float]:
+    limits = stdin.get("rate_limits")
+    bucket = limits.get(window) if isinstance(limits, dict) else None
+    pct = bucket.get("used_percentage") if isinstance(bucket, dict) else None
+    return float(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+
+
+def _fmt_plan(stdin: dict) -> Optional[str]:
+    pct = _pct(stdin, "five_hour")
+    if pct is not None:
+        return f"5h {pct:.0f}%"
+    spend = _pct(stdin, "spend_limit")  # behind a Claude apps gateway with a spend limit (e.g. a work account)
+    return None if spend is None else f"spend {spend:.0f}%"
+
+
 def _fmt_last_turn(fields: dict, plain: bool, show_validation: bool) -> Optional[str]:
     if not fields:
         return None
@@ -423,6 +465,10 @@ def render(stdin: dict, cfg: dict) -> str:
         cost_s = _fmt_cost(stdin)
         if cost_s:
             line2_parts.append(cost_s)
+    if cfg.get("show_plan_usage", True):
+        plan_s = _fmt_plan(stdin)
+        if plan_s:
+            line2_parts.append(plan_s)
     lt_s = _fmt_last_turn(last_turn, plain, cfg.get("show_validation", True))
     if lt_s:
         line2_parts.append(lt_s)
@@ -451,6 +497,217 @@ def main() -> int:
         print(render(stdin, cfg))
     except Exception:
         print("GROUNDWORK")  # last-resort fallback — never blank, never a traceback, never non-zero
+    sys.stdout.flush()
+    try:
+        record_usage(stdin)
+    except Exception:
+        pass  # usage recording is secondary; the render already happened
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# Usage visibility — the throttled record and `groundwork usage`
+# ---------------------------------------------------------------------------------------------
+def _short(value, cap: int = NAME_CAP) -> str:
+    return str(value).replace("\n", " ").strip()[:cap] if isinstance(value, str) else ""
+
+
+def _number(value) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _reset_value(stdin: dict, window: str):
+    limits = stdin.get("rate_limits")
+    bucket = limits.get(window) if isinstance(limits, dict) else None
+    value = bucket.get("resets_at") if isinstance(bucket, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return _short(value, 40) or None
+
+
+def usage_record(stdin: dict, now: float) -> Optional[dict]:
+    """The record for one render, or None when there is no session id. Identifiers and numbers only."""
+    sid = _short(stdin.get("session_id"), 80)
+    if not sid:
+        return None
+    workspace = stdin.get("workspace") if isinstance(stdin.get("workspace"), dict) else {}
+    folder = workspace.get("project_dir") or workspace.get("current_dir") or stdin.get("cwd") or ""
+    model = stdin.get("model") if isinstance(stdin.get("model"), dict) else {}
+    cost = stdin.get("cost") if isinstance(stdin.get("cost"), dict) else {}
+    ctx = stdin.get("context_window") if isinstance(stdin.get("context_window"), dict) else {}
+    rec = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "session_id": sid,
+        "project": _short(Path(folder).name if isinstance(folder, str) else ""),
+        "model": _short(model.get("id"), 80),
+        "cost_usd": _number(cost.get("total_cost_usd")),
+        "ctx_pct": _number(ctx.get("used_percentage")),
+        "five_hour_pct": _pct(stdin, "five_hour"),
+        "five_hour_resets_at": _reset_value(stdin, "five_hour"),
+        "seven_day_pct": _pct(stdin, "seven_day"),
+        "seven_day_resets_at": _reset_value(stdin, "seven_day"),
+        "spend_limit_pct": _pct(stdin, "spend_limit"),
+        "spend_limit_resets_at": _reset_value(stdin, "spend_limit"),
+    }
+    return {k: v for k, v in rec.items() if v not in (None, "")}
+
+
+def record_usage(stdin: dict, now: Optional[float] = None) -> bool:
+    """Append one usage record unless this session already wrote one in the last minute."""
+    now = time.time() if now is None else now
+    rec = usage_record(stdin, now)
+    if rec is None:
+        return False
+    try:
+        state = json.loads(USAGE_STATE_PATH.read_text())
+        state = state if isinstance(state, dict) else {}
+    except Exception:
+        state = {}
+    last = state.get(rec["session_id"])
+    if isinstance(last, (int, float)) and now - last < USAGE_MIN_INTERVAL_S:
+        return False
+    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # State first: if it cannot be written, nothing is appended, so a broken throttle can never turn
+    # every render (about every 300 ms) into a record. The worst case is one lost record.
+    state = {k: v for k, v in state.items() if isinstance(v, (int, float)) and now - v < USAGE_STATE_KEEP_S}
+    state[rec["session_id"]] = now
+    _write_private(USAGE_STATE_PATH, json.dumps(state))
+    fd = os.open(USAGE_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    if now - (state.get("_last_trim") or 0) >= USAGE_TRIM_EVERY_S and USAGE_PATH.stat().st_size >= USAGE_TRIM_BYTES:
+        # Races between sessions (no lock on the state file; a trim's replace can drop a record appended
+        # meanwhile) lose at most a record, which only lowers the report's lower-bound estimate.
+        state["_last_trim"] = now
+        _write_private(USAGE_STATE_PATH, json.dumps(state))
+        trim_usage(now, min_bytes=0)
+    return True
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Owner-only atomic write; the temp name is per process so concurrent sessions never share it."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def trim_usage(now: float, min_bytes: int = USAGE_TRIM_BYTES) -> None:
+    """Drop records older than USAGE_KEEP_S once usage.jsonl reaches min_bytes."""
+    try:
+        if USAGE_PATH.stat().st_size < min_bytes:
+            return
+        keep = []
+        with USAGE_PATH.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    t = _epoch(json.loads(line).get("ts"))
+                except Exception:
+                    continue
+                if t is not None and now - t < USAGE_KEEP_S:
+                    keep.append(line if line.endswith("\n") else line + "\n")
+        _write_private(USAGE_PATH, "".join(keep))
+    except Exception:
+        pass
+
+
+def _epoch(ts) -> Optional[float]:
+    try:
+        return float(calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")))
+    except Exception:
+        return None
+
+
+def _read_usage() -> list:
+    out = []
+    try:
+        with USAGE_PATH.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                t = _epoch(rec.get("ts")) if isinstance(rec, dict) else None
+                if t is not None and isinstance(rec.get("session_id"), str):
+                    rec["_t"] = t
+                    out.append(rec)
+    except Exception:
+        return []
+    out.sort(key=lambda r: r["_t"])
+    return out
+
+
+def usage_ranking(records: list, window_s: int, now: float) -> list:
+    """Per session: cost growth inside the window, as a lower bound. Growth is summed between
+    consecutive records; the last record before the window is the baseline; a drop (the counter
+    was reset, e.g. by /clear) is skipped rather than guessed."""
+    start = now - window_s
+    sessions: dict = {}
+    for rec in records:
+        s = sessions.setdefault(rec["session_id"], {"prev": None, "inc": 0.0, "seen": False, "last": None})
+        cost = _number(rec.get("cost_usd"))
+        if rec["_t"] >= start:
+            prev = _number((s["prev"] or {}).get("cost_usd"))
+            if cost is not None and prev is not None and cost > prev:
+                s["inc"] += cost - prev
+            s["seen"] = True
+            s["last"] = rec
+        if cost is not None:
+            s["prev"] = rec
+    rows = [(sid, s["inc"], s["last"]) for sid, s in sessions.items() if s["seen"]]
+    rows.sort(key=lambda row: row[1], reverse=True)
+    return rows
+
+
+def _fmt_reset(value) -> str:
+    if isinstance(value, (int, float)):
+        return time.strftime(" (resets %a %H:%M)", time.localtime(value))
+    return ""
+
+
+def cmd_usage(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="groundwork usage",
+        description="Rank Claude Code sessions by how much they used in a window. Reads the usage "
+                    "records the Groundwork statusline writes; makes no network call.")
+    parser.add_argument("--window", choices=sorted(USAGE_WINDOWS), default="5h",
+                        help="how far back to look (default 5h, the plan's short limit window)")
+    args = parser.parse_args(argv)
+    now = time.time()
+    records = _read_usage()
+    rows = usage_ranking(records, USAGE_WINDOWS[args.window], now)
+    if not rows:
+        print(f"No usage records in the last {args.window}. Records are written by the Groundwork "
+              "statusline while Claude Code sessions run.")
+        return 0
+    total = sum(inc for _sid, inc, _last in rows)
+    print(f"Sessions by usage, last {args.window} (cost growth, a lower-bound estimate)")
+    latest = next((r for r in reversed(records) if _number(r.get("five_hour_pct")) is not None), None)
+    reset = _number((latest or {}).get("five_hour_resets_at"))
+    if latest and reset is not None and reset < now:
+        latest = None  # that 5h window already reset; the old figure would mislead
+    spend = next((r for r in reversed(records) if _number(r.get("spend_limit_pct")) is not None), None)
+    if spend and (_number(spend.get("spend_limit_resets_at")) or now) >= now:
+        seen = time.strftime("%a %H:%M", time.localtime(spend["_t"]))
+        print(f"Gateway spend limit as of {seen}: spend limit {spend['spend_limit_pct']:.0f}%"
+              f"{_fmt_reset(spend.get('spend_limit_resets_at'))}")
+    if latest:
+        plan = f"5h {latest['five_hour_pct']:.0f}%{_fmt_reset(latest.get('five_hour_resets_at'))}"
+        if _number(latest.get("seven_day_pct")) is not None:
+            plan += f" · 7d {latest['seven_day_pct']:.0f}%{_fmt_reset(latest.get('seven_day_resets_at'))}"
+        seen = time.strftime("%a %H:%M", time.localtime(latest["_t"]))
+        print(f"Plan usage as of {seen} (account-wide): {plan}")
+    print(f"{'#':<3} {'session':<40} {'project':<18} {'growth':>9} {'share':>6}  last seen")
+    for i, (sid, inc, last) in enumerate(rows, 1):
+        label = sid[:40]
+        share = f"{100 * inc / total:.0f}%" if total > 0 else "-"
+        seen = time.strftime("%a %H:%M", time.localtime(last["_t"]))
+        growth = "+$" + format(inc, ".2f")
+        print(f"{i:<3} {label[:40]:<40} {str(last.get('project') or '')[:18]:<18} {growth:>9} {share:>6}  {seen}")
+    print("\nNote: plan limits are shared by every session and claude.ai chat, so this shows which "
+          "sessions used the most, not which one caused a limit. Cost is Claude Code's client-side "
+          "estimate; it is used here only to compare sessions.")
     return 0
 
 
@@ -597,6 +854,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         if sys.argv[1] == "config":
             sys.exit(cmd_config(sys.argv[2:]))
+        if sys.argv[1] == "usage":
+            sys.exit(cmd_usage(sys.argv[2:]))
         _print_statusline_cli_usage()
         sys.exit(0 if sys.argv[1] in ("-h", "--help") else 1)
     sys.exit(main())

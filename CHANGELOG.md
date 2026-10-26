@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Usage visibility: which sessions used the plan** (feature 2 of `openspec/changes/core-evidence-continuity/`).
+  The statusLine now appends at most one record per session per minute to
+  `~/.claude/groundwork/telemetry/usage.jsonl` (owner-only): session id, project folder name, model id,
+  Claude Code's cumulative cost estimate, context %, and the account-wide 5-hour/7-day plan usage % (Pro/Max only),
+  or the spend-limit % behind a Claude apps gateway (typical for a work account; shown as `spend 62%`).
+  No prompt, reply, path or command text, and no session name (it can come from the first prompt); records older
+  than 8 days are trimmed once the file passes 1 MB. `groundwork usage [--window 5h|7d]` ranks sessions by how much their cost
+  estimate grew in the window (a lower bound: a counter reset such as `/clear` is skipped, never guessed). Plan
+  limits are shared by every session and claude.ai, so the report never says one session exceeded a limit. A new
+  `show_plan_usage` statusLine setting (default on) adds `5h 82%` when Claude Code sends plan usage. A failed write
+  never affects the statusLine.
+
 - **Task tracking around native OpenSpec (M1)**: engineering tasks are recorded, kept across sessions and completed
   on evidence, while native OpenSpec stays the workflow (`hooks/groundwork_task_gate.py`, `hooks/groundwork_tasks.py`,
   [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md), `openspec/changes/add-task-lifecycle-gate/`).

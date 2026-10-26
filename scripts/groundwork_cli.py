@@ -148,6 +148,17 @@ def cmd_statusline(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_usage(extra_argv: list[str]) -> int:
+    # The statusline script writes the usage records, so it also owns the report: one file, one schema.
+    if not INSTALLED_STATUSLINE_PY.exists():
+        print(f"usage: {INSTALLED_STATUSLINE_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run scripts/groundwork_statusline.py usage from a repo clone)",
+              file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_STATUSLINE_PY), "usage", *extra_argv])
+    return result.returncode
+
+
 def cmd_copilot(extra_argv: list[str]) -> int:
     if not INSTALLED_COPILOT_PY.exists():
         print(f"copilot: {INSTALLED_COPILOT_PY} not found — is Groundwork installed? "
@@ -217,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     )
     sub.add_parser(
+        "usage",
+        help="which sessions used the plan most in the last 5h or 7d (see 'groundwork usage --help')",
+        add_help=False,
+    )
+    sub.add_parser(
         "task",
         help="engineering task tracking: list/show/complete/cancel/block (see 'groundwork task --help')",
         add_help=False,
@@ -244,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_copilot(argv[1:])
     if argv and argv[0] == "task":
         return cmd_task(argv[1:])
+    if argv and argv[0] == "usage":
+        return cmd_usage(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
