@@ -196,3 +196,17 @@ def test_claims_still_unsupported_after_the_repair_are_flagged_not_failed(orch, 
     assert st["state"] == "PASSED" and c["retry_count"] == 1        # one evidence repair, not MAX_REPAIRS
     assert c["answer_evidence"] == "UNVERIFIED" and "not backed by located sources" in c["outcome"]
     assert c["evidence"]["claims"][0]["reason"] == "not_located"
+
+
+@pytest.mark.parametrize("text,value,quote", [
+    ("The request timeout is 30 seconds", "30", "CONNECT_TIMEOUT = 10"),
+    ("The cache size is 100", "100", "cache_ttl = 60"),
+    ("The server listens on port 8080", "8080", "health_port = 9090"),
+    ("The maximum request body size is 5", "5", "MAX_RETRIES = 3  # maximum retries"),
+    ("The API version is 2024-06-01", "2024-06-01", 'API = "2024-06"'),
+    ("It requires Python 3.11.0", "3.11.0", 'python_requires = ">=3.9.0"'),
+])
+def test_quotes_about_a_different_setting_or_a_bound_never_contradict(ws, text, value, quote):
+    (ws / "s.py").write_text(quote + "\n")
+    found = evidence.assess([claim(text, "s.py", 1, quote, value=value)], str(ws))
+    assert found["claims"][0]["status"] != "CONTRADICTED", found["claims"][0]

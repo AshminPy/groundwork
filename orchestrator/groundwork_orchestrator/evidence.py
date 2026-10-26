@@ -96,14 +96,26 @@ def _ver(v: str) -> str:
     return v.lower().removeprefix("v")
 
 
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
-_STOP = {"that", "this", "with", "from", "which", "there", "their", "when", "will", "into", "than", "then", "does",
-         "have", "uses", "used", "using", "value", "default", "about", "only", "also", "they", "were", "been"}
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]{2,}")
+# Words that qualify a value rather than name what it is; they do not identify a setting.
+_QUALIFIERS = {"max", "maximum", "min", "minimum", "default", "limit", "the", "and", "for", "are", "its", "per",
+               "set", "sets", "value", "env", "environ", "get", "int", "float", "str", "seconds", "secs"}
+# A range or bound, not one exact value ("python_requires >=3.9", "3.9 or later", "at least 2").
+_BOUND = re.compile(r">=|<=|~=|\^|[<>]\s*\d|\bat (least|most)\b|\bor (later|newer|higher|above|more)\b", re.I)
 
 
-def _subject_words(text: str) -> set[str]:
-    """Name-like words of four or more letters, split on underscores, lowercased: the claim's subject."""
-    return {w.lower() for part in re.split(r"[_\W]+", text) for w in _WORD.findall(part)} - _STOP
+def _name_words(text: str) -> set[str]:
+    """Name-like words of three or more letters, split on underscores and camel case, lowercased."""
+    parts = re.split(r"[_\W\d]+", re.sub(r"([a-z])([A-Z])", r"\1 \2", text))
+    return {w.lower() for part in parts for w in _WORD.findall(part)} - _QUALIFIERS
+
+
+def _same_subject(claim_text: str, quote: str) -> bool:
+    """The quote names nothing the claim does not: every name word of the quote also appears in the claim.
+    "Maximum page size: 100." is about the claim "page size is 500"; "CONNECT_TIMEOUT = 10" is not about
+    "the request timeout is 30", because the claim never says "connect"."""
+    words = _name_words(quote)
+    return bool(words) and words <= _name_words(claim_text)
 
 
 def locate(ref: dict, root: Path) -> dict:
@@ -160,12 +172,17 @@ def _value_check(text: str, value: str, refs: list[dict]) -> tuple[str | None, d
             return None, None
     else:
         return (None, None) if any(v.lower() in _norm(r["quote"]).lower() for r in refs) else ("value_not_in_quote", None)
-    subject = _subject_words(text)
     for r in refs:
         found = {_ver(x) for x in _VERSION.findall(r["quote"])} if kind == "version" else _numbers(r["quote"])
-        if len(found) == 1 and next(iter(found)) != want and subject & _subject_words(r["quote"]):
+        if len(found) != 1 or _BOUND.search(r["quote"]) or not _same_subject(text, r["quote"]):
+            continue
+        other = next(iter(found))
+        # A version that is only a shorter or longer form of the claim's (2024-06 vs 2024-06-01) is not opposite.
+        if kind == "version" and (want.startswith(other) or other.startswith(want)):
+            continue
+        if other != want:
             return None, {"path": r["path"], "line_start": r["line_start"], "quote": r["quote"],
-                          "states": next(iter(found)), "claim_value": v, "detected_by": "rule:value_differs"}
+                          "states": other, "claim_value": v, "detected_by": "rule:value_differs"}
     return "value_not_in_quote", None
 
 
