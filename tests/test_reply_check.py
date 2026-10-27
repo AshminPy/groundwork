@@ -218,6 +218,8 @@ def test_stop_without_transcript() -> None:
         r = run(stop, env)
         check("no prompt marker yet: fail open (no output)", r.returncode == 0 and r.stdout.strip() == "", r.stdout)
         run({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "read the config"}, env)
+        # after the marker is written: taken before it, a second boundary in between made the call look older (flaky)
+        now = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
         tool("s1", "2000-01-01T00:00:00Z")   # an older turn's tool call
         tool("other", now)                   # another session's tool call
         r = run(stop, env)
