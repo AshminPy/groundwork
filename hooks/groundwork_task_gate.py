@@ -1289,12 +1289,23 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> 
                 # the config directory itself (`rm -rf .claude`, `mv .claude x`), or a protected path inside it
                 if real == os.path.realpath(cdir) or real in config_paths() or any(under(p, Path(b)) for b in protected):
                     return True
+                # a glob whose folder is the config directory or a protected one (`rm -rf ../*` from plugins/)
+                if any(ch in w for ch in "*?[") and resolves_folder(os.path.dirname(p)):
+                    return True
         return False
+
+    def resolves_folder(folder: str) -> bool:
+        real = os.path.realpath(folder)
+        return real == os.path.realpath(cdir) or any(under(folder, Path(b)) for b in protected)
 
     bodies = heredoc_bodies(cmd)
     assigns = _literal_assignments(segs)
-    dirs, inside = [cwd], False
+    dirs, inside, config_sub = [cwd], False, False
     unknown = bool(os.environ.get("CDPATH")) or "CDPATH" in cmd  # `cd name` may then go anywhere CDPATH lists
+    # from another folder of the config directory, a word can reach a protected path in ways the path checks cannot
+    # follow: `..` with a pattern or `{a,b}` list mid-path, `$(...)`, xargs, an interpreter string, a new symlink
+    # (independent review of the plugins/ fix). Such a command counts as naming it; plain reads there still flow.
+    reaches = any(t in cmd for t in ("..", "{", "$", "`", "*", "?", "["))
     for s in segs:
         argv = unwrap_run(s["argv"]) or s["argv"]
         text = os.path.expandvars(" ".join(s["argv"] + s["targets"] + [bodies[i] for i in s["heredocs"] if i < len(bodies)]))
@@ -1307,7 +1318,10 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> 
             if not computed:
                 new = [os.path.normpath(os.path.join(d, target)) for d in dirs]
                 dirs = list(dict.fromkeys(dirs + new))[-32:]
-                inside = inside or any(under(p, Path(cdir)) for p in new)
+                # the config directory itself or a protected folder in it; its other folders (plugins/, projects/)
+                # are not protected, and words that reach back out of them are checked by resolves_protected
+                inside = inside or any(resolves_folder(p) for p in new)
+                config_sub = config_sub or any(under(p, Path(cdir)) for p in new)
             if computed or unknown:
                 inside = inside or names_config(raw) or names_config(target)
             if computed:
@@ -1320,7 +1334,7 @@ def _touches_protected(segs: list[dict], cmd: str, cwd: str, depth: int = 0) -> 
         where = [os.path.normpath(os.path.join(d, os.path.expanduser(chdir))) for d in dirs] if chdir else dirs
         words = argv[1:] + s["targets"]
         named = (named or any(resolves_protected(w, where) for w in words)
-                 or (unknown and any(names_protected(w) for w in words)))
+                 or (unknown and any(names_protected(w) for w in words)) or (config_sub and reaches))
         name = os.path.basename(argv[0]) if argv else ""
         if depth < 3 and (name in SHELLS or name == "eval"):
             inner = " ".join(argv[1:]) if name == "eval" else _shell_command_arg(argv[1:])

@@ -903,6 +903,41 @@ def test_security_scan_regressions() -> None:
         check(f"F11: ordinary {cmd!r} flows", asked(dot.bash(repo, cmd)) == "", str(dot.bash(repo, cmd)))
         cmd = 'cd "$X" && cd .cl* && rm hooks/groundwork_task_gate.py'
         check(f"F11: {cmd!r} asks", "settings" in asked(dot.bash(repo, cmd)), str(dot.bash(repo, cmd)))
+
+        # 2026-10-27, seen live: reading a plugin's files after a cd into the config directory's plugins/ folder
+        # asked, because every folder under the config directory counted as protected. Only the config directory
+        # itself, hooks/, groundwork/ and the settings files are.
+        plug = e.cfg / "plugins" / "cache" / "x" / "scripts" / "hooks"
+        plug.mkdir(parents=True)
+        for cmd in (f"cd {plug} && sed -n 1,5p session-start.js | grep -nE 'a|b'",
+                    f"cd {plug} && awk '/main/,0' session-start.js | head -30",
+                    f"cd {e.cfg}/plugins && ls cache"):
+            check(f"plugin dir: {cmd.replace(str(tmp), '<tmp>')!r} flows", asked(e.bash(repo, cmd)) == "",
+                  str(e.bash(repo, cmd)))
+        for cmd in (f"cd {e.cfg}/plugins && rm ../hooks/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && sed -i s/a/b/ ../settings.json",
+                    f"cd {e.cfg}/plugins && rm -rf ../*",
+                    f"cd {e.cfg}/plugins && cd ../hooks && sed -i s/a/b/ groundwork_task_gate.py",
+                    f"cd {e.cfg}/hooks && awk '{{print}}' groundwork_task_gate.py > /tmp/x && sed -i s/a/b/ x.py",
+                    f"cd {e.cfg} && sed -n 1p settings.json && sed -i s/a/b/ settings.json",
+                    # independent review: reaching back out of plugins/ in ways the path checks cannot follow
+                    f"cd {e.cfg}/plugins && rm ../hook?/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && rm ../h*/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && rm ../[h]ooks/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins/cache && rm ../../h*/x",
+                    f"cd {e.cfg}/plugins && rm ../g*/tasks/x",
+                    f"cd {e.cfg}/plugins && cat x > ../hook?/y",
+                    f"cd {e.cfg}/plugins && rm ../{{hooks,x}}/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && sed -i s/a/b/ ../{{settings,x}}.json",
+                    f"cd {e.cfg}/plugins && tee ../{{settings,x}}.json < x",
+                    f"cd {e.cfg}/plugins && rm ../$(echo hooks)/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && rm ../`echo hooks`/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && ln -s ../.. up && rm up/{e.cfg.name}/hooks/groundwork_task_gate.py",
+                    f"cd {e.cfg}/plugins && echo ../hooks/groundwork_task_gate.py | xargs rm",
+                    f"cd {e.cfg}/plugins && python3 -c 'open(\"../settings.json\",\"w\")'",
+                    f"cd {e.cfg}/plugins && node -e 'require(\"fs\").writeFileSync(\"../settings.json\",\"{{}}\")'"):
+            check(f"plugin dir: {cmd.replace(str(tmp), '<tmp>')!r} still asks",
+                  "settings" in asked(e.bash(repo, cmd)), str(e.bash(repo, cmd)))
     finish()
 
 
