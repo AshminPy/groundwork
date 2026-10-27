@@ -83,6 +83,7 @@ Both files share the owner-only (0600 file / 0700 dir) permission model and the 
 Disable with GROUNDWORK_TELEMETRY=off. Path overrides: GROUNDWORK_TELEMETRY_PATH (per-turn file),
 GROUNDWORK_TOOL_TELEMETRY_PATH (per-tool-call file).
 """
+import calendar
 import hashlib
 import json
 import os
@@ -153,6 +154,53 @@ def default_tool_path() -> Path:
         return Path(os.path.expanduser(override))
     base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
     return base / "groundwork" / "telemetry" / "tool_events.jsonl"
+
+
+USAGE_TAIL = 256 * 1024        # only the end of usage.jsonl: the newest renders are the ones that matter
+CTX_MAX_AGE_S = 15 * 60        # an older reading no longer describes this turn's context
+
+
+def default_usage_path() -> Path:
+    """Same file scripts/groundwork_statusline.py appends to (at most once a minute per session)."""
+    override = os.environ.get("GROUNDWORK_USAGE_PATH")
+    if override:
+        return Path(os.path.expanduser(override))
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    return base / "groundwork" / "telemetry" / "usage.jsonl"
+
+
+def latest_ctx_pct(session_id: str, now: float = None):
+    """Context-window % for this session from the statusLine's latest usage record, or None.
+    None when there is no statusLine record (headless runs, statusLine off) or it is too old."""
+    if not session_id or session_id == "unknown":
+        return None
+    now = time.time() if now is None else now
+    try:
+        path = default_usage_path()
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > USAGE_TAIL:
+                f.seek(size - USAGE_TAIL)
+                f.readline()  # drop the partial first line
+            lines = f.read().splitlines()
+    except Exception:
+        return None
+    for raw in reversed(lines):
+        try:
+            r = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(r, dict) or r.get("session_id") != session_id:
+            continue
+        pct = r.get("ctx_pct")
+        try:
+            ts = calendar.timegm(time.strptime(str(r.get("ts")), "%Y-%m-%dT%H:%M:%SZ"))
+        except Exception:
+            return None
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 <= pct <= 100 or not 0 <= now - ts <= CTX_MAX_AGE_S:
+            return None
+        return round(float(pct), 1)
+    return None
 
 
 def harness_version() -> str:
@@ -461,6 +509,10 @@ def build_record(data: dict, text: str) -> dict:
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
     playbook = playbook_raw[0] if playbook_raw and playbook_raw[0] in PLAYBOOKS else "unknown"
     cwd = data.get("cwd") or os.getcwd()
+    observed_extra = {}
+    ctx = latest_ctx_pct(str(data.get("session_id") or ""))
+    if ctx is not None:
+        observed_extra["ctx_pct"] = ctx  # absent (not 0) when unknown, so reports can tell the two apart
     return {
         "schema": 2,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -479,6 +531,7 @@ def build_record(data: dict, text: str) -> dict:
             "tests_run": facts["tests_run"],
             "implementation_performed": facts["implementation_performed"],
             "deployment_performed": facts["deployment_performed"],
+            **observed_extra,
         },
         "declared": {
             "block_present": bool(meta),
