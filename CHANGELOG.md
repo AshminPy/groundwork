@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
+  and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the
+  context-window % at task end (`observed.ctx_pct`, from the session's latest statusLine reading, if under 15 minutes
+  old). Older tasks are matched to the statusLine log, which is kept about 8 days. The section states its limits:
+  association, not cause; outcome is self-declared; low-data bands are marked. No session ids reach the page.
+  (`openspec/changes/add-context-band-view/`)
+
 ## 2.5.0 — 2026-10-26
 
 - **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
