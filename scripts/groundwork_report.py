@@ -137,7 +137,15 @@ def normalise(raw: dict):
         "clarify": bool(de.get("clarification_required")),
         "tools": [str(t)[:40] for t in (ob.get("tools") or []) if isinstance(t, str)][:40],
         "mcp": [str(t)[:40] for t in (ob.get("mcp_servers") or []) if isinstance(t, str)][:20],
+        # for context_bands() only — never copied into buckets, so the page never embeds them
+        "ctx": _ctx(ob.get("ctx_pct")),
+        "sid": str(raw.get("session_id") or "")[:80],
+        "ts": ts[:20],
     }
+
+
+def _ctx(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100 else None
 
 
 def load_events(path: Path):
@@ -221,6 +229,106 @@ def load_tool_events(path: Path):
     except FileNotFoundError:
         pass
     return records, stats
+
+
+# ---------------------------------------------------------------- context bands
+CTX_BANDS = ((0, 30), (30, 50), (50, 70), (70, 85), (85, 101))
+CTX_MAX_AGE_S = 15 * 60            # same limit as hooks/groundwork_telemetry.py: older readings are not this task's
+
+
+def usage_path() -> Path:
+    override = os.environ.get("GROUNDWORK_USAGE_PATH")
+    return Path(os.path.expanduser(override)) if override else config_dir() / "groundwork" / "telemetry" / "usage.jsonl"
+
+
+def _epoch(ts: str):
+    try:
+        return dt.datetime.strptime(ts[:20], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except Exception:
+        return None
+
+
+def load_usage(path: Path) -> dict:
+    """session_id -> sorted [(epoch, ctx_pct)] from the statusLine usage records (kept about 8 days)."""
+    out = defaultdict(list)
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > MAX_BYTES:
+                f.seek(size - MAX_BYTES)
+                f.readline()
+            for raw in f:
+                try:
+                    r = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(r, dict):
+                    continue
+                t, pct = _epoch(str(r.get("ts") or "")), _ctx(r.get("ctx_pct"))
+                if t is not None and pct is not None and r.get("session_id"):
+                    out[str(r["session_id"])[:80]].append((t, pct))
+    except (FileNotFoundError, OSError):
+        pass
+    for v in out.values():
+        v.sort()
+    return out
+
+
+def _ctx_from_usage(usage: dict, sid: str, ts: str):
+    """Latest statusLine reading for the session at or before the task ended, if recent enough."""
+    end = _epoch(ts)
+    if end is None or sid not in usage:
+        return None
+    best = None
+    for t, pct in usage[sid]:
+        if t > end:
+            break
+        best = (t, pct)
+    return best[1] if best and end - best[0] <= CTX_MAX_AGE_S else None
+
+
+def context_bands(records: list, usage: dict, window_days, ref: dt.date) -> dict:
+    """Outcome rates by context-window fill at task end, for the same period as the main report.
+    Uses the context % the telemetry hook recorded; for older records, the statusLine reading
+    at or just before the task ended. Same rate definitions as _summarise()."""
+    if window_days:
+        start = ref - dt.timedelta(days=window_days)
+        sel = [r for r in records if start < dt.date.fromisoformat(r["day"]) <= ref]
+    else:
+        sel = records
+    acc = [Counter() for _ in CTX_BANDS]
+    recorded = joined = unmatched = 0
+    for r in sel:
+        pct = r.get("ctx")
+        if pct is not None:
+            recorded += 1
+        else:
+            pct = _ctx_from_usage(usage, r.get("sid", ""), r.get("ts", ""))
+            if pct is None:
+                unmatched += 1
+                continue
+            joined += 1
+        i = next(i for i, (lo, hi) in enumerate(CTX_BANDS) if lo <= pct < hi)
+        c = acc[i]
+        c["n"] += 1
+        c[r["outcome"]] += 1
+        c["corroborated"] += 1 if (r["outcome"] == "complete" and (r["tests"] or r["deploy"])) else 0
+    bands = []
+    for (lo, hi), c in zip(CTX_BANDS, acc):
+        known = sum(c[o] for o in OUTCOMES if o != "unknown")
+        bands.append({"band": f"{lo}–{min(hi, 100)}%", "n": c["n"], "known": known,
+                      "completion": _rate(c["complete"], known),
+                      "verified_outcome": _rate(c["corroborated"], c["complete"]),
+                      "gap": _rate(c["partial"] + c["blocked"] + c["failed"], known),
+                      "low_n": known < MIN_TREND_N})
+    return {"bands": bands, "recorded": recorded, "joined": joined, "unmatched": unmatched}
+
+
+CTX_NOTE = ("Context fill = how full the context window was when the task ended (from the statusLine; the reading can lag by up to 15 minutes). "
+            "This shows association, not cause: fuller contexts often mean longer, harder tasks. "
+            "Outcome is what the model declared; verified outcome needs an observed test or deploy run. "
+            f"Bands with fewer than {MIN_TREND_N} known outcomes are marked low data. "
+            "Tasks with no statusLine reading (headless runs, statusLine off, or older than the ~8 days of usage records) are not placed in a band.")
 
 
 def aggregate_tool_calls(records: list, window_days, ref: dt.date, top_n: int = 15) -> dict:
@@ -426,7 +534,7 @@ def fmt_trend(v) -> str:
     return "" if v is None else f" {'↑' if v > 0 else '↓' if v < 0 else '→'}{pct0(abs(v))}%"
 
 
-def render_markdown(m: dict, meta: dict, tool_metrics: dict = None) -> str:
+def render_markdown(m: dict, meta: dict, tool_metrics: dict = None, ctx_bands: dict = None) -> str:
     s, t = m["summary"], m["trends"]
     lines = [f"# Groundwork health — {meta['generated']}", "",
              f"Window: last {meta['window_days']} days (to {meta['ref']}) · filters: none · source: {meta['events']} ({meta['stats']['lines']} lines, {meta['stats']['malformed']} skipped)", "",
@@ -456,6 +564,18 @@ def render_markdown(m: dict, meta: dict, tool_metrics: dict = None) -> str:
         for row in tool_metrics["by_tool"]:
             lines.append(f"| {row['tool']} | {row['category']} | {row['n']} | {fmt(row['rate'])} |")
         lines += ["", "_Per-call data (PostToolUse/PostToolUseFailure): which tools and MCP servers are actually used, and whether each call succeeded — tool name, category, success/failure and timestamp only, never command, prompt, response or tool-input/output content. Only calls that finished or failed are counted: calls denied by permissions or rejected before execution fire neither hook, and a tool cancelled mid-run fires no failure event, so none of them appear here. Not broken down by profile/playbook/version/environment (a single tool call carries none of those) and not part of the filterable dashboard above._", ""]
+    if ctx_bands and not (ctx_bands["recorded"] + ctx_bands["joined"]):
+        # no table without data: an empty table would read as rates, and band labels contain "0%"
+        lines += ["", "## Outcome by context fill at task end", "",
+                  f"- No task in this period has a context reading ({ctx_bands['unmatched']} not placed)."]
+    elif ctx_bands:
+        lines += ["", "## Outcome by context fill at task end", "",
+                  f"- Tasks placed in a band: {ctx_bands['recorded'] + ctx_bands['joined']} ({ctx_bands['recorded']} recorded by the hook, {ctx_bands['joined']} matched from statusLine records); not placed: {ctx_bands['unmatched']}",
+                  "", "| Context fill | Tasks | Completion | Verified outcome | Gap rate |", "|---|---|---|---|---|"]
+        for b in ctx_bands["bands"]:
+            low = " (low data)" if b["low_n"] and b["n"] else ""
+            lines.append(f"| {b['band']}{low} | {b['n']} | {fmt(b['completion'])} | {fmt(b['verified_outcome'])} | {fmt(b['gap'])} |")
+        lines += ["", f"_{CTX_NOTE}_"]
     lines += ["", "_Declared fields (outcome, validation, evidence, playbook) are what the model stated; observed fields (tools, files, tests, deploys, profile) were determined by the hook. No prompts, responses, code or secrets are stored._", ""]
     return "\n".join(lines)
 
@@ -477,6 +597,7 @@ main{padding:18px 22px;max-width:1280px;margin:0 auto}
 .panel.wide{grid-column:1/-1}svg{width:100%;height:auto;display:block}.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:6px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .empty{color:var(--muted);font-size:13px;padding:20px 0;text-align:center}
 ul.gaps{margin:0;padding-left:18px}ul.gaps li{margin:4px 0}
+table.ctx{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}table.ctx th,table.ctx td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}table.ctx th{color:var(--muted);font-weight:600;font-size:12px}.note{color:var(--muted);font-size:12px;margin:6px 0}.low{color:var(--bad);font-size:11px}
 footer{color:var(--muted);font-size:12px;padding:8px 22px 26px;max-width:1280px;margin:0 auto}footer p{margin:4px 0}
 @media (max-width:600px){header{padding:12px}main{padding:12px}.card .v{font-size:20px}}
 """
@@ -558,7 +679,27 @@ for(const id of["#win","#profile","#playbook","#version","#environment"])$(id).a
 """
 
 
-def render_html(buckets: list, meta: dict) -> str:
+def ctx_panel_html(cb) -> str:
+    """Static table (computed in Python, not by the page filters): no identifiers, counts and rates only."""
+    if not cb:
+        return ""
+    placed = cb["recorded"] + cb["joined"]
+    if not placed:
+        return (f'<div class="panel wide" id="ctx-bands"><h2>Outcome by context fill at task end</h2>'
+                f'<p class="note">No task in this period has a context reading ({cb["unmatched"]} not placed).</p></div>')
+    cell = lambda r: html.escape(fmt(r))
+    low = ' <span class="low">low data</span>'
+    rows = "".join(
+        f"<tr><td>{html.escape(b['band'])}{low if b['low_n'] and b['n'] else ''}</td>"
+        f"<td>{b['n']}</td><td>{cell(b['completion'])}</td><td>{cell(b['verified_outcome'])}</td><td>{cell(b['gap'])}</td></tr>"
+        for b in cb["bands"])
+    return (f'<div class="panel wide" id="ctx-bands"><h2>Outcome by context fill at task end</h2>'
+            f'<p class="note">Selected period only; not changed by the filters above. {placed} task(s) placed in a band, {cb["unmatched"]} without a context reading.</p>'
+            f'<table class="ctx"><thead><tr><th>Context fill</th><th>Tasks</th><th>Completion</th><th>Verified outcome</th><th>Gap rate</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table><p class="note">{html.escape(CTX_NOTE)}</p></div>')
+
+
+def render_html(buckets: list, meta: dict, ctx_bands: dict = None) -> str:
     dims = {k: sorted({b[k] for b in buckets}) for k in ("profile", "playbook", "version", "environment")}
     data = {"buckets": buckets, "dims": dims, "ref": meta["ref"], "window_days": meta["window_days"], "granularity": meta["granularity"]}
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -584,6 +725,7 @@ def render_html(buckets: list, meta: dict) -> str:
 <div class="panel"><h2>Tool / MCP usage (observed)</h2><div id="tools"></div></div>
 <div class="panel"><h2>Harness version</h2><div id="versions"></div></div>
 <div class="panel wide"><h2>Gaps / attention</h2><ul class="gaps" id="gaps"></ul></div>
+{ctx_panel_html(ctx_bands)}
 </div>
 </main>
 <footer>
@@ -610,12 +752,13 @@ def generate(args) -> dict:
     buckets, granularity = aggregate(records)
     tool_records, tool_stats = load_tool_events(tool_ev)
     tool_metrics = aggregate_tool_calls(tool_records, window, ref)
+    ctx_bands = context_bands(records, load_usage(usage_path()), window, ref)
     meta = {"generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "ref": ref.isoformat(), "window_days": window,
             "events": str(ev), "stats": stats, "granularity": granularity}
     metrics = compute(buckets, window, ref)
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
-    page = render_html(buckets, meta)
-    md = render_markdown(metrics, meta, tool_metrics)
+    page = render_html(buckets, meta, ctx_bands)
+    md = render_markdown(metrics, meta, tool_metrics, ctx_bands)
     written = []
     targets = [("dashboard.html", page)]
     if args.snapshot:
@@ -627,7 +770,8 @@ def generate(args) -> dict:
         os.replace(tmp, out / name)
         written.append(str(out / name))
     return {"written": written, "records": len(records), "buckets": len(buckets), "stats": stats, "summary": metrics["summary"],
-            "tool_calls": tool_metrics["total"], "tool_stats": tool_stats}
+            "tool_calls": tool_metrics["total"], "tool_stats": tool_stats,
+            "ctx_placed": ctx_bands["recorded"] + ctx_bands["joined"]}
 
 
 # ---------------------------------------------------------------- schedule (macOS launchd)
