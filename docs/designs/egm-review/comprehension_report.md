@@ -1,0 +1,31 @@
+# Stage 6: Comprehension Test report
+
+Target: `docs/designs/groundwork-architecture.md` (lines 1-410)
+Reviewer: `egm:egm-comprehension`, standard `re-implementation-standard.md`. The reviewer read as a naive reader and did not open the goldfish baseline files.
+
+Summary: the overview and Change A are mostly understandable. An engineer could not build either change from this document alone without guessing. Causes: one internal contradiction, undefined vocabulary that drives behavior, and missing contracts for exact strings, labels and file mappings.
+
+## Blockers
+1. **Contradictory event count, Change A step 5 (lines 340-342).** Text says "all six events" and lists seven (PreToolUse, PostToolUse, PostToolUseFailure, Stop, SessionStart, UserPromptSubmit, PreCompact). Line 280 says `--verify` checks "four events"; line 109 says "every Groundwork hook". The verify step says "seven hook files plus `groundwork_shared.py`" while line 280 says six files are checked today. No baseline-to-target table.
+2. **The 15 hook entries are never enumerated (lines 108, 191, 310).** The table at 191-201 lists 7 files. Change A says `merge` "builds all 15 hook commands". Nothing maps entry to event, matcher, timeout or relative path (`hooks/<name>.py`; the status line is under `groundwork/bin/`). `cmd(root, rel)` cannot be called correctly without opening `merge_settings.py:50-80`. The "byte-identical to 2.5.0" test cannot be written without the old strings.
+3. **Re-running merge under a different root is unspecified (lines 313, 318-320).** With legacy `~/.claude/...` entries or entries for another root, the doc does not say whether they are replaced, duplicated or left. Hooks firing twice or old ones surviving would be an observable bug. Only unmerge mentions legacy strings, without listing the exact forms to match.
+
+## Majors
+4. **Undefined domain vocabulary that drives behavior.** MATERIAL (140), tiers (181), task intake, task ledger, KEY (138, 161, 196), investigation file (129), capability resolution, RCA rule, layers, DECISION record, validation ladder (373-376), Snapshot are not defined or linked. "Sensitive actions" that make `task_gate` return `ask` (138, 162, 196) have only examples in CUJ 4 ("a cloud write"), no rule.
+5. **Required reply format not specified (118-120, 58-62).** `Technical details`, `Evidence & references`, `HARNESS METADATA` are quoted as magic strings. Exact heading syntax, case, and what counts as a "link or `file:line`" are not given. The check is the core of G1 and G2.
+6. **Hook blocking semantics underspecified (120, 145, 198-199, 203-205).** "Block once", "block once per kind per session" (which kinds?), `stop_hook_active`, how "once" is remembered, and the second-Stop behavior are not explained. Fail-open is stated, but the `task_gate` exception is described only for PreToolUse.
+7. **Linux support conflicts with launchd (69, 111, 227-229, 322-336).** G6 and CUJ 1 promise macOS or Linux. Report and routines are scheduled via launchd, which is macOS only. Behavior on Linux (skip, cron, fail) is not stated. CUJ 1's "a second install does not replace the first one's job" is untestable there.
+8. **`label_suffix` underspecified (325-328).** `config_dir()` is not defined or located. "Default config folder" is ambiguous if `CLAUDE_CONFIG_DIR` is explicitly `~/.claude`, a symlink, or has a trailing slash. Digest encoding is not given. `LABEL_PREFIX` is assumed. Plist directory and filename template are not given. No migration for already-installed jobs with old labels.
+9. **Uninstall mechanism vague (333-335).** "Computed by calling the installed `groundwork_report.py`" gives no command, argument or output contract, and no behavior for a missing script or a pre-change install with old labels.
+10. **Change B has no deterministic target (364-376).** "Only what Claude must decide on every request" is subjective. The 15,000 byte cap is the only hard constraint; no per-file budget, and no place for `task-routing.md` or `architecture-quality.md` content. The playbook-to-reference mapping is unspecified (ten playbooks, three reference files, no table). "Without changing meaning" is unverifiable. Section-to-file assignment is only partly listed.
+11. **Benchmark criteria and procedure not reproducible (403-406, 48-54).** "First-request input tokens" has no measurement method. The 20 questions, G and V arm definitions and evidence-section scoring live in an external artifact. The suite is on a parked branch (`orchestrator/bench`) and running it is not described. Bytes ÷ 4 as tokens is mentioned in passing; line 263 says about 12.6k tokens.
+12. **Data formats absent (172-174, 211-215, 230-231).** Fields of `events.jsonl`, `tool_events.jsonl`, `state/turns/<sid>.json`, the brief file and `.decisions.md`, and the task JSON are not given. The "Snapshot" section marker and "Goal/Next step" headings are missing. "Newer than that time" has no timestamp source or format. The doc claims to describe the system "as it is built", so a fresh engineer cannot reproduce the data-flow contracts.
+
+## Nits
+13. **`setup.sh` vs `install.sh` (106, 224, 290-300).** Never says which delegates to which. The doc cites `install.sh:91` and `:196` but names `setup.sh` as the entry point.
+14. **Undefined terms.** ECC (27), agents, skills, OpenSpec (one clause), PreCompact/SessionStart/Stop (hooks reference linked only at 274), "G"/"V" (48) are terse.
+15. **Unlinked references.** PR #63/#66/#72, branch names, `docs/*` files. `orchestrator/bench/results/m2-comparison.md:12` exists only on a branch.
+16. **Context-dependent phrasing.** "seen on 2026-10-27 in this session" (92), "(or nothing)" (294), "On the owner's Mac" (85, 97).
+17. **Per-call process count (261-262).** Says two processes per tool call, but `block_protected_push.py` also fires on Bash PreToolUse. The 35 ms figure is measured for telemetry only.
+18. **Test spec gaps (344-353).** `/tmp/x` hard-coded rather than a temp dir. "The file executed is the one in the temp folder" does not say how that is observed. No test names beyond filenames.
+19. **Cited line ranges will drift.** Citations (50-80, 235-260, 305-307, 145-159) hold only at the baseline commit `ccc807e`; the doc does not say so near them.
