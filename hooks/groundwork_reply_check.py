@@ -37,6 +37,10 @@ try:
     from groundwork_telemetry import META_HEADING, current_turn, turn_facts  # shared transcript parsing
 except Exception:  # a missing sibling must not break the session
     META_HEADING = current_turn = turn_facts = None
+try:
+    from groundwork_shared import mark_turn_start, turn_tools  # tool use without a transcript (telemetry fallback)
+except Exception:
+    mark_turn_start = turn_tools = None
 
 BOOKKEEPING = {"ToolSearch", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
 BOOKKEEPING_PREFIXES = ("mcp__ccd_turn__",)
@@ -139,6 +143,11 @@ def output_format(category: str) -> str:
 
 
 def on_prompt(data: dict) -> None:
+    if mark_turn_start is not None:
+        try:
+            mark_turn_start(str(data.get("session_id") or ""))
+        except Exception:
+            pass  # only the no-transcript fallback depends on it
     prompt = str(data.get("prompt") or "")
     if prompt.strip().startswith("/"):
         return
@@ -151,12 +160,9 @@ def on_prompt(data: dict) -> None:
 
 
 def on_stop(data: dict) -> None:
-    if data.get("stop_hook_active") or current_turn is None:
+    if data.get("stop_hook_active") or turn_tools is None:
         return
-    path = str(data.get("transcript_path") or "")
-    if not path or not os.path.isfile(path):
-        return
-    tools = turn_facts(current_turn(path) or []).get("tools", [])
+    tools = turn_tools(data, current_turn, turn_facts)
     text = data.get("last_assistant_message")
     if not isinstance(text, str) or not text.strip():
         return  # no reply text to check (e.g. an older Claude Code without the field): fail open

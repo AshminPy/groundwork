@@ -285,12 +285,11 @@ def update_decision_log(brief: Path, text: str, session_id: str) -> int:
 
 
 def real_tools(data: dict) -> list:
-    if current_turn is None:
+    try:
+        from groundwork_shared import turn_tools  # transcript, else telemetry since the prompt (no-transcript sessions)
+    except Exception:
         return []
-    path = str(data.get("transcript_path") or "")
-    if not path or not os.path.isfile(path):
-        return []
-    tools = turn_facts(current_turn(path) or []).get("tools", [])
+    tools = turn_tools(data, current_turn, turn_facts)
     return [t for t in tools if t not in BOOKKEEPING and not str(t).startswith("mcp__ccd_turn__")]
 
 
