@@ -198,8 +198,45 @@ def test_stop_hook() -> None:
     finish()
 
 
+def test_stop_without_transcript() -> None:
+    """Sessions that are not saved (claude -p --no-session-persistence, some CI and SDK runs) have no transcript.
+    The turn's tool use then comes from Groundwork's per-tool-call telemetry since the prompt was submitted."""
+    print("Stop without a transcript")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        events = tmp / "tool_events.jsonl"
+        env = {"CLAUDE_CONFIG_DIR": str(tmp / "cfg"), "GROUNDWORK_TOOL_TELEMETRY_PATH": str(events)}
+        def tool(sid, ts):
+            with events.open("a") as f:
+                f.write(json.dumps({"schema": 1, "ts": ts, "session_id": sid, "tool": "Read", "category": "builtin",
+                                    "success": True}) + "\n")
+        import time as _t
+        now = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+        missing = str(tmp / "never-written.jsonl")
+        stop = {"hook_event_name": "Stop", "session_id": "s1", "transcript_path": missing, "stop_hook_active": False,
+                "last_assistant_message": "Done."}
+        r = run(stop, env)
+        check("no prompt marker yet: fail open (no output)", r.returncode == 0 and r.stdout.strip() == "", r.stdout)
+        run({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "read the config"}, env)
+        tool("s1", "2000-01-01T00:00:00Z")   # an older turn's tool call
+        tool("other", now)                   # another session's tool call
+        r = run(stop, env)
+        check("no tool call by this session since the prompt: chat turn, untouched", r.stdout.strip() == "", r.stdout)
+        tool("s1", now)
+        r = run(stop, env)
+        out = json.loads(r.stdout) if r.stdout.strip() else {}
+        check("a tool call since the prompt, missing parts: asked once", out.get("decision") == "block", r.stdout)
+        r = run({**stop, "last_assistant_message": FULL}, env)
+        check("complete reply: no output", r.stdout.strip() == "", r.stdout)
+        r = run({**stop, "stop_hook_active": True}, env)
+        check("never asks twice (stop_hook_active)", r.stdout.strip() == "", r.stdout)
+        run({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "/compact"}, env)
+        check("a slash command still marks the turn start", (tmp / "cfg").exists())
+    finish()
+
+
 if __name__ == "__main__":
-    for fn in (test_check_reply, test_classify_prompt, test_prompt_hook, test_stop_hook):
+    for fn in (test_check_reply, test_classify_prompt, test_prompt_hook, test_stop_hook, test_stop_without_transcript):
         try:
             fn()
         except AssertionError:

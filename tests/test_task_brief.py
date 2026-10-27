@@ -365,8 +365,37 @@ def test_events() -> None:
     finish()
 
 
+def test_stop_without_transcript_uses_telemetry() -> None:
+    print("brief: Stop without a transcript")
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        home = tmp / "home"
+        home.mkdir()
+        repo = make_repo(tmp, "proj")
+        events = tmp / "tool_events.jsonl"
+        os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+        m = load(HOOK, "groundwork_brief")
+        path = m.brief_path(str(repo))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        sys.path.insert(0, str(REPO_ROOT / "hooks"))
+        import importlib
+        shared = importlib.import_module("groundwork_shared")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+        shared.mark_turn_start("b1")
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        import time as _t
+        events.write_text(json.dumps({"schema": 1, "ts": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
+                                      "session_id": "b1", "tool": "Edit", "category": "builtin", "success": True}) + "\n")
+        stop = {"hook_event_name": "Stop", "cwd": str(repo), "session_id": "b1",
+                "transcript_path": str(tmp / "missing.jsonl"), "stop_hook_active": False, "last_assistant_message": "x"}
+        run(stop, home, {"GROUNDWORK_TOOL_TELEMETRY_PATH": str(events)})
+        check("tool use found in telemetry: the snapshot is written", path.is_file() and "tools in the last turn: Edit" in path.read_text(),
+              path.read_text() if path.is_file() else "no brief")
+    finish()
+
+
 if __name__ == "__main__":
-    for fn in (test_paths, test_refresh, test_round_trip_and_races, test_decision_log, test_evidence_ask, test_events):
+    for fn in (test_paths, test_refresh, test_round_trip_and_races, test_decision_log, test_evidence_ask, test_events, test_stop_without_transcript_uses_telemetry):
         try:
             fn()
         except AssertionError:

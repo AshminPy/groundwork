@@ -6,8 +6,12 @@ module on their default sys.path.
 Kept deliberately tiny: only what at least two hooks genuinely need identically. If a
 helper is used by only one hook, it stays in that hook.
 """
+import json
+import os
 import re
 import subprocess
+import time
+from pathlib import Path
 
 # Bash commands that look like a real test/validation run, not just any command. Originally
 # defined only in groundwork_telemetry.py; moved here in Groundwork 2.0 Phase 4 because
@@ -51,3 +55,79 @@ def dirty_change_names(cwd: str) -> set[str]:
         if len(parts) > 2 and parts[0] == "openspec" and parts[1] == "changes":
             names.add(parts[2])
     return names
+
+
+# ---- Which tools did this turn use? ---------------------------------------------------------------
+# The Stop hooks (reply check, task brief) read the turn's tool calls from the session transcript. A session that
+# is not saved (`claude -p --no-session-persistence`, some CI and SDK runs) has no transcript, so they fell silent
+# there (found by the 2.5 benchmark). Fallback: the reply check marks each prompt's start time, and the turn's tool
+# calls are this session's records in Groundwork's per-tool-call telemetry since then. With telemetry off, or no
+# marker, the fallback finds nothing and the hooks stay silent, as before (fail-open).
+TURN_MARKER_KEEP_S = 8 * 86400
+TOOL_EVENTS_TAIL = 2 * 1024 * 1024
+
+
+def _config_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+
+
+def _turn_marker(session_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", session_id)[:80] or "unknown"
+    return _config_dir() / "groundwork" / "state" / "turns" / f"{safe}.json"
+
+
+def mark_turn_start(session_id: str) -> None:
+    """Record when the current prompt was submitted (UTC, whole seconds, the telemetry's own format)."""
+    if not session_id:
+        return
+    marker = _turn_marker(session_id)
+    marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}))
+    os.replace(tmp, marker)
+    now = time.time()
+    for old in marker.parent.glob("*.json"):
+        try:
+            if now - old.stat().st_mtime > TURN_MARKER_KEEP_S:
+                old.unlink()
+        except OSError:
+            pass
+
+
+def tools_since_turn_start(session_id: str) -> list:
+    """Tool names this session recorded in telemetry since its last prompt; [] when unknown."""
+    try:
+        start = json.loads(_turn_marker(session_id).read_text()).get("ts")
+    except (OSError, ValueError):
+        return []
+    override = os.environ.get("GROUNDWORK_TOOL_TELEMETRY_PATH")
+    path = Path(os.path.expanduser(override)) if override else _config_dir() / "groundwork" / "telemetry" / "tool_events.jsonl"
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            f.seek(max(0, size - TOOL_EVENTS_TAIL))
+            raw = f.read()
+    except OSError:
+        return []
+    session_id = session_id[:64]  # telemetry stores the id cut to 64 chars (groundwork_telemetry.build_tool_record)
+    tools = []
+    for line in raw.splitlines():
+        if session_id.encode() not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("session_id") == session_id and str(rec.get("ts") or "") >= start:
+            name = str(rec.get("tool") or "")
+            if name and name not in tools:
+                tools.append(name)
+    return tools
+
+
+def turn_tools(data: dict, current_turn, turn_facts) -> list:
+    """The turn's tool names: from the transcript when it exists, else from telemetry since the prompt."""
+    path = str(data.get("transcript_path") or "")
+    if path and os.path.isfile(path) and current_turn is not None:
+        return turn_facts(current_turn(path) or []).get("tools", [])
+    return tools_since_turn_start(str(data.get("session_id") or ""))
