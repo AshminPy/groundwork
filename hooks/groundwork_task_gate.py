@@ -27,6 +27,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+_SESSION = ""
+_TOOL_USE_ID = ""
+_PROMPT_ID = ""
+
+
+def _record(decision: str, cause: str = "policy") -> None:
+    """Telemetry of this hook's own decision. Imported here, inside try, so a missing or broken module can never
+    stop the decision being printed (openspec/changes/add-accuracy-signals D6)."""
+    try:
+        from groundwork_shared import record_guardrail
+        record_guardrail(_SESSION, _PROMPT_ID, "task_gate", decision, cause, _TOOL_USE_ID)
+    except BaseException:  # nothing raised while recording may change the decision
+        pass
+
+
 try:
     import groundwork_tasks as gt
 except Exception:  # partial install: fail open
@@ -1093,16 +1108,23 @@ def emit(obj) -> None:
     sys.exit(0)
 
 
-def ask(reason: str) -> None:
+def _decide(obj: dict, decision: str, cause: str) -> None:
+    """Print the decision first, then record it, so the recording can never delay or suppress it (design D6)."""
+    print(json.dumps(obj), flush=True)
+    _record(decision, cause)
+    sys.exit(0)
+
+
+def ask(reason: str, cause: str = "policy") -> None:
     """Claude Code's own permission prompt: the user authorizes or declines (in a -p run with no one to answer, the
-    call is denied and Claude reads the reason)."""
-    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
-                                 "permissionDecisionReason": "Groundwork: " + reason}})
+    call is denied and Claude reads the reason). cause="internal_error" when the gate could not check the call."""
+    _decide({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                    "permissionDecisionReason": "Groundwork: " + reason}}, "ask", cause)
 
 
 def deny(reason: str) -> None:
-    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                 "permissionDecisionReason": reason}})
+    _decide({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                    "permissionDecisionReason": reason}}, "deny", "policy")
 
 
 def add_context(event: str, text: str) -> None:
@@ -1181,16 +1203,26 @@ def check_file(tool: str, path: str, cwd: str) -> None:
 PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork/tasks")
 
 
+COULD_NOT_CHECK = ("a command Groundwork could not parse", "an unclosed command substitution", "deeply nested commands",
+                   "a deeply nested eval", "a deeply nested shell")
+
+
+def _cause(label: str) -> str:
+    """internal_error when the gate asks because it could not check a nested command (design D6). Nested checks add a
+    suffix such as " (in a command substitution)", so the labels are matched as prefixes."""
+    return "internal_error" if label.startswith(COULD_NOT_CHECK) else "policy"
+
+
 def check_command(cmd: str, cwd: str) -> None:
     segs = split_segments(cmd)
     if segs is None:
-        ask("this command could not be parsed, so Groundwork cannot tell what it does.")
+        ask("this command could not be parsed, so Groundwork cannot tell what it does.", cause="internal_error")
     for _s, _argv, label in checked_segments(segs, cwd):
         if label:
-            ask(f"{label}.")
+            ask(f"{label}.", cause=_cause(label))
     label = embedded_sensitive(cmd, segs, cwd)
     if label:
-        ask(f"{label}.")
+        ask(f"{label}.", cause=_cause(label))
     if _touches_protected(segs, cmd, cwd):
         ask("this command touches Claude Code settings, Groundwork's hooks or the task ledger.")
 
@@ -1360,11 +1392,12 @@ def on_pre(data: dict) -> None:
         elif tool in COMMAND_TOOLS and isinstance(ti.get("command"), str):
             check_command(ti["command"], cwd)
         elif tool == "PowerShell" and isinstance(ti.get("command"), str):
-            ask("PowerShell commands are not parsed, so Groundwork cannot tell what this one does.")
+            ask("PowerShell commands are not parsed, so Groundwork cannot tell what this one does.", cause="internal_error")
     except SystemExit:
         raise
     except Exception as exc:
-        ask(f"an internal error stopped the check of this call ({type(exc).__name__}); confirm it yourself.")
+        ask(f"an internal error stopped the check of this call ({type(exc).__name__}); confirm it yourself.",
+            cause="internal_error")
 
 
 CREDENTIAL_FILE_READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "jq", "yq", "wc", "diff", "stat",
@@ -1462,6 +1495,10 @@ def main() -> None:
             raise ValueError
     except Exception:
         sys.exit(0)
+    global _SESSION, _TOOL_USE_ID, _PROMPT_ID
+    _SESSION = data.get("session_id")
+    _TOOL_USE_ID = data.get("tool_use_id")
+    _PROMPT_ID = data.get("prompt_id")
     event = data.get("hook_event_name")
     try:
         if event == "UserPromptSubmit":

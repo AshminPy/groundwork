@@ -50,6 +50,7 @@ from merge_settings import (  # noqa: E402  (must follow the sys.path insert)
     TASK_GATE_EVENTS,
     drop_command,
     TELEMETRY_CMD,
+    TELEMETRY_EVENTS,
     ownership_path,
     parse_args,
     read_owned,
@@ -73,9 +74,8 @@ def unmerge(data: dict, agent_teams: bool = False, owns_output_style: bool = Fal
     hooks = data.get("hooks", {})
     remove_hook(hooks, "PreToolUse", PUSH_CMD, removed)
     remove_hook(hooks, "Stop", REVIEW_CMD, removed)
-    remove_hook(hooks, "Stop", TELEMETRY_CMD, removed)
-    remove_hook(hooks, "PostToolUse", TELEMETRY_CMD, removed)
-    remove_hook(hooks, "PostToolUseFailure", TELEMETRY_CMD, removed)
+    for event, _matcher, _timeout, _message in TELEMETRY_EVENTS:
+        remove_hook(hooks, event, TELEMETRY_CMD, removed)
     remove_hook(hooks, "SessionStart", SNAPSHOT_CMD, removed)
     for event, _matcher, _timeout, _message in TASK_GATE_EVENTS:
         remove_hook(hooks, event, TASK_GATE_CMD, removed)

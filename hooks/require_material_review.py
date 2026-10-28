@@ -61,6 +61,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+_SESSION = ""
+_TOOL_USE_ID = ""
+_PROMPT_ID = ""
+
+
+def _record(decision: str, cause: str = "policy") -> None:
+    """Telemetry of this hook's own decision. Imported here, inside try, so a missing or broken module can never
+    stop the decision being printed (openspec/changes/add-accuracy-signals D6)."""
+    try:
+        from groundwork_shared import record_guardrail
+        record_guardrail(_SESSION, _PROMPT_ID, "review_gate", decision, cause, _TOOL_USE_ID)
+    except BaseException:  # nothing raised while recording may change the decision
+        pass
+
+
 # Imported separately (not one combined try/except): a stale or partially-installed
 # groundwork_shared.py that is missing just one of these two names must not also take down
 # the other — each degrades independently to its own safe fail-open default.
@@ -269,7 +284,8 @@ def scan_transcript(transcript_path: str):
 
 
 def deny(reason: str) -> None:
-    print(json.dumps({"decision": "block", "reason": reason}))
+    print(json.dumps({"decision": "block", "reason": reason}), flush=True)
+    _record("block")  # after the decision is out (design D6)
     sys.exit(0)
 
 
@@ -280,6 +296,10 @@ def main() -> None:
             raise ValueError("hook input must be a JSON object")
     except Exception:
         sys.exit(0)
+    global _SESSION, _TOOL_USE_ID, _PROMPT_ID
+    _SESSION = data.get("session_id")
+    _TOOL_USE_ID = data.get("tool_use_id")
+    _PROMPT_ID = data.get("prompt_id")
 
     cwd = data.get("cwd") or os.getcwd()
     transcript_path = data.get("transcript_path", "")

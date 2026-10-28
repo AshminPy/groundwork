@@ -66,6 +66,23 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # groundwork_shared, for guardrail records
+
+_SESSION = ""
+_TOOL_USE_ID = ""
+_PROMPT_ID = ""
+
+
+def _record(decision: str, cause: str = "policy") -> None:
+    """Telemetry of this hook's own decision. Imported here, inside try, so a missing or broken module can never
+    stop the decision being printed (openspec/changes/add-accuracy-signals D6)."""
+    try:
+        from groundwork_shared import record_guardrail
+        record_guardrail(_SESSION, _PROMPT_ID, "push_guard", decision, cause, _TOOL_USE_ID)
+    except BaseException:  # nothing raised while recording may change the decision
+        pass
+
+
 PROTECTED = {"main", "master", "production", "prod", "release"}
 FORCE_FLAGS = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
 FORCE_CLUSTER_RE = re.compile(r"^-[A-Za-z0-9]*f[A-Za-z0-9]*$")  # -f inside a short-flag cluster: -uf, -fu
@@ -982,10 +999,11 @@ def inspect_command(cmd: str, cwd: str, depth: int = 0, state=None):
     return None
 
 
-def deny(reason: str):
+def deny(reason: str, cause: str = "policy"):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "permissionDecision": "deny",
-                                             "permissionDecisionReason": reason}}))
+                                             "permissionDecisionReason": reason}}), flush=True)
+    _record("deny", cause)  # after the decision is out (design D6)
     sys.exit(0)
 
 
@@ -996,20 +1014,26 @@ def main():
             raise ValueError("hook input must be a JSON object")
     except Exception:
         sys.exit(0)
+    global _SESSION, _TOOL_USE_ID, _PROMPT_ID
+    _SESSION = data.get("session_id")
+    _TOOL_USE_ID = data.get("tool_use_id")
+    _PROMPT_ID = data.get("prompt_id")
     if data.get("tool_name") != "Bash":
         sys.exit(0)
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
     cmd = tool_input.get("command", "") or ""
     cmd = cmd if isinstance(cmd, str) else json.dumps(cmd)
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) and data.get("cwd") else os.getcwd()
+    cause = "policy"
     try:
         reason = inspect_command(cmd, cwd)
     except Exception:
+        cause = "internal_error"
         # a fault in the guard, or a command too slow to check, must not let a push through (independent review)
         reason = ("block_protected_push: the guard could not check this command and it mentions push; run the push "
                   "yourself or simplify the command." if _mentions_push(cmd) else None)
     if reason:
-        deny(reason)
+        deny(reason, cause)
     sys.exit(0)
 
 

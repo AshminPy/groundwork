@@ -3,6 +3,7 @@
 
 Run: python3 tests/test_report.py   (or: python3 -m pytest tests -q)
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import datetime as dt
 import importlib.util
 import json

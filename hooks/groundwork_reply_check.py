@@ -33,6 +33,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+_SESSION = ""
+_TOOL_USE_ID = ""
+_PROMPT_ID = ""
+
+
+def _record(decision: str, cause: str = "policy") -> None:
+    """Telemetry of this hook's own decision. Imported here, inside try, so a missing or broken module can never
+    stop the decision being printed (openspec/changes/add-accuracy-signals D6)."""
+    try:
+        from groundwork_shared import record_guardrail
+        record_guardrail(_SESSION, _PROMPT_ID, "reply_check", decision, cause, _TOOL_USE_ID)
+    except BaseException:  # nothing raised while recording may change the decision
+        pass
+
+
 try:
     from groundwork_telemetry import META_HEADING, current_turn, turn_facts  # shared transcript parsing
 except Exception:  # a missing sibling must not break the session
@@ -173,7 +188,11 @@ def on_stop(data: dict) -> None:
     reason = (f"Groundwork reply check: this turn used tools, but the final reply is missing: {parts}. "
               "Add only the missing parts in a short follow-up message. Do not repeat the rest of the "
               "reply and do not re-run tools.")
-    print(json.dumps({"decision": "block", "reason": reason}))
+    global _SESSION, _PROMPT_ID
+    _SESSION = data.get("session_id")
+    _PROMPT_ID = data.get("prompt_id")
+    print(json.dumps({"decision": "block", "reason": reason}), flush=True)
+    _record("block")  # after the decision is out (design D6)
 
 
 def main() -> None:

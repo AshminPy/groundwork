@@ -4,6 +4,7 @@ openspec/changes/core-evidence-continuity) — no Claude Code needed.
 
 Run: python3 tests/test_task_brief.py   (or: python3 -m pytest tests -q)
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import importlib.util
 import json
 import os

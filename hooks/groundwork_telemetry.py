@@ -53,10 +53,12 @@ would force every reader (scripts/groundwork_report.py, any future one) to branc
 the day-bucket/profile/playbook dimensions the per-turn schema aggregates by do not exist for a
 single tool call.
 
-What is recorded — deliberately exactly this and nothing more, per the approved scope: this hook
-never reads `tool_input`, `tool_response` or `error` (the fields that could carry secrets,
-command text, file contents or prompt/response text) — only the event's own `tool_name`,
-`session_id`, which event fired, and the boolean `is_interrupt`:
+What is recorded per call: the event's own `tool_name`, `session_id`, `prompt_id`, `tool_use_id`,
+which event fired, and the boolean `is_interrupt`. Accuracy signals change (D5): for Bash only, the
+command and the first line of `error` are read in memory to set `kind`, `result` and `git_commit`;
+neither is stored. For a completed reviewer Agent/Task call, the result text is parsed for its
+REVIEW RESULT block and a `review` signal is written (D9). Nothing else from `tool_input` or
+`tool_response` is read:
   - `tool`: the tool name Claude Code reports (e.g. "Bash", "Edit", "mcp__github__list_prs"),
     capped to a short length as a defensive bound — the same strings the per-turn record already
     stores in `observed.tools`, so this adds no new exposure;
@@ -73,21 +75,26 @@ Not recorded, by Claude Code's own design (code.claude.com/docs/en/hooks): a cal
 by permissions or rejected before execution (unknown tool, invalid input) fires neither event,
 and cancelling a running tool fires no failure event, so such calls leave no failure row. Rows are therefore calls that actually
 finished or failed — never a count of everything Claude attempted.
-Known limitation (unchanged from the 2.2.0 investigation): a Bash-invoked CLI integration (gh,
-kubectl, terraform, …) is not attributable by name here either — doing so would mean parsing
-`tool_input.command`, which this hook must never read. Only MCP-mechanism and built-in-tool usage
-is classified; CLI-mechanism usage stays invisible to this telemetry, as documented in
+Known limitation: a Bash-invoked CLI integration (gh, kubectl, terraform, …) is not attributable
+by name; only MCP-mechanism and built-in-tool usage is classified, as documented in
 docs/ARCHITECTURE.md.
+
+Event-shaped signals (openspec/changes/add-accuracy-signals D2): SubagentStop (review result of a
+review-shaped agent type), UserPromptSubmit (correction flag; slash commands and harness envelopes
+marked skipped) and PostCompact (trigger) append to signals.jsonl through
+groundwork_shared.append_signal. No prompt, reply or command text is stored. Any other event
+writes nothing.
 
 Both files share the owner-only (0600 file / 0700 dir) permission model and the same off-switch.
 Disable with GROUNDWORK_TELEMETRY=off. Path overrides: GROUNDWORK_TELEMETRY_PATH (per-turn file),
-GROUNDWORK_TOOL_TELEMETRY_PATH (per-tool-call file).
+GROUNDWORK_TOOL_TELEMETRY_PATH (per-tool-call file), GROUNDWORK_SIGNALS_PATH (signals file).
 """
 import calendar
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -99,8 +106,17 @@ except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook. A pattern that
     # matches nothing just means test-shaped commands stop being detected — degraded, not broken.
     TEST_CMD = re.compile(r"(?!x)x")
+try:
+    from groundwork_shared import append_signal  # signals.jsonl writer (openspec/changes/add-accuracy-signals)
+except Exception:
+    def append_signal(_rec):
+        pass
+try:
+    from require_material_review import REVIEW_PATTERN, is_review_call, parse_review_result  # the gate's definitions
+except Exception:
+    REVIEW_PATTERN, is_review_call, parse_review_result = re.compile(r"(?!x)x"), (lambda *_a: False), (lambda _t: {})
 
-META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
+META_HEADING = re.compile(r"^[ \t]*(?:#+[ \t]*|\*\*)?Harness metadata(?:\*\*)?[ \t]*$", re.MULTILINE | re.IGNORECASE)
 # Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
 META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
 # Free text copied from the model's block is stored only if it looks like a short label:
@@ -169,11 +185,14 @@ def default_usage_path() -> Path:
     return base / "groundwork" / "telemetry" / "usage.jsonl"
 
 
-def latest_ctx_pct(session_id: str, now: float = None):
-    """Context-window % for this session from the statusLine's latest usage record, or None.
-    None when there is no statusLine record (headless runs, statusLine off) or it is too old."""
+COST_MAX_AGE_S = 60            # the statusLine writes at most once a minute; older is another turn's spend
+
+
+def latest_usage(session_id: str, now: float = None) -> dict:
+    """This session's newest statusLine row: ctx_pct if at most 15 min old, cost_usd + its age if at most 60 s old.
+    {} without a statusLine row (headless runs, another statusLine)."""
     if not session_id or session_id == "unknown":
-        return None
+        return {}
     now = time.time() if now is None else now
     try:
         path = default_usage_path()
@@ -184,7 +203,8 @@ def latest_ctx_pct(session_id: str, now: float = None):
                 f.readline()  # drop the partial first line
             lines = f.read().splitlines()
     except Exception:
-        return None
+        return {}
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
     for raw in reversed(lines):
         try:
             r = json.loads(raw)
@@ -192,15 +212,22 @@ def latest_ctx_pct(session_id: str, now: float = None):
             continue
         if not isinstance(r, dict) or r.get("session_id") != session_id:
             continue
-        pct = r.get("ctx_pct")
         try:
-            ts = calendar.timegm(time.strptime(str(r.get("ts")), "%Y-%m-%dT%H:%M:%SZ"))
+            age = now - calendar.timegm(time.strptime(str(r.get("ts")), "%Y-%m-%dT%H:%M:%SZ"))
         except Exception:
-            return None
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 <= pct <= 100 or not 0 <= now - ts <= CTX_MAX_AGE_S:
-            return None
-        return round(float(pct), 1)
-    return None
+            return {}
+        out = {}
+        if num(r.get("ctx_pct")) and 0 <= r["ctx_pct"] <= 100 and 0 <= age <= CTX_MAX_AGE_S:
+            out["ctx_pct"] = round(float(r["ctx_pct"]), 1)
+        if num(r.get("cost_usd")) and r["cost_usd"] >= 0 and 0 <= age <= COST_MAX_AGE_S:
+            out["cost_usd"] = round(float(r["cost_usd"]), 4)
+            out["cost_age_s"] = int(age)
+        return out
+    return {}
+
+
+def latest_ctx_pct(session_id: str, now: float = None):
+    return latest_usage(session_id, now).get("ctx_pct")
 
 
 def harness_version() -> str:
@@ -458,9 +485,9 @@ def classify_tool(tool_name: str):
 
 
 def build_tool_record(data: dict, event: str) -> dict:
-    """One record per PostToolUse/PostToolUseFailure call. Reads only tool_name, session_id, the
-    event name and the boolean is_interrupt — never tool_input or tool_response/error (where
-    secrets, command text or file contents would live). {} when there is nothing usable to record (no tool_name)."""
+    """One record per PostToolUse/PostToolUseFailure call: tool name, category, success, ids. Never tool_response
+    content. For Bash only, classify_bash() reads the command and the first line of `error` to classify the call and
+    its result; neither is stored. {} when there is nothing usable to record (no tool_name)."""
     tool_name = str(data.get("tool_name") or "").strip()
     if not tool_name:
         return {}
@@ -473,11 +500,401 @@ def build_tool_record(data: dict, event: str) -> dict:
         "category": category,
         "success": event != "PostToolUseFailure",
     }
+    for key in ("prompt_id", "tool_use_id"):
+        if safe_id(data.get(key)):
+            record[key] = data[key]
     if server:
         record["mcp_server"] = server
     if event == "PostToolUseFailure" and data.get("is_interrupt") is True:
         record["interrupted"] = True   # an abort, not an error the tool reported (hooks docs)
+    if tool_name == "Bash":
+        record.update(classify_bash(data, event))
     return record
+
+
+SAFE_ID = re.compile(r"[\w.:-]{1,100}")
+
+
+def safe_id(v) -> bool:
+    """Ids are stored only when they look like ids, so a malformed payload cannot smuggle text into a record."""
+    return isinstance(v, str) and bool(SAFE_ID.fullmatch(v))
+
+
+# ---------------------------------------------------------------- Bash classification (design D5)
+EXIT_LINE = re.compile(r"\AExit code (\d+)\b")  # hooks docs: a Bash command that exited -> first line "Exit code N"
+WRAPPERS = {"env", "time", "sudo", "nice", "nohup", "command", "builtin"}
+BENIGN = {"cd", "export", "set", "source", ".", "pushd", "popd", "true", "unset", "ulimit"}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+PY_TEST_PATH = re.compile(r"(?:^|/)(?:tests?/|test_)[^ ]*\.py$")
+KIND_ORDER = ("test", "check", "deploy", "runtime_read")
+NOT_A_RUN = {"--help", "-h", "--version", "-V", "--collect-only", "--co"}
+NOT_FOUND_CODES = (124, 126, 127)  # killed by timeout, or the shell could not run it: not a test failure
+
+
+def _leading(argv: list) -> list:
+    """argv without assignments and wrappers: `env X=1 timeout 60 uv run pytest -q` -> ['pytest', '-q']."""
+    a = list(argv)
+    while a:
+        head = os.path.basename(a[0])
+        if ASSIGNMENT.match(a[0]) or head in WRAPPERS:
+            a = a[1:]
+        elif head == "timeout":
+            a = a[1:]
+            while a and a[0].startswith("-"):
+                a = a[1:]
+            a = a[1:]  # the duration
+        elif head in ("uv", "poetry", "pdm", "hatch") and len(a) > 1 and a[1] == "run":
+            a = a[2:]
+        elif head in ("npx", "bunx"):
+            a = a[1:]
+        else:
+            break
+    return a
+
+
+def segment_kind(argv: list):
+    a = _leading(argv)
+    if not a:
+        return None
+    exe, rest = os.path.basename(a[0]), a[1:]
+    if any(x in NOT_A_RUN for x in rest):
+        return None  # pytest --collect-only, --help, --version: nothing was tested or checked
+    sub = rest[0] if rest else ""
+    if exe in ("pytest", "py.test", "tox", "nox", "bats", "jest", "vitest", "mocha"):
+        return "test"
+    if re.fullmatch(r"python3?(?:\.\d+)?", exe):
+        if rest[:2] in (["-m", "pytest"], ["-m", "unittest"]):
+            return "test"
+        if rest[:2] in (["-m", "mypy"], ["-m", "ruff"]):
+            return "check"
+        if sub and not sub.startswith("-") and PY_TEST_PATH.search(sub):
+            return "test"
+        return None
+    if exe in ("go", "cargo") and sub == "test":
+        return "test"
+    if exe in ("npm", "pnpm", "yarn", "bun") and (sub == "test" or (sub == "run" and len(rest) > 1 and rest[1].startswith("test"))):
+        return "test"
+    if exe == "make" and sub in ("test", "check"):
+        return "test"
+    if exe in ("terraform", "tofu") and sub in ("validate", "plan"):
+        return "check"
+    if exe in ("ruff", "mypy"):
+        return "check"
+    if exe == "openspec" and sub == "validate":
+        return "check"
+    if exe == "kubectl":
+        if any(x.startswith("--dry-run") for x in rest):
+            return "check"
+        if sub in ("get", "describe", "logs") or rest[:2] == ["rollout", "status"]:
+            return "runtime_read"
+    if exe in ("curl", "wget"):
+        return "runtime_read"
+    if exe == "gh" and (rest[:2] in (["run", "view"], ["run", "watch"], ["pr", "checks"])):
+        return "runtime_read"
+    if exe == "claude" and ("-p" in rest or "--print" in rest):
+        return "runtime_read"
+    if DEPLOY_CMD.match(" ".join(a)):
+        return "deploy"
+    return None
+
+
+def _is_git_commit(argv: list) -> bool:
+    a = _leading(argv)
+    if not a or os.path.basename(a[0]) != "git":
+        return False
+    i = 1
+    while i < len(a) and a[i].startswith("-"):
+        i += 2 if a[i] in ("-C", "-c", "--git-dir", "--work-tree") else 1
+    return i < len(a) and a[i] == "commit"
+
+
+def _segments(cmd: str):
+    """The task gate's own parser, imported lazily: the gate's dependencies stay unchanged (design D5)."""
+    try:
+        from groundwork_task_gate import split_segments
+        return split_segments(cmd)
+    except Exception:
+        return None
+
+
+def _status_visible(segs: list, k: int) -> bool:
+    """The call's exit status is segment k's own: nothing after it can mask or replace it (verification_match)."""
+    s = segs[k]
+    later_ok = all(t["prev"] == "&&" for t in segs[k + 1:])
+    return s["prev"] in (None, ";", "&&", "\n") and later_ok and s["next"] in (None, "&&", "\n")
+
+
+def classify_bash(data: dict, event: str) -> dict:
+    inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    cmd = str(inp.get("command") or "")
+    segs = _segments(cmd)
+    if segs is None:
+        a = cmd.split()
+        kind = segment_kind(a) if a else None
+        out = {"kind": kind} if kind else {}
+        if kind in ("test", "check"):
+            out["result"] = "unknown"  # not parsed: no result can be trusted
+        return out
+    out = {}
+    kinds = [segment_kind(s["argv"]) for s in segs]
+    if any(_is_git_commit(s["argv"]) and _status_visible(segs, i) for i, s in enumerate(segs)):
+        out["git_commit"] = True  # only when the call's own status shows the commit's result (no ||, ;, pipe after it)
+    present = [k for k in KIND_ORDER if k in kinds]
+    if not present:
+        return out
+    kind = present[0]
+    out["kind"] = kind
+    if kind not in ("test", "check"):
+        return out
+    k = max(i for i, x in enumerate(kinds) if x == kind)  # the last test/check segment decides
+    s = segs[k]
+    status_visible = _status_visible(segs, k)
+    resp = data.get("tool_response") if isinstance(data.get("tool_response"), dict) else {}
+    if not status_visible or inp.get("run_in_background") is True or data.get("is_interrupt") is True \
+            or resp.get("interrupted") is True:
+        out["result"] = "unknown"
+    elif event == "PostToolUse":
+        out["result"] = "pass"
+    else:
+        m = EXIT_LINE.match(str(data.get("error") or ""))
+        code = int(m.group(1)) if m else None
+        exe = _leading(s["argv"])
+        is_pytest = bool(exe) and (os.path.basename(exe[0]) in ("pytest", "py.test") or exe[1:3] == ["-m", "pytest"])
+        special = (exe[:2] in (["terraform", "plan"], ["tofu", "plan"]) and code == 2) or (is_pytest and code == 5)
+        earlier_benign = all(not _leading(t["argv"]) or os.path.basename(_leading(t["argv"])[0]) in BENIGN
+                             for t in segs[:k])
+        if code is None or code == 0 or code in NOT_FOUND_CODES or special or k != len(segs) - 1 or not earlier_benign:
+            out["result"] = "unknown"  # another segment may have failed, or the code is not a test failure
+        else:
+            out["result"] = "fail"
+    return out
+
+
+# ---------------------------------------------------------------- event-shaped signals (design D2, D9, D10)
+SIGNAL_EVENTS = ("SubagentStop", "UserPromptSubmit", "PostCompact")
+AP = "['\u2019]?"  # straight or curly apostrophe, or none
+CORRECTION = re.compile(
+    r"(?:^|[.!?]\s+|\b(?:it|this|that|still)\s+)(?:still\s+)?(?:did" + AP + "n" + AP + "t|does" + AP + "n" + AP
+    + r"t|did not|does not)\s+work\b"
+    r"|\bstill\s+(?:failing|fails|broken)\b"
+    r"|\bthat" + AP + r"s\s+(?:wrong|incorrect|not right)\b|\bthat is (?:wrong|incorrect|not right)\b"
+    r"|\bnot what i asked\b|\byou broke\b", re.IGNORECASE)
+ENVELOPES = ("<task-notification", "<system-reminder", "<agent-message")
+CONDITIONAL = re.compile(r"\b(?:if|when|whenever|unless|in case)\b", re.IGNORECASE)  # "if it doesn't work, tell me"
+
+
+def is_skipped_prompt(prompt: str) -> bool:
+    """A slash command or a harness envelope (also how turns Claude Code starts itself arrive): not a user's words."""
+    p = prompt or ""
+    return p.lstrip().startswith("/") or any(e in p for e in ENVELOPES)
+
+
+def is_correction(prompt: str) -> bool:
+    """Design D10: skip slash commands and harness envelopes; match only the first 5 lines outside ``` fences,
+    each at most 300 characters, so pasted logs and code are not read."""
+    p = prompt or ""
+    if is_skipped_prompt(p):
+        return False
+    lines, fenced = [], False
+    for ln in p.splitlines():
+        if ln.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or not ln.strip():
+            continue
+        if len(ln) <= 300:
+            lines.append(ln)
+        if len(lines) >= 5:
+            break
+    for ln in lines:
+        m = CORRECTION.search(ln)
+        if m and not CONDITIONAL.search(re.split(r"[.!?;]", ln[:m.start() + 1])[-1]):  # same sentence only
+            return True
+    return False
+
+
+def _response_text(resp) -> str:
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, dict):
+        c = resp.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(str(b.get("text") or "") for b in c if isinstance(b, dict))
+    return ""
+
+
+def signal_record(data: dict, kind: str, **fields) -> dict:
+    rec = {"schema": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "session_id": str(data.get("session_id") or "unknown")[:64], "kind": kind}
+    if safe_id(data.get("prompt_id")):
+        rec["prompt_id"] = data["prompt_id"]
+    rec.update(fields)
+    return rec
+
+
+REVIEW_TEXT_CAP = 64 * 1024  # the REVIEW RESULT block ends a reply; a bounded tail keeps parsing fast
+
+
+def review_fields(text: str) -> dict:
+    res = parse_review_result((text or "")[-REVIEW_TEXT_CAP:])
+    must_fix = res.get("must_fix")
+    if must_fix is None and res.get("verdict") == "approve":
+        must_fix = 0  # same rule as the ledger (groundwork_tasks.record_review)
+    if must_fix is None and "verdict" not in res:
+        return {"parsed": False}
+    out = {"parsed": True}
+    if "verdict" in res:
+        out["verdict"] = res["verdict"]
+    if must_fix is not None:
+        out["must_fix"] = min(int(must_fix), 1000)
+    return out
+
+
+def tool_review_signal(data: dict, event: str) -> dict:
+    """A completed foreground Agent/Task review, by the gate's own definition (design D9)."""
+    tool = str(data.get("tool_name") or "")
+    inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    if event != "PostToolUse" or tool not in ("Agent", "Task") or not is_review_call(tool, inp):
+        return {}
+    resp = data.get("tool_response")
+    if isinstance(resp, dict) and resp.get("status") not in (None, "completed"):
+        return {}  # a background launch: its result arrives at SubagentStop
+    rec = signal_record(data, "review", source="tool", **review_fields(_response_text(resp)))
+    agent_id = resp.get("agentId") if isinstance(resp, dict) else None
+    if safe_id(agent_id):
+        rec["agent_id"] = agent_id
+    return rec
+
+
+def build_signal(data: dict, event: str) -> dict:
+    if event == "SubagentStop":
+        agent = str(data.get("agent_type") or "")
+        if not REVIEW_PATTERN.search(agent):
+            return {}
+        rec = signal_record(data, "review", source="subagent_stop",
+                            **review_fields(str(data.get("last_assistant_message") or "")))
+        if safe_id(data.get("agent_id")):
+            rec["agent_id"] = data["agent_id"]
+        return rec
+    if event == "UserPromptSubmit":
+        prompt = str(data.get("prompt") or "")
+        if is_skipped_prompt(prompt):  # kept, so Q4 can step over it to the user's next own prompt
+            return signal_record(data, "prompt", correction=False, skipped=True)
+        return signal_record(data, "prompt", correction=is_correction(prompt))
+    if event == "PostCompact":
+        trig = str(data.get("trigger") or "")
+        return signal_record(data, "compact", trigger=trig if trig in ("manual", "auto") else "unknown")
+    return {}
+
+
+# ---------------------------------------------------------------- per-turn accuracy facts (design D7, D8, D11)
+URL_SPAN = re.compile(r"https?://\S+")
+CITATION = re.compile(r"(?<![\w/.~:@-])((?:~|/)?[\w.-]+(?:/[\w.-]+)*):(\d{1,7})(?:-(\d{1,7}))?(?![\w:/])")
+CITATION_CAP = 50
+CITED_FILE_MAX = 5 * 1024 * 1024
+
+
+def _git_root(cwd: str) -> str:
+    try:
+        p = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=1)
+        return os.path.realpath(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else ""
+    except Exception:
+        return ""
+
+
+def check_citations(text: str, cwd: str) -> dict:
+    """Counts only: checked (inside cwd or its git top level), resolved (file and both line ends exist), unchecked."""
+    checked = resolved = unchecked = 0
+    roots = []
+    body = URL_SPAN.sub(" ", text or "")
+    if not CITATION.search(body):
+        return {"checked": 0, "resolved": 0, "unchecked": 0}
+    if cwd:
+        roots = [os.path.realpath(cwd)]
+        top = _git_root(cwd)
+        if top and top not in roots:
+            roots.append(top)
+    seen, line_counts = set(), {}
+    for m in CITATION.finditer(body):
+        if len(seen) >= CITATION_CAP:
+            break
+        raw, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
+        if not re.search(r"[A-Za-z]", raw) or (raw, a, b) in seen:
+            continue  # "10:30", "3.11:5": not paths
+        seen.add((raw, a, b))
+        path = os.path.expanduser(raw)
+        cands = [os.path.realpath(c) for c in ([path] if os.path.isabs(path) else [os.path.join(r, path) for r in roots])]
+        is_inside = lambda c: any(c == r or c.startswith(r + os.sep) for r in roots)
+        existing = [c for c in cands if os.path.isfile(c)]
+        if existing:
+            # a file that exists decides by where it really is: a symlink or ../ out of the project is not checkable
+            if not is_inside(existing[0]):
+                unchecked += 1
+                continue
+        elif "/" not in raw or not any(is_inside(c) for c in cands):
+            unchecked += 1  # outside the project, or a bare word that is not a file (host:port, node.js:18)
+            continue
+        if not existing:
+            checked += 1  # a project path that does not exist: a wrong citation
+            continue
+        f = existing[0]
+        try:
+            if a < 1 or b < a or os.path.getsize(f) > CITED_FILE_MAX:
+                raise ValueError("not checkable")  # malformed range, or too large to count
+            if f not in line_counts:
+                with open(f, "rb") as fh:
+                    line_counts[f] = sum(1 for _ in fh)
+        except Exception:
+            unchecked += 1  # never a false "unresolved"
+            continue
+        checked += 1
+        resolved += 1 if b <= line_counts[f] else 0
+    return {"checked": checked, "resolved": resolved, "unchecked": unchecked}
+
+
+GITHUB_REMOTE = re.compile(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+
+
+def committed_this_turn(prompt_id: str) -> bool:
+    """A successful Bash `git commit` in this prompt's tool rows (design D8)."""
+    if not prompt_id:
+        return False
+    try:
+        path = default_tool_path()
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > USAGE_TAIL:
+                f.seek(size - USAGE_TAIL)
+                f.readline()
+            for raw in f:
+                if b'"git_commit"' not in raw:
+                    continue
+                try:
+                    r = json.loads(raw)
+                except Exception:
+                    continue
+                if r.get("prompt_id") == prompt_id and r.get("git_commit") is True and r.get("success") is True:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def commit_facts(cwd: str) -> dict:
+    out = {}
+    try:
+        head = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=1)
+        if head.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", head.stdout.strip()):
+            out["head"] = head.stdout.strip()
+            url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=1)
+            m = GITHUB_REMOTE.search(url.stdout.strip()) if url.returncode == 0 else None
+            if m and m.group(1) not in (".", "..") and m.group(2) not in (".", ".."):
+                out["repo"] = f"{m.group(1)}/{m.group(2)}"  # owner/repo only; any user:token@ sits before github.com
+    except Exception:
+        pass
+    return out
 
 
 def build_record(data: dict, text: str) -> dict:
@@ -509,10 +926,10 @@ def build_record(data: dict, text: str) -> dict:
     playbook_raw = (meta.get("playbook") or "").strip("* ").upper().split()
     playbook = playbook_raw[0] if playbook_raw and playbook_raw[0] in PLAYBOOKS else "unknown"
     cwd = data.get("cwd") or os.getcwd()
-    observed_extra = {}
-    ctx = latest_ctx_pct(str(data.get("session_id") or ""))
-    if ctx is not None:
-        observed_extra["ctx_pct"] = ctx  # absent (not 0) when unknown, so reports can tell the two apart
+    observed_extra = latest_usage(str(data.get("session_id") or ""))  # absent (not 0) when unknown
+    observed_extra["citations"] = check_citations(text, str(data.get("cwd") or ""))
+    if committed_this_turn(str(data.get("prompt_id") or "")):
+        observed_extra.update(commit_facts(cwd))
     return {
         "schema": 2,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -569,6 +986,16 @@ def main() -> None:
             record = build_tool_record(data, event)
             if record:
                 _append_record(default_tool_path(), record)
+            review = tool_review_signal(data, event)
+            if review:
+                append_signal(review)
+            sys.exit(0)
+        if event in SIGNAL_EVENTS:
+            record = build_signal(data, event)
+            if record:
+                append_signal(record)
+            sys.exit(0)
+        if event not in ("Stop", ""):  # design D2: any other event writes nothing ("" = older payloads in tests)
             sys.exit(0)
         text = str(data.get("last_assistant_message") or "")
         record = build_record(data, text)

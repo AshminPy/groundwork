@@ -5,10 +5,13 @@ settings file, without touching anything else the user has configured.
 Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwrites
 the file wholesale — only adds/updates the specific keys Groundwork owns:
   - hooks.PreToolUse / hooks.Stop / hooks.SessionStart / hooks.PostToolUse /
-    hooks.PostToolUseFailure / hooks.UserPromptSubmit:
-    appends Groundwork's fifteen hook entries (seven hook scripts;
-    groundwork_telemetry.py is registered three times — Stop for its per-turn
-    record, PostToolUse/PostToolUseFailure for its per-tool-call record —
+    hooks.PostToolUseFailure / hooks.UserPromptSubmit / hooks.SubagentStop / hooks.PreCompact /
+    hooks.PostCompact:
+    appends Groundwork's eighteen hook entries (seven hook scripts;
+    groundwork_telemetry.py is registered six times — Stop for its per-turn
+    record, PostToolUse/PostToolUseFailure for its per-tool-call record,
+    SubagentStop/UserPromptSubmit/PostCompact for its accuracy signals, see
+    TELEMETRY_EVENTS —
     groundwork_task_gate.py four times, see TASK_GATE_EVENTS,
     groundwork_reply_check.py twice, see REPLY_CHECK_EVENTS, and
     groundwork_brief.py three times, see BRIEF_EVENTS) if not already
@@ -51,6 +54,16 @@ PUSH_CMD = "python3 ~/.claude/hooks/block_protected_push.py"
 REVIEW_CMD = "python3 ~/.claude/hooks/require_material_review.py"
 SNAPSHOT_CMD = "python3 ~/.claude/hooks/groundwork_session_snapshot.py"
 TELEMETRY_CMD = "python3 ~/.claude/hooks/groundwork_telemetry.py"
+# One script on six events (openspec/changes/add-accuracy-signals D2): Stop writes the per-turn record, the two tool
+# events the per-tool-call record, and SubagentStop / UserPromptSubmit / PostCompact the event-shaped signals.
+TELEMETRY_EVENTS = (  # (event, matcher, timeout seconds, status message)
+    ("Stop", None, 10, "Recording Groundwork task telemetry..."),
+    ("PostToolUse", "", 5, "Recording Groundwork tool-call telemetry..."),
+    ("PostToolUseFailure", "", 5, "Recording Groundwork tool-call telemetry..."),
+    ("SubagentStop", None, 5, "Recording Groundwork accuracy signals..."),
+    ("UserPromptSubmit", None, 5, "Recording Groundwork accuracy signals..."),
+    ("PostCompact", None, 5, "Recording Groundwork accuracy signals..."),
+)
 # Task tracking (openspec/changes/add-task-lifecycle-gate/): one script on four events. UserPromptSubmit records the
 # task; PreToolUse asks the owner before a sensitive action (matcher "" so a new tool cannot slip past); PostToolUse
 # and PostToolUseFailure record evidence. Older installs also registered UserPromptExpansion; merge removes it.
@@ -239,21 +252,13 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
     if not has_command(stop, REVIEW_CMD):
         stop.append(hook_entry(REVIEW_CMD, "Checking material-change review gate..."))
         changed.append("hooks.Stop: require_material_review.py")
-    if not has_command(stop, TELEMETRY_CMD):
-        stop.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork task telemetry...", timeout=10))
-        changed.append("hooks.Stop: groundwork_telemetry.py")
-
-    # Per-tool-call telemetry (Usage Telemetry, added alongside the per-turn Stop record above):
-    # same script, same file, two more events — fires on every tool call, so matcher="" (every
-    # tool) and a short timeout, since this must never add noticeable latency to a tool call.
-    post = hooks.setdefault("PostToolUse", [])
-    if not has_command(post, TELEMETRY_CMD):
-        post.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork tool-call telemetry...", matcher="", timeout=5))
-        changed.append("hooks.PostToolUse: groundwork_telemetry.py")
-    post_fail = hooks.setdefault("PostToolUseFailure", [])
-    if not has_command(post_fail, TELEMETRY_CMD):
-        post_fail.append(hook_entry(TELEMETRY_CMD, "Recording Groundwork tool-call telemetry...", matcher="", timeout=5))
-        changed.append("hooks.PostToolUseFailure: groundwork_telemetry.py")
+    # Telemetry: Stop entry after the review gate; the tool events fire on every call, so matcher "" and a short
+    # timeout — this must never add noticeable latency to a tool call.
+    for event, matcher, timeout, message in TELEMETRY_EVENTS:
+        groups = hooks.setdefault(event, [])
+        if not has_command(groups, TELEMETRY_CMD):
+            groups.append(hook_entry(TELEMETRY_CMD, message, matcher=matcher, timeout=timeout))
+            changed.append(f"hooks.{event}: groundwork_telemetry.py")
 
     start = hooks.setdefault("SessionStart", [])
     if not has_command(start, SNAPSHOT_CMD):

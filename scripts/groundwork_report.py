@@ -21,11 +21,14 @@ Failure isolation: this is a separate process run by launchd or by hand; it neve
 hook, so nothing here can affect task execution or telemetry collection.
 """
 import argparse
+import bisect
 import datetime as dt
 import html
 import json
 import os
 import plistlib
+import re
+import stat
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -137,11 +140,28 @@ def normalise(raw: dict):
         "clarify": bool(de.get("clarification_required")),
         "tools": [str(t)[:40] for t in (ob.get("tools") or []) if isinstance(t, str)][:40],
         "mcp": [str(t)[:40] for t in (ob.get("mcp_servers") or []) if isinstance(t, str)][:20],
-        # for context_bands() only — never copied into buckets, so the page never embeds them
+        # for context_bands() and performance_gaps() only — never copied into buckets, so the page never embeds them
         "ctx": _ctx(ob.get("ctx_pct")),
         "sid": str(raw.get("session_id") or "")[:80],
         "ts": ts[:20],
+        "project": str(raw.get("cwd_hash") or "")[:16],
+        "pid": _id(raw.get("prompt_id")),
+        "cit": _citations(ob.get("citations")),
+        "cost": float(ob["cost_usd"]) if _num(ob.get("cost_usd")) and ob["cost_usd"] >= 0 else None,
+        "cost_age": int(ob["cost_age_s"]) if _num(ob.get("cost_age_s")) and 0 <= ob["cost_age_s"] <= 60 else None,
+        "head": ob["head"] if isinstance(ob.get("head"), str) and GH_SHA.fullmatch(ob["head"]) else None,
+        "repo": ob.get("repo") if isinstance(ob.get("repo"), str) and "/" in ob.get("repo") else None,
     }
+
+
+def _citations(v):
+    if not isinstance(v, dict):
+        return None
+    try:
+        c = {k: int(v.get(k, 0)) for k in ("checked", "resolved", "unchecked")}
+    except (TypeError, ValueError):
+        return None
+    return c if all(x >= 0 for x in c.values()) and c["resolved"] <= c["checked"] else None
 
 
 def _ctx(v):
@@ -326,9 +346,642 @@ def context_bands(records: list, usage: dict, window_days, ref: dt.date) -> dict
 
 CTX_NOTE = ("Context fill = how full the context window was when the task ended (from the statusLine; the reading can lag by up to 15 minutes). "
             "This shows association, not cause: fuller contexts often mean longer, harder tasks. "
-            "Outcome is what the model declared; verified outcome needs an observed test or deploy run. "
+            "Outcome is what the model declared; the test-shaped column needs a test-shaped command or deploy seen in the task (a broad match). "
             f"Bands with fewer than {MIN_TREND_N} known outcomes are marked low data. "
             "Tasks with no statusLine reading (headless runs, statusLine off, or older than the ~8 days of usage records) are not placed in a band.")
+
+
+# ---------------------------------------------------------------- performance gaps
+# Each question is answered by one metric defined in openspec/changes/add-accuracy-signals/design.md (D3, D4, D8).
+# Labels: observed = the hook saw it; declared = the model said it (parsed from its reply); pattern = a command or text
+# matched by a named pattern; estimate = list-price cost; opt-in = needs `generate --github`.
+SIGNAL_KINDS = ("review", "prompt", "compact", "guardrail")
+GUARD_HOOKS = ("push_guard", "task_gate", "review_gate", "reply_check")
+CALL_KINDS = ("test", "check", "deploy", "runtime_read")
+LOW_N = 20                          # 5..19 cases: the rate is shown, flagged "low data"
+CORRECTION_WINDOW_S = 2 * 3600      # Q4: the next prompt counts only within 2 hours
+COMPACT_SPAN = 3                    # Q9: turns before / after a compaction
+GH_MAX_COMMITS = 50
+GH_TIMEOUT_S = 10
+GH_MAX_PAGES = 10
+GH_REPO = re.compile(r"([\w.-]+)/([\w.-]+)")
+GH_SHA = re.compile(r"[0-9a-f]{40}")
+CI_PASS = {"success", "neutral", "skipped"}
+LEDGER_REVIEW = re.compile(r"must_fix=(\d+|None)\s*$")  # hooks/groundwork_tasks.py record_review's history detail
+
+
+def signals_path() -> Path:
+    override = os.environ.get("GROUNDWORK_SIGNALS_PATH")
+    return Path(os.path.expanduser(override)) if override else config_dir() / "groundwork" / "telemetry" / "signals.jsonl"
+
+
+def tasks_dir() -> Path:
+    return config_dir() / "groundwork" / "tasks"
+
+
+def _open_regular(path: Path):
+    """Open for reading without blocking on a FIFO, and only a regular file."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        return os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _jsonl(path: Path):
+    """Bounded, tolerant line reader for the signal and tool-row loaders."""
+    try:
+        f = _open_regular(path)
+    except OSError:
+        return
+    with f:
+        size = os.fstat(f.fileno()).st_size
+        if size > MAX_BYTES:
+            f.seek(size - MAX_BYTES)
+            f.readline()
+        for raw in f:
+            try:
+                r = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(r, dict):
+                yield r
+
+
+def _id(v, cap=100) -> str:
+    """An id field; "" for missing and for the hooks' "unknown" placeholder (design D6: such rows are ignored)."""
+    s = str(v or "")[:cap]
+    return "" if s == "unknown" else s
+
+
+def _num(v) -> bool:
+    """A finite number in a sane range: a poisoned file (Infinity, 1e300) is skipped, never crashes the report."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and -1e12 < v < 1e12
+
+
+def load_signals(path: Path) -> list:
+    out = []
+    for r in _jsonl(path):
+        t, kind, sid = _epoch(str(r.get("ts") or "")), r.get("kind"), _id(r.get("session_id"), 80)
+        if t is None or kind not in SIGNAL_KINDS or not sid:
+            continue
+        s = {"t": t, "kind": kind, "sid": sid, "pid": _id(r.get("prompt_id"))}
+        if kind == "review":
+            mf = r.get("must_fix")
+            s["agent"] = _id(r.get("agent_id"))
+            s["must_fix"] = min(int(mf), 1000) if r.get("parsed") is True and _num(mf) and mf >= 0 else None
+        elif kind == "prompt":
+            s["correction"] = r.get("correction") is True
+            s["skipped"] = r.get("skipped") is True
+        elif kind == "compact":
+            s["trigger"] = r.get("trigger") if r.get("trigger") in ("manual", "auto") else "unknown"
+        else:
+            s["hook"] = r.get("hook") if r.get("hook") in GUARD_HOOKS else "unknown"
+            s["decision"] = r.get("decision") if r.get("decision") in ("deny", "ask", "block") else "unknown"
+            s["cause"] = "internal_error" if r.get("cause") == "internal_error" else "policy"
+            s["tuid"] = _id(r.get("tool_use_id"))
+        out.append(s)
+    out.sort(key=lambda s: s["t"])
+    return out
+
+
+def load_tool_rows(path: Path) -> list:
+    """tool_events.jsonl rows with the fields D3 keeps: ids, time, Bash kind/result, commit flag, success.
+    File order is append order, so rows stay in call order within a turn."""
+    out = []
+    for r in _jsonl(path):
+        if r.get("schema") != 1:
+            continue
+        t, sid = _epoch(str(r.get("ts") or "")), _id(r.get("session_id"), 80)
+        if t is None or not sid:
+            continue
+        kind = r.get("kind") if r.get("kind") in CALL_KINDS else None
+        result = r.get("result") if kind in ("test", "check") and r.get("result") in ("pass", "fail", "unknown") else None
+        out.append({"t": t, "sid": sid, "pid": _id(r.get("prompt_id")), "tuid": _id(r.get("tool_use_id")),
+                    "kind": kind, "result": result, "ok": r.get("success") is True,
+                    "commit": r.get("git_commit") is True and r.get("success") is True})
+    return out
+
+
+def load_ledger(root: Path = None) -> list:
+    """Every repository's task ledger: tier, state, session and, from the `history` list, review results and
+    operation times. Only the must-fix number is read from a history detail; no command text is kept.
+    `history` keeps the last 60 events (hooks/groundwork_tasks.py MAX_HISTORY): a task whose first kept event is not
+    its intake has lost its start and is marked truncated, so Q3 never reads a later review as the first one."""
+    root = root or tasks_dir()
+    out = []
+    try:
+        files = sorted(root.glob("*/*.json"))
+    except OSError:
+        return out
+    for p in files:
+        if p.name == "repo.json":
+            continue
+        try:
+            with _open_regular(p) as fh:
+                t = json.loads(fh.read(4 * 1024 * 1024))
+        except Exception:
+            continue
+        if not isinstance(t, dict) or not _num(t.get("created_at")) or not 0 < t["created_at"] < 4e9:
+            continue
+        hist = [h for h in (t.get("history") or []) if isinstance(h, dict) and _num(h.get("ts"))]
+        reviews, ops = [], []
+        for h in hist:
+            if h.get("event") == "review":
+                m = LEDGER_REVIEW.search(str(h.get("detail") or ""))
+                if m:
+                    reviews.append((float(h["ts"]), None if m.group(1) == "None" else int(m.group(1))))
+            elif h.get("event") == "operation":
+                ops.append(float(h["ts"]))
+        out.append({"created": float(t["created_at"]), "tier": str(t.get("tier") or ""),
+                    "complete": t.get("state") == "complete", "sid": _id(t.get("session_id"), 80),
+                    "reviews": reviews, "ops": ops, "truncated": not hist or hist[0].get("event") != "intake"})
+    return out
+
+
+def build_turns(records: list, rows: list, signals: list):
+    """Design D3. A turn is (session_id, prompt_id); its Stop records are merged. Tool rows and signals join on
+    prompt_id; rows without one use the first Stop of the session at or after them (labelled fallback). Prompts
+    with tool rows but no Stop become no_stop turns. Everything is attributed before any window is applied.
+    Returns (turns sorted by end time, no_stop list, number of fallback-attributed items)."""
+    stops = sorted((dict(r, t=_epoch(r["ts"])) for r in records if r.get("sid") and _epoch(r.get("ts", "")) is not None),
+                   key=lambda r: r["t"])
+    turns, by_key = [], {}
+    for r in stops:
+        key = (r["sid"], r["pid"]) if r.get("pid") else None
+        tr = by_key.get(key) if key else None
+        if tr is None:
+            tr = {"sid": r["sid"], "pid": r.get("pid") or "", "outcome": "unknown", "validation": "unknown",
+                  "impl": False, "deploy": False, "cit": None, "rows": [], "sigs": [], "stops": 0, "fallback": False}
+            turns.append(tr)
+            if key:
+                by_key[key] = tr
+        tr["stops"] += 1
+        tr.update(t=r["t"], day=r["day"], version=r["version"], ctx=r.get("ctx"), cost=r.get("cost"),
+                  cost_age=r.get("cost_age"))
+        if r["outcome"] != "unknown":
+            tr["outcome"] = r["outcome"]  # last *stated* outcome: a follow-up Stop that states none keeps the earlier one
+        if r["validation"] != "unknown":
+            tr["validation"] = r["validation"]
+        tr["impl"] = tr["impl"] or r["impl"]
+        tr["deploy"] = tr["deploy"] or r["deploy"]
+        if r.get("cit"):
+            c = tr["cit"] or {"checked": 0, "resolved": 0, "unchecked": 0}
+            tr["cit"] = {k: c[k] + r["cit"][k] for k in c}
+        if r.get("head"):
+            tr["head"], tr["repo"] = r["head"], r.get("repo")
+    turns.sort(key=lambda x: x["t"])
+    ends = defaultdict(list)  # sid -> that session's turns in end-time order, for the time fallback
+    for tr in turns:
+        ends[tr["sid"]].append(tr)
+    no_stop, fallback = {}, 0
+    for field, items in (("rows", rows), ("sigs", signals)):
+        for it in items:
+            if it["pid"]:
+                tr = by_key.get((it["sid"], it["pid"]))
+                if tr is not None:
+                    tr[field].append(it)
+                elif field == "rows":
+                    ns = no_stop.setdefault((it["sid"], it["pid"]), {"sid": it["sid"], "t": it["t"], "rows": []})
+                    ns["rows"].append(it)
+                continue
+            sess = ends.get(it["sid"], [])
+            i = bisect.bisect_left([x["t"] for x in sess], it["t"])
+            if i < len(sess):
+                sess[i][field].append(it)
+                sess[i]["fallback"] = True
+                fallback += 1
+    for tr in turns:
+        tr["new"] = tr["cit"] is not None  # written by this change's Stop hook, so its tool rows carry kind/result
+    return turns, sorted(no_stop.values(), key=lambda n: n["t"]), fallback
+
+
+def _final_test(tr) -> str:
+    tests = [r for r in tr["rows"] if r["kind"] == "test"]
+    if not tests:
+        return "none"
+    known = [r["result"] for r in tests if r["result"] in ("pass", "fail")]
+    return known[-1] if known else "unknown"
+
+
+def _show(r) -> str:
+    """Design D4 display rule: < 5 cases insufficient data (n); 5..19 low data; 20+ plain."""
+    if r is None or r["den"] < MIN_TREND_N:
+        return f"insufficient data ({r['den'] if r else 0})"
+    return fmt(r) + (" low data" if r["den"] < LOW_N else "")
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def _gq(qid, question, labels, definition, answer, r=None, notes=(), rows=None, status="ok"):
+    return {"id": qid, "question": question, "labels": list(labels), "definition": definition, "answer": answer,
+            "num": r["num"] if r else None, "den": r["den"] if r else 0, "rate": r["rate"] if r else None,
+            "notes": [n for n in notes if n], "rows": rows or [], "status": status}
+
+
+def _q1a(turns):
+    pop = [t for t in turns if t["new"] and t["impl"] and t["outcome"] == "complete"]
+    return _rate(sum(1 for t in pop if _final_test(t) == "fail"), len(pop))
+
+
+def _q1b(turns):
+    pop = [t for t in turns if t["new"] and t["impl"] and t["validation"] == "verified"]
+    return _rate(sum(1 for t in pop if not any(r["kind"] for r in t["rows"])), len(pop))
+
+
+def _q2_fail(turns):
+    states = Counter(_final_test(t) for t in turns if t["new"] and t["impl"])
+    return _rate(states["fail"], states["fail"] + states["pass"]), states
+
+
+def _q4(turns, prompts_by_sid):
+    num = den = 0
+    for t in turns:
+        if t["outcome"] != "complete":
+            continue
+        ps = prompts_by_sid.get(t["sid"], [])
+        i = bisect.bisect_right([p["t"] for p in ps], t["t"])
+        if i < len(ps) and ps[i]["t"] - t["t"] <= CORRECTION_WINDOW_S:
+            den += 1
+            num += ps[i]["correction"]
+    return _rate(num, den)
+
+
+def _unstated(turns, field):
+    pop = [t for t in turns if t["new"] and t["impl"]]
+    return _rate(sum(1 for t in pop if t[field] == "unknown"), len(pop))
+
+
+def _unstated_note(r, what):
+    return f"{what} unstated in {fmt(r)} of file-changing turns" if r else ""
+
+
+def commit_turns(turns) -> list:
+    """(repo, sha) of the newest GH_MAX_COMMITS commit turns: a successful Bash `git commit` and a recorded HEAD."""
+    out = []
+    for t in sorted(turns, key=lambda t: -t["t"]):
+        if t.get("head") and any(r["commit"] for r in t["rows"]):
+            key = (t.get("repo") or "", t["head"])
+            if key not in out:
+                out.append(key)
+    return out[:GH_MAX_COMMITS]
+
+
+def _safe_commit(repo: str, sha: str) -> bool:
+    m = GH_REPO.fullmatch(repo or "")
+    return bool(m) and m.group(1) not in (".", "..") and m.group(2) not in (".", "..") and bool(GH_SHA.fullmatch(sha or ""))
+
+
+def _gh_state(p) -> str:
+    err = (p.stderr or "") + (p.stdout or "")
+    if "HTTP 404" in err or "HTTP 422" in err:
+        return "not_on_github"
+    if "HTTP 401" in err or "gh auth login" in err:
+        return "unauthenticated"
+    return "error"
+
+
+def ci_state(runs: list, statuses: list) -> str:
+    """Design D8 mapping: no runs and no statuses = no checks; anything unfinished = pending; any failure = fail."""
+    if not runs and not statuses:
+        return "no_checks"
+    if any(r.get("status") != "completed" for r in runs) or any(s.get("state") == "pending" for s in statuses):
+        return "pending"
+    if all(r.get("conclusion") in CI_PASS for r in runs) and all(s.get("state") == "success" for s in statuses):
+        return "pass"
+    return "fail"
+
+
+def fetch_ci(commits: list, run=subprocess.run) -> dict:
+    """Opt-in, read-only: (repo, sha) -> pass | fail | pending | no_checks | not_on_github | error | invalid,
+    through the user's own `gh` login. {"_unavailable": reason} when gh is missing or not logged in."""
+    out = {}
+    for repo, sha in commits:
+        if not repo:
+            out[(repo, sha)] = "no_remote"  # origin is not on github.com
+            continue
+        if not _safe_commit(repo, sha):
+            out[(repo, sha)] = "invalid"  # never passed to gh
+            continue
+        runs, statuses, state = [], [], None
+        try:
+            for page in range(1, GH_MAX_PAGES + 1):
+                p = run(["gh", "api", "--method", "GET", f"repos/{repo}/commits/{sha}/check-runs?per_page=100&page={page}"],
+                        capture_output=True, text=True, timeout=GH_TIMEOUT_S)
+                if p.returncode != 0:
+                    state = _gh_state(p)
+                    break
+                body = json.loads(p.stdout)
+                batch = body.get("check_runs") or []
+                runs += batch
+                if not batch or len(runs) >= int(body.get("total_count") or 0):
+                    break
+            if state is None:
+                p = run(["gh", "api", "--method", "GET", f"repos/{repo}/commits/{sha}/status"],
+                        capture_output=True, text=True, timeout=GH_TIMEOUT_S)
+                if p.returncode != 0:
+                    state = _gh_state(p)
+                else:
+                    statuses = json.loads(p.stdout).get("statuses") or []
+        except FileNotFoundError:
+            return {"_unavailable": "gh is not installed"}
+        except Exception:
+            state = "error"
+        if state == "unauthenticated":
+            return {"_unavailable": "gh is not logged in"}
+        out[(repo, sha)] = state or ci_state(runs, statuses)
+    return out
+
+
+def performance_gaps(records: list, rows: list, signals: list, ledger: list, window_days, ref: dt.date, ci=None) -> dict:
+    """The Performance gaps section for the selected period (design D4). Not changed by the page filters."""
+    turns, no_stop, fallback = build_turns(records, rows, signals)
+    if window_days:
+        start = ref - dt.timedelta(days=window_days)
+        prev_start = start - dt.timedelta(days=window_days)
+        in_win = lambda day: start < dt.date.fromisoformat(day) <= ref
+        in_prev = lambda day: prev_start < dt.date.fromisoformat(day) <= start
+    else:
+        in_win, in_prev = (lambda day: True), (lambda day: False)
+    day_of = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).date().isoformat()
+    win = [t for t in turns if in_win(t["day"])]
+    prev = [t for t in turns if in_prev(t["day"])]
+    sig_win = [s for s in signals if in_win(day_of(s["t"]))]
+    prompts_by_sid = defaultdict(list)
+    for s in signals:
+        if s["kind"] == "prompt" and not s["skipped"]:
+            prompts_by_sid[s["sid"]].append(s)
+    qs = []
+    impl_note = lambda field, what: _unstated_note(_unstated(win, field), what)
+
+    # 1a / 1b / unstated-with-failure
+    r = _q1a(win)
+    qs.append(_gq("1a", "Does it say complete while tests fail?", ("observed", "declared", "pattern"),
+                  "Turns that changed files and declared complete whose last test call with a known result failed, "
+                  "out of turns that changed files and declared complete. Piped, background or interrupted test runs "
+                  "have no known result and are ignored.", _show(r), r, [impl_note("outcome", "Outcome")]))
+    r = _q1b(win)
+    qs.append(_gq("1b", "Does it say verified without checking?", ("observed", "declared", "pattern"),
+                  "Turns that changed files and declared verified with no test, check, deploy or runtime-read call of "
+                  "any result, out of turns that changed files and declared verified.", _show(r), r,
+                  [impl_note("validation", "Validation")]))
+    hidden = sum(1 for t in win if t["new"] and t["impl"] and t["outcome"] == "unknown" and _final_test(t) == "fail")
+    qs.append(_gq("1c", "Outcome unstated, last test failed", ("observed", "declared", "pattern"),
+                  "File-changing turns that stated no outcome and whose last known test result failed, so a vague "
+                  "reply cannot hide a failure.", str(hidden)))
+
+    # 2 final test state
+    r, states = _q2_fail(win)
+    calls = [x for t in win for x in t["rows"] if x["kind"] == "test"]
+    known_calls = [x for x in calls if x["result"] in ("pass", "fail")]
+    per_call = _rate(sum(1 for x in known_calls if x["result"] == "pass"), len(known_calls))
+    qs.append(_gq("2", "How do turns end on tests?", ("observed", "pattern"),
+                  "Final test state of each file-changing turn: the result of its last test call with a known result. "
+                  "The answer is the fail share of turns whose final state is known.", _show(r), r,
+                  [f"pass {states['pass']}, fail {states['fail']}, unknown {states['unknown']}, no test {states['none']}",
+                   f"per test call: {_show(per_call)} passed"]))
+
+    # 3a / 3b / 3c from the task ledger
+    material = [x for x in ledger if x["tier"] == "MATERIAL"]
+    mat_win = [x for x in material if in_win(day_of(x["created"])) and not x["truncated"]]
+    truncated = sum(1 for x in material if in_win(day_of(x["created"])) and x["truncated"])
+    trunc_note = f"{truncated} task(s) left out: their history no longer starts at intake" if truncated else ""
+    limit = "The gate adds evidence to every open task in the repository, so overlapping tasks share evidence."
+    if not material:
+        why = "not collected: task ledger empty" if not ledger else "not collected: no MATERIAL tasks recorded"
+        for qid, q in (("3a", "Is MATERIAL work reviewed before it ships?"), ("3b", "Does review find defects before shipping?")):
+            qs.append(_gq(qid, q, ("observed",), "From the Groundwork task ledger.", why, status="not_collected"))
+    else:
+        def first_clean(x):
+            return next((ts for ts, mf in x["reviews"] if mf == 0), None)
+        pop = [x for x in mat_win if x["complete"] or x["ops"]]
+        early = sum(1 for x in pop if (x["ops"] and (first_clean(x) is None or min(x["ops"]) < first_clean(x)))
+                    or (x["complete"] and first_clean(x) is None))
+        r = _rate(early, len(pop))
+        qs.append(_gq("3a", "Is MATERIAL work reviewed before it ships?", ("observed",),
+                      "Ledger MATERIAL tasks that ran a sensitive operation before their first review at must-fix 0, or "
+                      "completed with no such review, out of MATERIAL tasks that are complete or ran a sensitive "
+                      "operation. Lower is better.",
+                      _show(r), r, [limit, trunc_note]))
+        reviewed = [x for x in mat_win if any(mf is not None for _, mf in x["reviews"])]
+        found = sum(1 for x in reviewed if next(mf for _, mf in x["reviews"] if mf is not None) > 0)
+        until = []
+        for x in reviewed:
+            known = [mf for _, mf in x["reviews"] if mf is not None]
+            if 0 in known:
+                until.append(known.index(0) + 1)
+        r = _rate(found, len(reviewed))
+        med = _median(until)
+        qs.append(_gq("3b", "Does review find defects before shipping?", ("observed",),
+                      "Ledger MATERIAL tasks whose first review reported at least one must-fix finding, out of MATERIAL "
+                      "tasks with a review.", _show(r), r,
+                      [f"median reviews until must-fix 0: {med:g} ({len(until)} tasks)" if med is not None else "",
+                       trunc_note]))
+    ledger_sids = {x["sid"] for x in ledger if x["sid"]}
+    seen, outside = set(), 0
+    for s in sig_win:
+        if s["kind"] != "review":
+            continue
+        if s["agent"]:
+            if s["agent"] in seen:
+                continue  # the same review seen at PostToolUse and at SubagentStop (design D9)
+            seen.add(s["agent"])
+        outside += s["sid"] not in ledger_sids
+    qs.append(_gq("3c", "How much review happens outside the ledger?", ("observed",),
+                  "Independent reviews recorded in sessions that have no ledger task (a count, not a rate). A ledger task "
+                  "belongs to the session that created it.", str(outside)))
+
+    # 4 corrections
+    r = _q4(win, prompts_by_sid)
+    qs.append(_gq("4", "Do users have to correct finished work?", ("declared", "pattern"),
+                  "Turns declared complete whose next prompt in the same session, within 2 hours, reads as a correction "
+                  "(\"didn't work\", \"still failing\", \"that's wrong\", \"not what I asked\", \"you broke\"), out of "
+                  "turns declared complete with a next prompt in that time. Pattern-matched: can miss corrections and "
+                  "can over-count.", _show(r), r, [impl_note("outcome", "Outcome")]))
+
+    # 5 citations
+    cits = [t["cit"] for t in win if t["cit"]]
+    checked, resolved, unchecked = (sum(c[k] for c in cits) for k in ("checked", "resolved", "unchecked"))
+    r = _rate(resolved, checked)
+    qs.append(_gq("5", "Do answers cite code that resolves?", ("pattern",),
+                  "path:line citations in replies whose file exists inside the project with both ends of the range in "
+                  "the file, out of citations checked. Paths outside the project, and bare names that are not files "
+                  "(host:port), are not checkable. A resolving citation can still be the wrong line.", _show(r), r,
+                  [f"{unchecked} not checkable"]))
+
+    # 6 CI (opt-in)
+    commits = commit_turns(win)
+    ci_def = ("Commits made in a turn whose GitHub checks all passed, out of commits whose checks all finished. "
+              "Read-only, through your own gh login; newest 50 commit turns.")
+    if ci is None:
+        qs.append(_gq("6", "Does pushed work pass CI?", ("opt-in",), ci_def, "opt-in: run generate --github",
+                      notes=[f"{len(commits)} commit turn(s) recorded"], status="opt_in"))
+    elif "_unavailable" in ci:
+        qs.append(_gq("6", "Does pushed work pass CI?", ("opt-in",), ci_def, f"not available: {ci['_unavailable']}",
+                      status="not_collected"))
+    else:
+        res = Counter(ci.get(c, "error") for c in commits)
+        r = _rate(res["pass"], res["pass"] + res["fail"])
+        qs.append(_gq("6", "Does pushed work pass CI?", ("opt-in",), ci_def, _show(r), r,
+                      [f"no GitHub remote {res['no_remote']}, not on GitHub {res['not_on_github']}, "
+                       f"no checks {res['no_checks']}, pending {res['pending']}, "
+                       f"not readable {res['error'] + res['invalid']}"]))
+
+    # 7 guardrails
+    guards = [s for s in sig_win if s["kind"] == "guardrail"]
+    new_win = [t for t in win if t["new"]]  # turns recorded by this change's hook: the only ones that can carry signals
+    turn_keys = {(t["sid"], t["pid"]) for t in new_win}
+    in_turns = [s for s in guards if (s["sid"], s["pid"]) in turn_keys or not s["pid"]]  # same population as the denominator
+    fired = Counter(hook for _, _, hook, _ in {(s["sid"], s["pid"] or s["t"], s["hook"], s["decision"]) for s in in_turns})
+    per100 = lambda n: f" ({100.0 * n / len(new_win):.1f}/100)" if len(new_win) >= MIN_TREND_N else ""
+    tuids = {x["tuid"] for x in rows if x["tuid"]}
+    denied = {s["tuid"] for s in guards if s["decision"] == "deny" and s["tuid"]}
+    # an ask on a call another guard denied was never put to the user: neither approved nor declined
+    asks = [s for s in guards if s["hook"] == "task_gate" and s["decision"] == "ask" and s["tuid"]
+            and s["tuid"] not in denied]
+    reviews_by_sid = defaultdict(list)
+    for s in signals:
+        if s["kind"] == "review":
+            reviews_by_sid[s["sid"]].append(s["t"])
+    blocks = [s for s in guards if s["hook"] == "review_gate" and s["decision"] == "block"]
+    ask_r = _rate(sum(1 for s in asks if s["tuid"] in tuids), len(asks))
+    blk_r = _rate(sum(1 for s in blocks if any(t >= s["t"] for t in reviews_by_sid.get(s["sid"], ()))), len(blocks))
+    qs.append(_gq("7", "Where do guardrails step in, and are they followed?", ("observed",),
+                  "Prompts in which each guard denied, asked or blocked, per 100 turns (shown from 5 turns). Follow-through: asks the user "
+                  "approved (the tool then ran) out of asks; review-gate blocks followed by a review in the same session "
+                  "out of blocks.", f"{sum(fired.values())} firing(s) in {len(new_win)} turns",
+                  notes=["; ".join(f"{h} {n}{per100(n)}" for h, n in sorted(fired.items())) or "none recorded",
+                         f"asks approved: {_show(ask_r)}", f"review-gate blocks followed by a review: {_show(blk_r)}",
+                         f"{sum(1 for s in guards if s['cause'] == 'internal_error')} decided because the guard could not check"]))
+
+    # 8 cost
+    by_sid = defaultdict(list)
+    for t in turns:
+        by_sid[t["sid"]].append(t)
+    position = {id(t): i for sess in by_sid.values() for i, t in enumerate(sess)}
+    done = [t for t in win if t["outcome"] == "complete" and t["new"]]
+    deltas = []
+    for t in done:
+        sess = by_sid[t["sid"]]
+        i = position[id(t)]
+        p = sess[i - 1] if i else None
+        if p is None or t.get("cost") is None or p.get("cost") is None or t.get("cost_age") is None:
+            continue
+        if t["t"] - t["cost_age"] <= p["t"]:
+            continue  # the reading predates the previous turn's end: it is that turn's spend (design D11)
+        if t["cost"] >= p["cost"]:
+            deltas.append(t["cost"] - p["cost"])
+    med = _median(deltas)
+    cov = _rate(len(deltas), len(done))
+    qs.append(_gq("8", "What does a completed turn cost?", ("estimate", "declared"),
+                  "Median increase in the session's estimated cost (statusLine, list price) from the previous turn to "
+                  "each turn declared complete, where both readings exist and this one is newer than the previous turn. "
+                  "Needs Groundwork's statusLine; headless runs have none.",
+                  (f"${med:.2f} median" + (" low data" if len(deltas) < LOW_N else "")) if med is not None and len(deltas) >= MIN_TREND_N
+                  else f"insufficient data ({len(deltas)})",
+                  notes=[f"coverage {fmt(cov)} of completed turns" if cov else "no completed turns",
+                         impl_note("outcome", "Outcome")]))
+
+    # 9 compaction
+    before, after, n_compact = [], [], 0
+    for s in sig_win:
+        if s["kind"] != "compact":
+            continue
+        n_compact += 1
+        sess = by_sid.get(s["sid"], [])
+        before += [t for t in [t for t in sess if t["t"] < s["t"]][-COMPACT_SPAN:] if id(t) not in {id(x) for x in before}]
+        after += [t for t in [t for t in sess if t["t"] > s["t"]][:COMPACT_SPAN] if id(t) not in {id(x) for x in after}]
+    qs.append(_gq("9", "Does quality change after compaction?", ("observed", "declared", "pattern"),
+                  f"For the {COMPACT_SPAN} turns before and after each compaction in the same session: the 1a rate and "
+                  "the Q4 rate. Association only: long sessions compact more and carry harder tasks.",
+                  f"{n_compact} compaction(s)",
+                  notes=[f"1a before {_show(_q1a(before))} · after {_show(_q1a(after))}",
+                         f"Q4 before {_show(_q4(before, prompts_by_sid))} · after {_show(_q4(after, prompts_by_sid))}"]))
+
+    # 10 by version and against the previous period
+    vrows = []
+    for v in sorted({t["version"] for t in win}):
+        vt = [t for t in win if t["version"] == v]
+        vrows.append([v, _show(_q1a(vt)), _show(_q1b(vt)), _show(_q2_fail(vt)[0]), _show(_q4(vt, prompts_by_sid))])
+    changes = []
+    for name, f in (("1a", _q1a), ("1b", _q1b), ("2 fail share", lambda ts: _q2_fail(ts)[0]),
+                    ("4", lambda ts: _q4(ts, prompts_by_sid))):
+        a, b = f(win), f(prev)
+        if a and b and a["den"] >= MIN_TREND_N and b["den"] >= MIN_TREND_N:
+            changes.append(f"{name} {a['rate'] - b['rate']:+.1f} points")
+    qs.append(_gq("10", "Did the last Groundwork version help?", ("observed", "declared", "pattern"),
+                  "Q1a, Q1b, Q2 fail share and Q4 per harness version, and the change against the previous period "
+                  "(both periods at least 5 cases). Association only; ledger questions have no version.",
+                  f"{len(vrows)} version(s)", notes=["vs previous period: " + (", ".join(changes) or "too few cases")],
+                  rows=vrows))
+
+    # 11 first drafts
+    redo = sum(1 for t in win if t["new"] and any(s["kind"] == "guardrail" and s["hook"] in ("reply_check", "review_gate")
+                                     for s in t["sigs"]))
+    r = _rate(redo, sum(1 for t in win if t["new"]))
+    qs.append(_gq("11", "Are first drafts complete?", ("observed",),
+                  "Turns in which the reply check or the review gate sent the reply back, out of turns. Lower is better.",
+                  _show(r), r))
+
+    head = [f"{len(win)} turn(s) in the period",
+            f"{sum(1 for n in no_stop if in_win(day_of(n['t'])))} with tool calls but no Stop record "
+            "(interrupted, failed, or not recorded), counted apart",
+            f"{fallback} record(s) without a prompt id matched by time" if fallback else ""]
+    return {"questions": qs, "head": [h for h in head if h]}
+
+
+GAPS_FOOTER = ("A rate needs at least 5 cases (below that: insufficient data); 5 to 19 cases are marked low data. "
+               "Labels: observed = the hook saw it; declared = the model said it; pattern = matched by a named pattern; "
+               "estimate = list-price cost; opt-in = needs generate --github. "
+               "Benchmark score per release: not collected (runner on branch bench/vanilla-vs-groundwork).")
+
+
+def gaps_markdown(gaps) -> list:
+    if not gaps:
+        return []
+    lines = ["## Performance gaps", "", "_" + " · ".join(gaps["head"]) + ". Selected period; not changed by filters._", "",
+             "| Q | Question | Answer | Labels | Notes |", "|---|---|---|---|---|"]
+    for q in gaps["questions"]:
+        lines.append(f"| {q['id']} | {q['question']} | {q['answer']} | {', '.join(q['labels'])} | {'; '.join(q['notes'])} |")
+    for q in gaps["questions"]:
+        if q["rows"]:
+            lines += ["", f"Q{q['id']} by version:", "", "| Version | 1a | 1b | 2 fail share | 4 |", "|---|---|---|---|---|"]
+            lines += [f"| {' | '.join(row)} |" for row in q["rows"]]
+    lines += ["", "Definitions:", ""] + [f"- **{q['id']}** {q['definition']}" for q in gaps["questions"]]
+    lines += ["", f"_{GAPS_FOOTER}_", ""]
+    return lines
+
+
+def gaps_panel_html(gaps) -> str:
+    if not gaps:
+        return ""
+    e = html.escape
+    rows = "".join(
+        f'<tr class="gq-{e(q["status"])}"><td>{e(q["id"])}</td><td><b>{e(q["question"])}</b>'
+        f'<div class="note">{e(q["definition"])}</div></td><td class="ans">{e(q["answer"])}</td>'
+        f'<td>{e(", ".join(q["labels"]))}</td><td class="note">{"<br>".join(e(n) for n in q["notes"])}</td></tr>'
+        for q in gaps["questions"])
+    extra = ""
+    for q in gaps["questions"]:
+        if q["rows"]:
+            body = "".join("<tr>" + "".join(f"<td>{e(c)}</td>" for c in row) + "</tr>" for row in q["rows"])
+            extra += (f'<h3 class="note">Q{e(q["id"])} by version</h3><div class="tw"><table class="gaps-t"><thead><tr>'
+                      f'<th>Version</th><th>1a</th><th>1b</th><th>2 fail share</th><th>4</th></tr></thead>'
+                      f'<tbody>{body}</tbody></table></div>')
+    return ('<div class="panel wide" id="perf-gaps"><h2>Performance gaps</h2>'
+            f'<p class="note">{e(" · ".join(gaps["head"]))}. Selected period only; not changed by the filters above.</p>'
+            '<div class="tw"><table class="gaps-t"><thead><tr><th>Q</th><th>Question</th><th>Answer</th><th>Labels</th>'
+            f'<th>Notes</th></tr></thead><tbody>{rows}</tbody></table></div>{extra}'
+            f'<p class="note">{e(GAPS_FOOTER)}</p></div>')
 
 
 def aggregate_tool_calls(records: list, window_days, ref: dt.date, top_n: int = 15) -> dict:
@@ -534,21 +1187,20 @@ def fmt_trend(v) -> str:
     return "" if v is None else f" {'↑' if v > 0 else '↓' if v < 0 else '→'}{pct0(abs(v))}%"
 
 
-def render_markdown(m: dict, meta: dict, tool_metrics: dict = None, ctx_bands: dict = None) -> str:
+def render_markdown(m: dict, meta: dict, tool_metrics: dict = None, ctx_bands: dict = None, gaps: list = None) -> str:
     s, t = m["summary"], m["trends"]
     lines = [f"# Groundwork health — {meta['generated']}", "",
              f"Window: last {meta['window_days']} days (to {meta['ref']}) · filters: none · source: {meta['events']} ({meta['stats']['lines']} lines, {meta['stats']['malformed']} skipped)", "",
              "## Summary", "",
              f"- Total tasks: {s['total']}",
              f"- Completion: {fmt(s['completion'])}{fmt_trend(t.get('completion'))}",
-             f"- Verified outcome (complete + observed test/deploy): {fmt(s['verified_outcome'])}{fmt_trend(t.get('verified_outcome'))}",
+             f"- Complete with a test-shaped command seen (broad match; Q2 has real results): {fmt(s['verified_outcome'])}{fmt_trend(t.get('verified_outcome'))}",
              f"- Gap rate: {fmt(s['gap'])}{fmt_trend(t.get('gap'))}",
              f"- Validation pass: {fmt(s['validation'])}{fmt_trend(t.get('validation'))}",
              f"- Evidence coverage: {fmt(s['evidence'])}{fmt_trend(t.get('evidence'))}",
              f"- Metadata compliance: {fmt(s['compliance'])}{fmt_trend(t.get('compliance'))}",
-             "- Rework rate: N/A (not collected)",
-             "- Verified accuracy: Insufficient data (no objective ground truth collected)", "",
-             "## Gaps / attention", ""] + [f"- {g}" for g in m["gaps"]] + ["", "## By playbook", "", "| Playbook | Tasks | Completion | Gap | Validation |", "|---|---|---|---|---|"]
+             "- Rework and accuracy: see Performance gaps", "",
+             ] + gaps_markdown(gaps) + ["## Gaps / attention", ""] + [f"- {g}" for g in m["gaps"]] + ["", "## By playbook", "", "| Playbook | Tasks | Completion | Gap | Validation |", "|---|---|---|---|---|"]
     for pb, v in m["by_playbook"].items():
         lines.append(f"| {pb} | {v['total']} | {fmt(v['completion'])} | {fmt(v['gap'])} | {fmt(v['validation'])} |")
     lines += ["", "## Execution modes", ""] + [f"- {k}: {v}" for k, v in sorted(m["exec_modes"].items())]
@@ -571,7 +1223,7 @@ def render_markdown(m: dict, meta: dict, tool_metrics: dict = None, ctx_bands: d
     elif ctx_bands:
         lines += ["", "## Outcome by context fill at task end", "",
                   f"- Tasks placed in a band: {ctx_bands['recorded'] + ctx_bands['joined']} ({ctx_bands['recorded']} recorded by the hook, {ctx_bands['joined']} matched from statusLine records); not placed: {ctx_bands['unmatched']}",
-                  "", "| Context fill | Tasks | Completion | Verified outcome | Gap rate |", "|---|---|---|---|---|"]
+                  "", "| Context fill | Tasks | Completion | Complete + test-shaped command | Gap rate |", "|---|---|---|---|---|"]
         for b in ctx_bands["bands"]:
             low = " (low data)" if b["low_n"] and b["n"] else ""
             lines.append(f"| {b['band']}{low} | {b['n']} | {fmt(b['completion'])} | {fmt(b['verified_outcome'])} | {fmt(b['gap'])} |")
@@ -597,7 +1249,7 @@ main{padding:18px 22px;max-width:1280px;margin:0 auto}
 .panel.wide{grid-column:1/-1}svg{width:100%;height:auto;display:block}.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:6px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .empty{color:var(--muted);font-size:13px;padding:20px 0;text-align:center}
 ul.gaps{margin:0;padding-left:18px}ul.gaps li{margin:4px 0}
-table.ctx{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}table.ctx th,table.ctx td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}table.ctx th{color:var(--muted);font-weight:600;font-size:12px}.note{color:var(--muted);font-size:12px;margin:6px 0}.low{color:var(--bad);font-size:11px}
+table.ctx{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}table.ctx th,table.ctx td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}table.ctx th{color:var(--muted);font-weight:600;font-size:12px}.note{color:var(--muted);font-size:12px;margin:6px 0}.low{color:var(--bad);font-size:11px}.tw{overflow-x:auto}table.gaps-t{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}table.gaps-t th,table.gaps-t td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}table.gaps-t th{color:var(--muted);font-weight:600;font-size:12px}.gaps-t .ans{white-space:nowrap;font-weight:600}.gq-insufficient .ans,.gq-not_collected .ans,.gq-opt_in .ans{color:var(--muted);font-weight:400}
 footer{color:var(--muted);font-size:12px;padding:8px 22px 26px;max-width:1280px;margin:0 auto}footer p{margin:4px 0}
 @media (max-width:600px){header{padding:12px}main{padding:12px}.card .v{font-size:20px}}
 """
@@ -663,9 +1315,9 @@ function lines(series){const pts=series.filter(p=>p.n>0);if(pts.length<2)return'
  return s+"</svg>"}
 function render(){const win=$("#win").value,f={profile:$("#profile").value,playbook:$("#playbook").value,version:$("#version").value,environment:$("#environment").value};
  const m=computeMetrics(D.buckets,win==="all"?null:+win,D.ref,f),s=m.summary,t=m.trends;
- $("#cards").innerHTML=[card("Total tasks",null,null,`${s.known} with a known outcome`,String(s.total)),card("Completion",s.completion,t.completion),card("Verified outcome",s.verified_outcome,t.verified_outcome,s.verified_outcome?`${s.verified_outcome.num}/${s.verified_outcome.den} completed, test or deploy observed`:null),
+ $("#cards").innerHTML=[card("Total tasks",null,null,`${s.known} with a known outcome`,String(s.total)),card("Completion",s.completion,t.completion),card("Complete + test-shaped command",s.verified_outcome,t.verified_outcome,s.verified_outcome?`${s.verified_outcome.num}/${s.verified_outcome.den} completed; broad match, see Performance gaps Q2 for results`:null),
   card("Gap rate",s.gap,t.gap),card("Validation pass",s.validation,t.validation),card("Evidence coverage",s.evidence,t.evidence),card("Metadata compliance",s.compliance,t.compliance),
-  card("Rework rate",null,null,"not collected"),card("Verified accuracy",null,null,"insufficient data — no ground truth")].join("");
+  card("Rework and accuracy",null,null,"see Performance gaps below")].join("");
  $("#trend").innerHTML=lines(m.series);
  const pbs={};for(const pb in m.by_playbook)pbs[pb]=m.by_playbook[pb].total;$("#playbooks").innerHTML=bars(pbs,"#2b6cb0");
  const gp={};for(const pb in m.by_playbook){const g=m.by_playbook[pb].gap;if(g)gp[pb]={v:g.rate,c:g.rate>=50?"#c9463d":g.rate>0?"#c98a1b":"#2f8f5b",num:g.num,den:g.den}}$("#gaps-pb").innerHTML=Object.keys(gp).length?bars(gp,"#c98a1b",v=>`${pct0(v.v)}% (${v.num}/${v.den})`):'<div class="empty">No known outcomes yet</div>';
@@ -695,11 +1347,11 @@ def ctx_panel_html(cb) -> str:
         for b in cb["bands"])
     return (f'<div class="panel wide" id="ctx-bands"><h2>Outcome by context fill at task end</h2>'
             f'<p class="note">Selected period only; not changed by the filters above. {placed} task(s) placed in a band, {cb["unmatched"]} without a context reading.</p>'
-            f'<table class="ctx"><thead><tr><th>Context fill</th><th>Tasks</th><th>Completion</th><th>Verified outcome</th><th>Gap rate</th></tr></thead>'
+            f'<table class="ctx"><thead><tr><th>Context fill</th><th>Tasks</th><th>Completion</th><th>Complete + test-shaped command</th><th>Gap rate</th></tr></thead>'
             f'<tbody>{rows}</tbody></table><p class="note">{html.escape(CTX_NOTE)}</p></div>')
 
 
-def render_html(buckets: list, meta: dict, ctx_bands: dict = None) -> str:
+def render_html(buckets: list, meta: dict, ctx_bands: dict = None, gaps: list = None) -> str:
     dims = {k: sorted({b[k] for b in buckets}) for k in ("profile", "playbook", "version", "environment")}
     data = {"buckets": buckets, "dims": dims, "ref": meta["ref"], "window_days": meta["window_days"], "granularity": meta["granularity"]}
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -717,6 +1369,7 @@ def render_html(buckets: list, meta: dict, ctx_bands: dict = None) -> str:
 <div id="period" class="empty" style="text-align:left;padding:0 0 10px"></div>
 <div class="cards" id="cards"></div>
 <div class="grid">
+{gaps_panel_html(gaps)}
 <div class="panel wide"><h2>Harness health trend (weekly)</h2><div id="trend"></div><div class="legend"><span><i style="background:#2b6cb0"></i>completion</span><span><i style="background:#c9463d"></i>gap rate</span><span><i style="background:#2f8f5b"></i>validation pass</span><span><i style="background:#7c5cbf"></i>evidence coverage</span></div></div>
 <div class="panel"><h2>Playbook usage</h2><div id="playbooks"></div></div>
 <div class="panel"><h2>Gap rate by playbook</h2><div id="gaps-pb"></div></div>
@@ -729,7 +1382,7 @@ def render_html(buckets: list, meta: dict, ctx_bands: dict = None) -> str:
 </div>
 </main>
 <footer>
-<p><b>Definitions.</b> Completion = declared outcome <i>complete</i> ÷ tasks with a known outcome. Gap rate = partial + blocked + failed ÷ known outcomes. Verified outcome = completed tasks with an observed test or deploy run ÷ completed tasks. Validation pass = declared <i>verified</i> ÷ tasks with a known validation state. Evidence coverage = tasks declaring at least one evidence source ÷ tasks with a metadata block. Metadata compliance = tasks with a metadata block ÷ all tool-using tasks. Rework rate and verified accuracy need ground truth the telemetry does not collect, so they show N/A rather than 0%.</p>
+<p><b>Definitions.</b> Completion = declared outcome <i>complete</i> ÷ tasks with a known outcome. Gap rate = partial + blocked + failed ÷ known outcomes. Complete + test-shaped command = completed tasks in which a test-shaped command or a deploy was seen ÷ completed tasks (a broad match that ignores the result; Performance gaps Q2 shows real test results). Validation pass = declared <i>verified</i> ÷ tasks with a known validation state. Evidence coverage = tasks declaring at least one evidence source ÷ tasks with a metadata block. Metadata compliance = tasks with a metadata block ÷ all tool-using tasks. Performance gaps are defined in their own panel. Metrics with too few cases or no data source show N/A rather than 0%.</p>
 <p><b>Observed vs declared.</b> Tools, files, tests, deploys, profile and version were determined by the hook; outcome, validation, evidence and playbook are what the model stated and are not independently verified.</p>
 <p><b>Privacy.</b> This page embeds only aggregated counters (no prompts, responses, code, paths, identifiers or secrets) and makes no network requests.</p>
 </footer>
@@ -753,12 +1406,25 @@ def generate(args) -> dict:
     tool_records, tool_stats = load_tool_events(tool_ev)
     tool_metrics = aggregate_tool_calls(tool_records, window, ref)
     ctx_bands = context_bands(records, load_usage(usage_path()), window, ref)
+    rows, signals, ledger = load_tool_rows(tool_ev), load_signals(signals_path()), load_ledger()
+    ci = None
+    if getattr(args, "github", False):  # opt-in (design D8): without the flag no subprocess runs
+        try:
+            turns, _, _ = build_turns(records, rows, signals)
+            start = ref - dt.timedelta(days=window) if window else None
+            ci = fetch_ci(commit_turns([t for t in turns if start is None or start < dt.date.fromisoformat(t["day"]) <= ref]))
+        except Exception as exc:
+            ci = {"_unavailable": f"CI check failed ({type(exc).__name__})"}
+    try:
+        gaps = performance_gaps(records, rows, signals, ledger, window, ref, ci)
+    except Exception as exc:  # one bad record must not take the whole dashboard down
+        gaps = {"questions": [], "head": [f"Performance gaps unavailable ({type(exc).__name__})"]}
     meta = {"generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "ref": ref.isoformat(), "window_days": window,
             "events": str(ev), "stats": stats, "granularity": granularity}
     metrics = compute(buckets, window, ref)
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
-    page = render_html(buckets, meta, ctx_bands)
-    md = render_markdown(metrics, meta, tool_metrics, ctx_bands)
+    page = render_html(buckets, meta, ctx_bands, gaps)
+    md = render_markdown(metrics, meta, tool_metrics, ctx_bands, gaps)
     written = []
     targets = [("dashboard.html", page)]
     if args.snapshot:
@@ -857,6 +1523,7 @@ def main(argv=None) -> int:
     g.add_argument("--tool-events", help="per-tool-call telemetry file (default ~/.claude/groundwork/telemetry/tool_events.jsonl)")
     g.add_argument("--out", help="output directory (default ~/.claude/groundwork/reports)")
     g.add_argument("--now", help="reference date YYYY-MM-DD (default today)")
+    g.add_argument("--github", action="store_true", help="opt-in: check CI of recorded commits with your gh login (read-only)")
     s = sub.add_parser("schedule", help="set the launchd schedule")
     s.add_argument("frequency", choices=FREQS)
     s.add_argument("--hour", type=int, help="hour of day, 0-23 (default 8)")
