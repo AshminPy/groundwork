@@ -4,10 +4,10 @@
 
 - **Faster, accurate changes.** `rules/engineering-workflow.md` adds three rules:
   - every claim a design makes about existing code cites `path:line` and is checked before review;
-  - the reviewer's brief states the MUST FIX bar before the review, and pattern-matched edge cases are NICE TO HAVE;
-  - when a task includes committing, the feature branch is pushed after each green step.
+  - the reviewer's brief states the existing MUST FIX bar before the review, and pattern-matched edge cases are NICE TO HAVE;
+  - when a task includes pushing or runs in an ephemeral container, the feature branch is pushed after each green step.
 
-  Cloud sessions on this repository now get pytest and OpenSpec 1.15.0 from a project SessionStart hook
+  Cloud sessions on this repository now get pytest and OpenSpec 1.13.2 (the repo's last verified version) from a project SessionStart hook
   (`.claude/hooks/session-start.sh`); it does nothing locally and is not installed for users.
   (`openspec/changes/fast-accurate-workflow/`)
 
