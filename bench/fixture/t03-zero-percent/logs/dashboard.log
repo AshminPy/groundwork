@@ -1,0 +1,3 @@
+2026-07-01T00:00:05Z INFO uptime service=api up_minutes=43170 total_minutes=43200 pct=0
+2026-07-01T00:00:05Z INFO uptime service=web up_minutes=43200 total_minutes=43200 pct=100
+2026-07-01T00:00:05Z INFO uptime service=jobs up_minutes=40000 total_minutes=43200 pct=0

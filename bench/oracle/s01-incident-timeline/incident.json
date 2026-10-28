@@ -1,0 +1,8 @@
+{
+ "impact_start": "2026-04-11T14:05:31Z",
+ "impact_end": "2026-04-11T14:23:05Z",
+ "impact_minutes": 17,
+ "origin_service": "payments",
+ "trigger": "deploy",
+ "mitigation": "rollback"
+}

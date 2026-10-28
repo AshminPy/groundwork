@@ -1,0 +1,4 @@
+2026-05-02T10:11:00Z INFO import start dir=/data/inbox files=9120
+2026-05-02T10:11:41Z INFO imported=4000
+2026-05-02T10:11:52Z ERROR import failed file=/data/inbox/r-4093.json: OSError: [Errno 24] Too many open files: '/data/inbox/r-4093.json'
+2026-05-02T10:11:52Z INFO open_fds=4096 ulimit=4096

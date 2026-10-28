@@ -1,0 +1,7 @@
+{
+ "id": "i01-k8s-resources-probes",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "i01-k8s-resources-probes",
+ "timeout_s": 300
+}

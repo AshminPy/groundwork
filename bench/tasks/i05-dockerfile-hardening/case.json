@@ -1,0 +1,7 @@
+{
+ "id": "i05-dockerfile-hardening",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "i05-dockerfile-hardening",
+ "timeout_s": 300
+}

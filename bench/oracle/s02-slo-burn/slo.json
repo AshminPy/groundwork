@@ -1,0 +1,7 @@
+{
+ "requests": 238852,
+ "errors": 1248,
+ "error_rate": 0.005225,
+ "burn_rate": 5.22,
+ "budget_consumed_pct": 2.9
+}

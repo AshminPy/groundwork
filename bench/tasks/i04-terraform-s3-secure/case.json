@@ -1,0 +1,7 @@
+{
+ "id": "i04-terraform-s3-secure",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "i04-terraform-s3-secure",
+ "timeout_s": 300
+}

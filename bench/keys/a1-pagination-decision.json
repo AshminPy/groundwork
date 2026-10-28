@@ -1,0 +1,28 @@
+{
+ "case": "a1-pagination-decision",
+ "category": "A",
+ "required": [
+  "cursor",
+  "10[,.]?000"
+ ],
+ "forbidden": [
+  "\\b(decision|recommendation|verdict|answer)\\b\\W{0,4}(use|keep|stick with|go with|choose)\\s+(\\*\\*)?offset",
+  "\\b(we|you) should (use|keep|stick with|go with|choose)\\s+(\\*\\*)?offset",
+  "\\b(recommend|suggest)\\w*\\s+(using |keeping |the )?offset"
+ ],
+ "expected_files": [
+  "payapi/client.py",
+  "vendor-docs/payapi-2024-06.md"
+ ],
+ "oracle": "Decision: use cursor pagination. Version 2024-06 caps offset pagination at 10,000 results (vendor-docs/payapi-2024-06.md:5), below the 50,000 needed; list_invoices only supports offset today (payapi/client.py:44).",
+ "wrong": "Decision: keep offset pagination; list_invoices already supports it (payapi/client.py:44).",
+ "anchors": {
+  "vendor-docs/payapi-2024-06.md": [
+   5,
+   6
+  ],
+  "payapi/client.py": [
+   44
+  ]
+ }
+}

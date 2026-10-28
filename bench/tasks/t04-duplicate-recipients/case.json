@@ -1,0 +1,10 @@
+{
+ "id": "t04-duplicate-recipients",
+ "category": "troubleshooting",
+ "kind": "write",
+ "fixture": "t04-duplicate-recipients",
+ "timeout_s": 300,
+ "root_cause": [
+  "mutable default|default (argument|parameter|value|list)|shared (list|default)"
+ ]
+}

@@ -1,0 +1,10 @@
+{
+ "id": "t03-zero-percent",
+ "category": "troubleshooting",
+ "kind": "write",
+ "fixture": "t03-zero-percent",
+ "timeout_s": 300,
+ "root_cause": [
+  "(integer|floor) division|//|\\bint(eger)? (math|arithmetic)|truncat"
+ ]
+}

@@ -166,3 +166,20 @@ Evidence, checked against the sources on 2026-10-28 (EGM review: 4 reviewers, fi
 ## Rollback
 
 `bench/` is a contributor tool outside the install path. Removing the directory and the benchmark config dirs removes the change.
+
+## As built (2026-10-28)
+
+Changes from the plan found during implementation, all applied equally to every arm:
+- **Allow-listed environment.** The cloud container's environment held real host credentials (GitHub, cloud) and
+  session variables that made a child run reuse the parent session id and sync account skills. Each arm now gets
+  only locale, home, temp dir, proxy and CA settings (`bench/arms.py` `ENV_KEEP`); the canary's `env` probe checks it.
+- **No per-case Bash allow list.** The Bash sandbox is the boundary instead (`autoAllowBashIfSandboxed: true`, no
+  unsandboxed retry, no network, reads of home, the repo, other runs and `/tmp` denied except the run's workspace).
+  A per-case allow list would have added prompts that `--permission-prompts none` turns into denials for all arms.
+- **Case layout.** New cases use `tasks/<id>/case.json` (standard-library JSON on Python 3.10) and generated
+  `fixture/`, `hidden/` and `oracle/` folders from `bench/cases_src/`. `oracle/` holds a reference solution used only
+  to prove each case is solvable and that the untouched fixture fails; the repository is outside every agent's reads.
+- **Login check** accepts `authMethod` `claude.ai` or `oauth_token` (a subscription token, as in a cloud session), on
+  the first-party provider.
+- **Grader dependency.** The Kubernetes checks parse YAML with PyYAML in the grader's Python.
+- **Linux sandbox prerequisites** `bubblewrap` and `socat` were installed in the cloud container only.

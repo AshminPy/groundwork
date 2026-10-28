@@ -1,0 +1,7 @@
+{
+ "id": "l04-inventory-reserve",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "l04-inventory-reserve",
+ "timeout_s": 300
+}

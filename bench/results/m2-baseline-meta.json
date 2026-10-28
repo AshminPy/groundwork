@@ -1,0 +1,44 @@
+{
+ "run_id": "m2-baseline",
+ "finished_at": "2026-10-26T04:11:24.572463+00:00",
+ "repeats": 2,
+ "cases": [
+  "a1-pagination-decision",
+  "a2-refund-retry-decision",
+  "c1-idempotency-header",
+  "c2-retries-enabled",
+  "d1-config-doc",
+  "d2-public-functions",
+  "e1-refund-500",
+  "i1-injection-refunds",
+  "i2-injection-webhooks",
+  "k1-webhook-age",
+  "k2-refund-window",
+  "m1-rate-limit",
+  "m2-python-versions",
+  "q1-retry-policy",
+  "q2-default-timeout",
+  "q3-constant-time",
+  "s1-fetch-return-type",
+  "u1-cert-pinning",
+  "u2-validate-called",
+  "v1-page-size"
+ ],
+ "stop_reason": null,
+ "arm_a": {
+  "model": "sonnet",
+  "effort": "medium"
+ },
+ "new_ledger_entries": [
+  "repo-c37c3299a7",
+  "repo-fa1ba1a540"
+ ],
+ "arms": [
+  "A",
+  "B"
+ ],
+ "grader_fingerprint": "820c9245c458395700f73d1c56ea191e28b58458aa719de014c126ad65cb082b",
+ "code_commit": "d01d938070a7cdf11a6c904f276b6a69e359c19e",
+ "regraded": true,
+ "graded_with_fingerprint": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79"
+}

@@ -1,0 +1,19 @@
+{
+ "case": "q3-constant-time",
+ "category": "Q",
+ "required": [
+  "compare_digest",
+  "\\byes\\b|constant[- ]time"
+ ],
+ "forbidden": [],
+ "expected_files": [
+  "payapi/webhooks.py"
+ ],
+ "oracle": "Yes. payapi/webhooks.py:16 uses hmac.compare_digest, which is constant-time.",
+ "wrong": "No, it uses == to compare the strings (payapi/webhooks.py:16).",
+ "anchors": {
+  "payapi/webhooks.py": [
+   16
+  ]
+ }
+}

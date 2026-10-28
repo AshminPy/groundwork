@@ -1,0 +1,4 @@
+2026-09-03T12:00:00Z INFO upload id=u-17 attempt=1 status=503
+2026-09-03T12:00:01Z INFO upload id=u-17 attempt=2 status=503
+2026-09-03T12:00:03Z INFO upload id=u-17 attempt=3 status=503
+2026-09-03T12:00:03Z ERROR upload id=u-17 giving up after 3 attempts (max_retries=3)

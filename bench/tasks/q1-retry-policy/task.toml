@@ -1,0 +1,4 @@
+[metadata]
+category = "Q"
+fixture = "payments-client"
+executes_code = false
