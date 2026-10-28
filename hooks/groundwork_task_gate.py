@@ -1203,12 +1203,14 @@ def check_file(tool: str, path: str, cwd: str) -> None:
 PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork/tasks")
 
 
-COULD_NOT_CHECK = ("a command Groundwork could not parse", "an unclosed command substitution", "deeply nested commands")
+COULD_NOT_CHECK = ("a command Groundwork could not parse", "an unclosed command substitution", "deeply nested commands",
+                   "a deeply nested eval", "a deeply nested shell")
 
 
 def _cause(label: str) -> str:
-    """internal_error when the gate asks because it could not check a nested command (design D6)."""
-    return "internal_error" if label in COULD_NOT_CHECK else "policy"
+    """internal_error when the gate asks because it could not check a nested command (design D6). Nested checks add a
+    suffix such as " (in a command substitution)", so the labels are matched as prefixes."""
+    return "internal_error" if label.startswith(COULD_NOT_CHECK) else "policy"
 
 
 def check_command(cmd: str, cwd: str) -> None:

@@ -925,7 +925,7 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
                   rows=vrows))
 
     # 11 first drafts
-    redo = sum(1 for t in win if any(s["kind"] == "guardrail" and s["hook"] in ("reply_check", "review_gate")
+    redo = sum(1 for t in win if t["new"] and any(s["kind"] == "guardrail" and s["hook"] in ("reply_check", "review_gate")
                                      for s in t["sigs"]))
     r = _rate(redo, sum(1 for t in win if t["new"]))
     qs.append(_gq("11", "Are first drafts complete?", ("observed",),

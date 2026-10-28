@@ -787,6 +787,10 @@ def test_third_review_fixes() -> None:
             sig_ = lines(td / "signals.jsonl")
             check("nested parse failure asks with cause internal_error", '"ask"' in p.stdout and sig_
                   and sig_[-1].get("cause") == "internal_error", p.stdout[:200] + str(sig_))
+            p = run_hook(gate, {**base, "tool_input": {"command": "find . -exec bash -c 'echo \"x' \\;"}}, env)
+            sig2 = lines(td / "signals.jsonl")
+            check("suffixed nested label (find -exec) also records internal_error", '"ask"' in p.stdout
+                  and sig2[-1].get("cause") == "internal_error", p.stdout[:200] + str(sig2[-1]))
             raw = (td / "signals.jsonl").read_text()
             check("guardrail records drop values that are not ids", "secret" not in raw and "SECRETOBJ" not in raw
                   and "prompt_id" not in sig_[-1] and "tool_use_id" not in sig_[-1] and sig_[-1]["session_id"] == "s1", raw)
