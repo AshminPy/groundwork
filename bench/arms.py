@@ -56,12 +56,17 @@ def arm_env(arm: str) -> dict:
                 "XDG_CACHE_HOME": str(home / ".cache"), "ECC_AGENT_DATA_HOME": str(d["config"]),
                 "GATEGUARD_STATE_DIR": str(home / ".gateguard"), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
                 # the sandbox hides HOME from Bash, so git takes its identity from the environment
+                "GIT_CONFIG_GLOBAL": "/dev/null",   # macOS's sandbox answers EPERM on a denied ~/.gitconfig
                 "GIT_AUTHOR_NAME": "bench", "GIT_AUTHOR_EMAIL": "bench@localhost",
                 "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "bench@localhost"})
     return env
 
 
 OWNER_ROOTS = (".claude", ".gateguard", ".config/openspec", ".npm/_logs")
+# The owner's own Claude Code sessions (including the one driving the benchmark) write transcripts and task lists
+# here, and those name bench paths; they are not bench writes.
+OWNER_SKIP = (".claude/projects", ".claude/tasks", ".claude/todos", ".claude/sessions", ".claude/shell-snapshots",
+              ".claude/session-env", ".claude/file-history")
 OWNER_RC = (".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile")
 
 
@@ -80,7 +85,10 @@ def owner_touched(since: float, markers: list[str]) -> list[str]:
         root = Path.home() / r
         if not root.exists():
             continue
+        skip = [Path.home() / s for s in OWNER_SKIP]
         for p in root.rglob("*"):
+            if any(p == s or s in p.parents for s in skip):
+                continue
             try:
                 if not p.is_file() or p.stat().st_mtime < since or p.stat().st_size > 2_000_000:
                     continue

@@ -160,7 +160,7 @@ def run_gate(out=sys.stdout, wanted: list[str] | None = None, runs_dir: Path | N
                 print(f"canary arm={arm} sandbox-probe={p['name']}: {'PASS' if r['passed'] else 'FAIL'} "
                       f"{json.dumps(r)}", file=out, flush=True)
                 (outside / "written.txt").unlink(missing_ok=True)
-        touched = arms.owner_touched(started, [str(root), str(arms.bench_home())])
+        touched = arms.owner_touched(started, [str(root)])   # the unique canary root only
     print(f"canary owner files untouched: {'PASS' if not touched else 'FAIL'} {json.dumps(touched)}", file=out)
     read_ok &= not touched
     print(f"canary: read {'PASS' if read_ok else 'FAIL'}, sandbox {'PASS' if sandbox_ok else 'FAIL'}", file=out)

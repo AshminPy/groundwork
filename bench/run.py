@@ -65,7 +65,9 @@ def preflight(arm: str) -> tuple[bool, str]:
     except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
         return False, f"could not read 'claude auth status': {e}"
     if not st.get("loggedIn"):
-        return False, f"arm {arm} is not logged in (run: CLAUDE_CONFIG_DIR={arms.arm_dirs(arm)['config']} claude)"
+        d = arms.arm_dirs(arm)
+        return False, (f"arm {arm} is not logged in (run: HOME={d['home']} CLAUDE_CONFIG_DIR={d['config']} claude, "
+                       "then /login; the arm runs with that HOME)")
     if st.get("authMethod") not in AUTH_METHODS or st.get("apiProvider") != "firstParty":
         return False, f"arm {arm}: authMethod={st.get('authMethod')!r}, apiProvider={st.get('apiProvider')!r}"
     return True, f"{st.get('authMethod')} login"
@@ -82,9 +84,12 @@ def over_quota(rate_limit: dict | None) -> str | None:
 
 def is_transient(out: dict) -> bool:
     """An empty, failed run whose error text names an API or transport problem."""
-    if out.get("ok") or out.get("timed_out") or (out.get("final_text") or "").strip():
+    text = (out.get("final_text") or "").strip()
+    if out.get("ok") or out.get("timed_out"):
         return False
-    return bool(TRANSIENT.search(f"{out.get('error') or ''} {out.get('stderr_tail') or ''}"))
+    if text and not (len(text) < 400 and text.startswith("API Error")):   # an answer, not an API failure message
+        return False
+    return bool(TRANSIENT.search(f"{text} {out.get('error') or ''} {out.get('stderr_tail') or ''}"))
 
 
 def done_cells(results: Path) -> dict[tuple, int]:

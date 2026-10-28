@@ -193,6 +193,8 @@ def test_only_transient_api_errors_are_retried_once(tmp_path):
     assert run.is_transient({"ok": False, "final_text": "", "error": "API Error: 529 overloaded"})
     assert not run.is_transient({"ok": False, "final_text": "", "error": "hook crashed", "stderr_tail": "Traceback"})
     assert not run.is_transient({"ok": False, "timed_out": True, "final_text": "", "error": "timeout"})
+    assert run.is_transient({"ok": False, "final_text": "API Error: 529 {\"type\":\"overloaded_error\"}"})
+    assert not run.is_transient({"ok": False, "final_text": "I fixed most of it but the 500 test still fails."})
     rows = [{"case": "c", "arm": "V", "rep": 1, "attempt": 1, "transient": True},
             {"case": "c", "arm": "E", "rep": 1, "attempt": 1, "transient": False},
             {"case": "c", "arm": "G", "rep": 1, "attempt": 1, "transient": True},
@@ -230,6 +232,8 @@ def test_owner_touched_finds_bench_paths_only(tmp_path, monkeypatch):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "mine.log").write_text("owner's own session")
     (tmp_path / ".claude" / "ecc.log").write_text("cwd=/tmp/gw-canary-abc/ws")
+    (tmp_path / ".claude" / "projects" / "x").mkdir(parents=True)
+    (tmp_path / ".claude" / "projects" / "x" / "t.jsonl").write_text("ran /tmp/gw-canary-abc")
     assert arms.owner_touched(0, ["/tmp/gw-canary-abc"]) == [str(tmp_path / ".claude" / "ecc.log")]
 
 
