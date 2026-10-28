@@ -1203,16 +1203,24 @@ def check_file(tool: str, path: str, cwd: str) -> None:
 PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork/tasks")
 
 
+COULD_NOT_CHECK = ("a command Groundwork could not parse", "an unclosed command substitution", "deeply nested commands")
+
+
+def _cause(label: str) -> str:
+    """internal_error when the gate asks because it could not check a nested command (design D6)."""
+    return "internal_error" if label in COULD_NOT_CHECK else "policy"
+
+
 def check_command(cmd: str, cwd: str) -> None:
     segs = split_segments(cmd)
     if segs is None:
         ask("this command could not be parsed, so Groundwork cannot tell what it does.", cause="internal_error")
     for _s, _argv, label in checked_segments(segs, cwd):
         if label:
-            ask(f"{label}.")
+            ask(f"{label}.", cause=_cause(label))
     label = embedded_sensitive(cmd, segs, cwd)
     if label:
-        ask(f"{label}.")
+        ask(f"{label}.", cause=_cause(label))
     if _touches_protected(segs, cmd, cwd):
         ask("this command touches Claude Code settings, Groundwork's hooks or the task ledger.")
 
@@ -1486,9 +1494,9 @@ def main() -> None:
     except Exception:
         sys.exit(0)
     global _SESSION, _TOOL_USE_ID, _PROMPT_ID
-    _SESSION = str(data.get("session_id") or "")
-    _TOOL_USE_ID = str(data.get("tool_use_id") or "")[:100]
-    _PROMPT_ID = str(data.get("prompt_id") or "")[:100]
+    _SESSION = data.get("session_id")
+    _TOOL_USE_ID = data.get("tool_use_id")
+    _PROMPT_ID = data.get("prompt_id")
     event = data.get("hook_event_name")
     try:
         if event == "UserPromptSubmit":

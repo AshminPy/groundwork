@@ -528,7 +528,7 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 PY_TEST_PATH = re.compile(r"(?:^|/)(?:tests?/|test_)[^ ]*\.py$")
 KIND_ORDER = ("test", "check", "deploy", "runtime_read")
 NOT_A_RUN = {"--help", "-h", "--version", "-V", "--collect-only", "--co"}
-NOT_FOUND_CODES = (126, 127)  # the shell could not run the command: not a test failure
+NOT_FOUND_CODES = (124, 126, 127)  # killed by timeout, or the shell could not run it: not a test failure
 
 
 def _leading(argv: list) -> list:

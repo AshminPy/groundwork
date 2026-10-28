@@ -189,8 +189,8 @@ def on_stop(data: dict) -> None:
               "Add only the missing parts in a short follow-up message. Do not repeat the rest of the "
               "reply and do not re-run tools.")
     global _SESSION, _PROMPT_ID
-    _SESSION = str(data.get("session_id") or "")
-    _PROMPT_ID = str(data.get("prompt_id") or "")[:100]
+    _SESSION = data.get("session_id")
+    _PROMPT_ID = data.get("prompt_id")
     print(json.dumps({"decision": "block", "reason": reason}), flush=True)
     _record("block")  # after the decision is out (design D6)
 

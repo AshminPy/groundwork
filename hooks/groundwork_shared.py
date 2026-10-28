@@ -134,6 +134,9 @@ def turn_tools(data: dict, current_turn, turn_facts) -> list:
     return tools_since_turn_start(str(data.get("session_id") or ""))
 
 
+SAFE_ID = re.compile(r"[\w.:-]{1,100}")  # same rule as groundwork_telemetry.safe_id
+
+
 def signals_path() -> Path:
     override = os.environ.get("GROUNDWORK_SIGNALS_PATH")
     base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
@@ -158,14 +161,18 @@ def append_signal(rec: dict) -> None:
 
 def record_guardrail(session_id: str, prompt_id: str, hook: str, decision: str, cause: str = "policy",
                      tool_use_id: str = "") -> None:
-    """One guardrail decision: hook, decision, cause and ids only. Silent and fail-open."""
+    """One guardrail decision: hook, decision, cause and ids only. Silent and fail-open. An id is stored only when it
+    looks like an id, so a malformed payload cannot put text into the record."""
     try:
+        safe = lambda v: isinstance(v, str) and bool(SAFE_ID.fullmatch(v))
         rec = {"schema": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-               "session_id": str(session_id or "unknown")[:64], "prompt_id": str(prompt_id or "")[:100],
+               "session_id": session_id if safe(session_id) else "unknown",
                "kind": "guardrail", "hook": hook, "decision": decision,
                "cause": cause if cause in ("policy", "internal_error") else "policy"}
-        if tool_use_id:
-            rec["tool_use_id"] = str(tool_use_id)[:100]
+        if safe(prompt_id):
+            rec["prompt_id"] = prompt_id
+        if safe(tool_use_id):
+            rec["tool_use_id"] = tool_use_id
         append_signal(rec)
     except Exception:
         pass

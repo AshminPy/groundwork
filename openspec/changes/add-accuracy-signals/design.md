@@ -99,11 +99,11 @@ period and is not changed by the page filters, like the context-fill table.
 | 4 | Do users have to correct finished work? | Turns declared complete whose next prompt in the same session within 2 hours reads as a correction / turns declared complete with such a next prompt | declared, pattern |
 | 5 | Do answers cite code that resolves? | Citations that resolve (file exists, both ends of the range within the file) / citations checked; unchecked count beside | pattern |
 | 6 | Does pushed work pass CI? | Commits whose checks all passed / commits whose checks all finished; "not on GitHub", "no checks" and "pending" counts beside | opt-in |
-| 7 | Where do guardrails step in, and are they right? | Distinct (session, prompt, hook, decision) firings in the period, by hook, and per 100 turns from 5 turns. Follow-through: asks approved (a PostToolUse with the same `tool_use_id`) / asks; review-gate blocks followed by a review in the same session / review-gate blocks; firings with cause `internal_error` | observed |
+| 7 | Where do guardrails step in, and are they right? | Distinct (session, prompt, hook, decision) firings in the period, by hook, and per 100 turns from 5 turns. Follow-through: asks approved (a tool row with the same `tool_use_id`) / asks, leaving out asks on a call another guard denied; review-gate blocks followed by a review in the same session / review-gate blocks; firings with cause `internal_error` | observed |
 | 8 | What does a completed turn cost? | Median of (`cost_usd` at this turn − `cost_usd` at the previous turn of the session) over turns declared complete where both readings exist; coverage = those turns / turns declared complete | estimate, declared |
 | 9 | Does quality change after compaction? | Count of compactions. For the 3 turns before and the 3 turns after each compaction in the same session: the 1a rate and the Q4 rate, side by side. Shown beside the context-fill table | observed, declared, pattern |
 | 10 | Did the last Groundwork version help? | Q1a, Q1b, Q2-fail share and Q4 broken down by `harness_version` (ledger tasks have no version), plus the change against the previous period (both periods at least 5 cases) | as the inputs |
-| 11 | Are first drafts complete? | Turns with a reply-check or review-gate guardrail record / turns | observed |
+| 11 | Are first drafts complete? | Turns with a reply-check or review-gate guardrail record / turns recorded by this change's hook (Q7 and Q8 use the same population) | observed |
 
 The benchmark is not a row: one footer line says "Benchmark score per release: not collected (runner on branch
 `bench/vanilla-vs-groundwork`)".
@@ -125,7 +125,7 @@ dependencies are unchanged. The telemetry hook imports `split_segments` from `gr
 - **Result** for `test`/`check`, mirroring the task gate:
   - `pass` = PostToolUse, `tool_response.interrupted` not true, not background, not masked;
   - `fail` = PostToolUseFailure whose `error` starts with `Exit code N`, N ≠ 0, not masked, **and the test is the last segment with only benign segments before it** (`cd`, `export`, `set`, `source …/activate`, variable assignments). Otherwise `unknown`, because another command may have failed;
-  - `unknown` = background, interrupted, masked, no `Exit code` line, exit 126 or 127 (the command could not run), `terraform plan` exit 2, or pytest exit 5.
+  - `unknown` = background, interrupted, masked, no `Exit code` line, exit 124, 126 or 127 (killed by `timeout`, or the command could not run), `terraform plan` exit 2, or pytest exit 5.
 - A segment with `--help`, `-h`, `--version`, `-V`, `--collect-only` or `--co` is not a test or check run.
 - `git_commit` is set only when the commit segment's own status is visible (no `||`, `;` or pipe after it), so a masked commit never makes a commit turn.
 - Ids (`prompt_id`, `tool_use_id`, `agent_id`) are stored only when they match `[\w.:-]{1,100}`; `must_fix` is capped at 1000.
@@ -133,7 +133,7 @@ dependencies are unchanged. The telemetry hook imports `split_segments` from `gr
 
 **D6. Guardrail records.**
 - Each guard (push guard `deny`; task gate `ask`/`deny`; review gate `block`; reply check `block`; the brief's PreCompact entry stays as it is) builds its decision, then calls the writer **inside `try`, importing it inside the `try`**. A missing or broken module can never stop the decision being printed. A test deletes the module and asserts the deny still happens.
-- `cause` is `internal_error` for decisions taken because the guard could not check (an internal error, a command it could not parse, a PowerShell command), and `policy` otherwise. The caller passes it explicitly.
+- `cause` is `internal_error` for decisions taken because the guard could not check (an internal error, a command it could not parse at any nesting level, an unclosed substitution, nesting too deep, a PowerShell command), and `policy` otherwise. The caller passes it explicitly.
 - Each guard prints and flushes its decision first, then records it; the recorder catches `BaseException`.
 - `tool_use_id` is stored for PreToolUse decisions, so an ask can be joined to a later PostToolUse.
 - The brief's one-time request is not a guardrail and is not recorded.

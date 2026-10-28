@@ -678,7 +678,7 @@ def test_review_fixes() -> None:
     # Q8 positive median and Q10 change against the previous period
     ev = [stop(BASE + i * 600, pid=f"k{i}", outcome="complete", cost=1.0 + i, cost_age=10) for i in range(7)]
     q, _ = gaps_of(rep, ev)
-    check("Q8: median $1.00 over 6 turns, coverage 6/7", q["8"]["answer"] == "$1.00 median"
+    check("Q8: median $1.00 over 6 turns (low data), coverage 6/7", q["8"]["answer"] == "$1.00 median low data"
           and "coverage 86% (6/7)" in q["8"]["notes"][0], str(q["8"]))
     prev = BASE - 30 * 86400
     ev = [stop(prev + i * 100, pid=f"o{i}") for i in range(5)] + [stop(BASE + i * 100, pid=f"n{i}") for i in range(5)]
@@ -755,6 +755,45 @@ def test_stop_records_commit_facts() -> None:
                             "last_assistant_message": "Complete."}, env)
             ob = lines(td / "events.jsonl")[-1]["observed"]
             check("a turn without a commit records no head", "head" not in ob, str(ob))
+    finish()
+
+
+def test_third_review_fixes() -> None:
+    h = load(HOOK, "gw_tel_acc_fix3")
+    r = h.build_tool_record({"tool_name": "Bash", "session_id": "s", "tool_input": {"command": "timeout 60 pytest -q"},
+                             "error": "Exit code 124"}, "PostToolUseFailure")
+    check("exit 124 (killed by timeout) -> unknown", r.get("result") == "unknown", str(r))
+    rep = load(REPORT, "gw_rep_acc_fix3")
+    old = [stop(BASE - 1000 - i, pid=f"o{i}", cit=None) for i in range(20)]
+    new = [stop(BASE + i * 100, pid=f"n{i}") for i in range(10)]
+    sg = [sig(BASE + i * 100 - 5, "guardrail", pid=f"n{i}", hook="reply_check", decision="block", cause="policy") for i in range(5)]
+    q, _ = gaps_of(rep, old + new, signals=sg)
+    check("Q11 and Q7 count only turns this change recorded", (q["11"]["num"], q["11"]["den"]) == (5, 10)
+          and "reply_check 5 (50.0/100)" in q["7"]["notes"][0] and q["7"]["answer"] == "5 firing(s) in 10 turns",
+          str(q["11"]) + q["7"]["notes"][0])
+    sg = [sig(BASE + 1, "guardrail", pid="n0", hook="push_guard", decision="deny", cause="policy", tool_use_id="t1"),
+          sig(BASE + 2, "guardrail", pid="n0", hook="task_gate", decision="ask", cause="policy", tool_use_id="t1")]
+    q, _ = gaps_of(rep, new, signals=sg)
+    check("Q7: an ask on a call another guard denied is not counted", "asks approved: insufficient data (0)" in " | ".join(q["7"]["notes"]),
+          " | ".join(q["7"]["notes"]))
+    gate = HOOKS / "groundwork_task_gate.py"
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        with Env(td):
+            env = dict(os.environ)
+            base = {"hook_event_name": "PreToolUse", "session_id": "s1", "prompt_id": "hello my secret prompt text",
+                    "tool_use_id": {"a": "SECRETOBJ"}, "tool_name": "Bash", "cwd": str(td)}
+            p = run_hook(gate, {**base, "tool_input": {"command": "bash -c 'echo \"x'"}}, env)
+            sig_ = lines(td / "signals.jsonl")
+            check("nested parse failure asks with cause internal_error", '"ask"' in p.stdout and sig_
+                  and sig_[-1].get("cause") == "internal_error", p.stdout[:200] + str(sig_))
+            raw = (td / "signals.jsonl").read_text()
+            check("guardrail records drop values that are not ids", "secret" not in raw and "SECRETOBJ" not in raw
+                  and "prompt_id" not in sig_[-1] and "tool_use_id" not in sig_[-1] and sig_[-1]["session_id"] == "s1", raw)
+            p = run_hook(PUSH, {**base, "session_id": {"x": 1}, "tool_input": {"command": "git push origin main"}}, env)
+            sig_ = lines(td / "signals.jsonl")
+            check("push guard: object session id stored as unknown, deny unchanged",
+                  '"deny"' in p.stdout and sig_[-1].get("session_id") == "unknown", p.stdout[:200] + str(sig_[-1]))
     finish()
 
 

@@ -838,12 +838,16 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
 
     # 7 guardrails
     guards = [s for s in sig_win if s["kind"] == "guardrail"]
-    turn_keys = {(t["sid"], t["pid"]) for t in win}
+    new_win = [t for t in win if t["new"]]  # turns recorded by this change's hook: the only ones that can carry signals
+    turn_keys = {(t["sid"], t["pid"]) for t in new_win}
     in_turns = [s for s in guards if (s["sid"], s["pid"]) in turn_keys or not s["pid"]]  # same population as the denominator
     fired = Counter(hook for _, _, hook, _ in {(s["sid"], s["pid"] or s["t"], s["hook"], s["decision"]) for s in in_turns})
-    per100 = lambda n: f" ({100.0 * n / len(win):.1f}/100)" if len(win) >= MIN_TREND_N else ""
+    per100 = lambda n: f" ({100.0 * n / len(new_win):.1f}/100)" if len(new_win) >= MIN_TREND_N else ""
     tuids = {x["tuid"] for x in rows if x["tuid"]}
-    asks = [s for s in guards if s["hook"] == "task_gate" and s["decision"] == "ask" and s["tuid"]]
+    denied = {s["tuid"] for s in guards if s["decision"] == "deny" and s["tuid"]}
+    # an ask on a call another guard denied was never put to the user: neither approved nor declined
+    asks = [s for s in guards if s["hook"] == "task_gate" and s["decision"] == "ask" and s["tuid"]
+            and s["tuid"] not in denied]
     reviews_by_sid = defaultdict(list)
     for s in signals:
         if s["kind"] == "review":
@@ -854,7 +858,7 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
     qs.append(_gq("7", "Where do guardrails step in, and are they followed?", ("observed",),
                   "Prompts in which each guard denied, asked or blocked, per 100 turns (shown from 5 turns). Follow-through: asks the user "
                   "approved (the tool then ran) out of asks; review-gate blocks followed by a review in the same session "
-                  "out of blocks.", f"{sum(fired.values())} firing(s) in {len(win)} turns",
+                  "out of blocks.", f"{sum(fired.values())} firing(s) in {len(new_win)} turns",
                   notes=["; ".join(f"{h} {n}{per100(n)}" for h, n in sorted(fired.items())) or "none recorded",
                          f"asks approved: {_show(ask_r)}", f"review-gate blocks followed by a review: {_show(blk_r)}",
                          f"{sum(1 for s in guards if s['cause'] == 'internal_error')} decided because the guard could not check"]))
@@ -864,7 +868,7 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
     for t in turns:
         by_sid[t["sid"]].append(t)
     position = {id(t): i for sess in by_sid.values() for i, t in enumerate(sess)}
-    done = [t for t in win if t["outcome"] == "complete"]
+    done = [t for t in win if t["outcome"] == "complete" and t["new"]]
     deltas = []
     for t in done:
         sess = by_sid[t["sid"]]
@@ -882,7 +886,8 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
                   "Median increase in the session's estimated cost (statusLine, list price) from the previous turn to "
                   "each turn declared complete, where both readings exist and this one is newer than the previous turn. "
                   "Needs Groundwork's statusLine; headless runs have none.",
-                  f"${med:.2f} median" if med is not None and len(deltas) >= MIN_TREND_N else f"insufficient data ({len(deltas)})",
+                  (f"${med:.2f} median" + (" low data" if len(deltas) < LOW_N else "")) if med is not None and len(deltas) >= MIN_TREND_N
+                  else f"insufficient data ({len(deltas)})",
                   notes=[f"coverage {fmt(cov)} of completed turns" if cov else "no completed turns",
                          impl_note("outcome", "Outcome")]))
 
@@ -922,7 +927,7 @@ def performance_gaps(records: list, rows: list, signals: list, ledger: list, win
     # 11 first drafts
     redo = sum(1 for t in win if any(s["kind"] == "guardrail" and s["hook"] in ("reply_check", "review_gate")
                                      for s in t["sigs"]))
-    r = _rate(redo, len(win))
+    r = _rate(redo, sum(1 for t in win if t["new"]))
     qs.append(_gq("11", "Are first drafts complete?", ("observed",),
                   "Turns in which the reply check or the review gate sent the reply back, out of turns. Lower is better.",
                   _show(r), r))

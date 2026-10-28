@@ -1015,9 +1015,9 @@ def main():
     except Exception:
         sys.exit(0)
     global _SESSION, _TOOL_USE_ID, _PROMPT_ID
-    _SESSION = str(data.get("session_id") or "")
-    _TOOL_USE_ID = str(data.get("tool_use_id") or "")[:100]
-    _PROMPT_ID = str(data.get("prompt_id") or "")[:100]
+    _SESSION = data.get("session_id")
+    _TOOL_USE_ID = data.get("tool_use_id")
+    _PROMPT_ID = data.get("prompt_id")
     if data.get("tool_name") != "Bash":
         sys.exit(0)
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
