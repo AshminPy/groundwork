@@ -25,6 +25,6 @@ The owner's aim is faster, accurate results for everything that runs through Gro
 
 ## Impact
 
-- One rule file: 713 more bytes (measured), loaded in every session.
+- One rule file: 981 more bytes (measured), loaded in every session.
 - Two new repository files under `.claude/`; `install.sh` does not copy them.
 - No code or hook behaviour changes for installed Groundwork.
