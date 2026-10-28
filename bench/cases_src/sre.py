@@ -102,9 +102,10 @@ def test_slo():
     d = json.loads((WS / "slo.json").read_text())
     assert d["requests"] == {_SLO_TOTAL}
     assert d["errors"] == {_SLO_ERR}
-    assert abs(d["error_rate"] - {round(_RATE, 6)}) <= 0.000001
-    assert abs(d["burn_rate"] - {round(_RATE / 0.001, 2)}) <= 0.01
-    assert abs(d["budget_consumed_pct"] - {round(_SLO_ERR / (_SLO_TOTAL * 180 * 0.001) * 100, 2)}) <= 0.01
+    # tolerances allow rounding at an intermediate step (e.g. burn rate from the 6-decimal error rate) and half-up
+    assert abs(d["error_rate"] - {round(_RATE, 6)}) <= 0.0000015
+    assert abs(d["burn_rate"] - {round(_RATE / 0.001, 2)}) <= 0.015
+    assert abs(d["budget_consumed_pct"] - {round(_SLO_ERR / (_SLO_TOTAL * 180 * 0.001) * 100, 2)}) <= 0.015
 '''},
 }
 
@@ -194,7 +195,7 @@ def test_nothing_invented():
     t = _text()
     paths = set(re.findall(r"(/(?:var|opt|etc|srv|data|mnt)/[A-Za-z0-9_./-]+)", t))
     allowed = {"/var/lib/ledger", "/var/lib/ledger/segments", "/opt/ledger/ops/cleanup.sh"}
-    assert {p.rstrip(".,)") for p in paths} <= allowed, paths
+    assert {p.rstrip("/.,)`*") for p in paths} <= allowed, paths
 '''},
 }
 

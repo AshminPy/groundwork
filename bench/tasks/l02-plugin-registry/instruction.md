@@ -1,4 +1,5 @@
 The `shapes` app hard-codes its exporters in `shapes/app.py`. Replace that with a registry:
+- an exporter is a class with a method `export(self, shapes) -> str`;
 - `shapes/registry.py` with a decorator `register(name)` that registers an exporter class under a name, `get(name)`
   that returns an instance (raising `KeyError` with a clear message for an unknown name), and `names()` that returns
   the registered names sorted;

@@ -22,9 +22,9 @@ ARMS = ("V", "E", "G")
 READ_TOOLS = "Read,Grep,Glob"
 WRITE_TOOLS = "Read,Grep,Glob,Edit,Write,Bash,Agent,Skill"
 TIMEOUT_S = 1200   # the same wall-clock limit for every arm
-# The only host variables an arm inherits: locale, home, temp dir, and the network proxy and CA bundle Claude Code
-# itself needs to reach the API. Tokens such as GH_TOKEN or AWS_* are never passed.
-ENV_KEEP = ("HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TMPDIR",
+# The only host variables an arm inherits: locale, temp dir, and the network proxy and CA bundle Claude Code itself
+# needs to reach the API. Tokens such as GH_TOKEN or AWS_* are never passed. HOME is replaced by a per-arm home.
+ENV_KEEP = ("USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TMPDIR",
             "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
             "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE")
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -35,12 +35,15 @@ def bench_home() -> Path:
 
 
 def arm_dirs(arm: str) -> dict[str, Path]:
-    """Each arm: its own CLAUDE_CONFIG_DIR and its own bin/ (symlinks to claude, node, python3 and, for E and G,
-    the arm's OpenSpec), which is the whole PATH prefix. V's PATH has no openspec."""
+    """Each arm: its own CLAUDE_CONFIG_DIR, its own HOME, and its own bin/ (symlinks to claude, node, python3 and,
+    for E and G, the arm's OpenSpec), which is the whole PATH prefix. V's PATH has no openspec. The separate HOME
+    matters: ECC's hooks keep their data under $HOME/.claude and ~/.gateguard whatever CLAUDE_CONFIG_DIR says, and
+    Groundwork's install.sh edits ~/.bashrc, ~/.zshrc and ~/.profile; with the owner's HOME, both would touch the
+    owner's real files and E and G would share one ECC store."""
     if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}")
     root = bench_home() / arm
-    return {"root": root, "config": root / "config", "bin": root / "bin"}
+    return {"root": root, "config": root / "config", "bin": root / "bin", "home": root / "home"}
 
 
 def arm_env(arm: str) -> dict:
@@ -48,8 +51,63 @@ def arm_env(arm: str) -> dict:
     d = arm_dirs(arm)
     env["PATH"] = f"{d['bin']}:{SYSTEM_PATH}"
     env["CLAUDE_CONFIG_DIR"] = str(d["config"])
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    home = d["home"]
+    env.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"),
+                "XDG_CACHE_HOME": str(home / ".cache"), "ECC_AGENT_DATA_HOME": str(d["config"]),
+                "GATEGUARD_STATE_DIR": str(home / ".gateguard"), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                # the sandbox hides HOME from Bash, so git takes its identity from the environment
+                "GIT_AUTHOR_NAME": "bench", "GIT_AUTHOR_EMAIL": "bench@localhost",
+                "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "bench@localhost"})
     return env
+
+
+OWNER_ROOTS = (".claude", ".gateguard", ".config/openspec", ".npm/_logs")
+OWNER_RC = (".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile")
+
+
+def owner_rc_hashes() -> dict:
+    import hashlib
+    h = Path.home()
+    return {n: hashlib.sha256((h / n).read_bytes()).hexdigest() for n in OWNER_RC if (h / n).is_file()}
+
+
+def owner_touched(since: float, markers: list[str]) -> list[str]:
+    """Files under the owner's real ~/.claude, ~/.gateguard and ~/.config/openspec changed since `since` whose content
+    names a bench path (a run workspace, the canary root or the bench home). Content-based, so the owner's own Claude
+    sessions running at the same time are not counted."""
+    hits = []
+    for r in OWNER_ROOTS:
+        root = Path.home() / r
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            try:
+                if not p.is_file() or p.stat().st_mtime < since or p.stat().st_size > 2_000_000:
+                    continue
+                text = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            if any(m and m in text for m in markers):
+                hits.append(str(p))
+    return sorted(hits)
+
+
+def scrub_runner_env() -> None:
+    """Drop host credentials from the runner itself, so no child (agent, hook, sandboxed Bash via /proc) can find them
+    in an ancestor's environment."""
+    keep = set(ENV_KEEP) | {"HOME", "PATH", "GW_BENCH_HOME", "GW_BENCH_STUB"}
+    for k in list(os.environ):
+        if k not in keep:
+            del os.environ[k]
+
+
+def make_home(arm: str) -> None:
+    """Create the arm's HOME with a bench git identity, so commits work the same way in every arm."""
+    home = arm_dirs(arm)["home"]
+    home.mkdir(parents=True, exist_ok=True)
+    gitconfig = home / ".gitconfig"
+    if not gitconfig.exists():
+        gitconfig.write_text("[user]\n\tname = bench\n\temail = bench@localhost\n[init]\n\tdefaultBranch = main\n")
 
 
 def arm_claude(arm: str) -> str:
@@ -77,7 +135,8 @@ def write_settings(ws: Path, deny_read: list[str]) -> dict:
 def deny_roots(runs_dir: Path) -> list[str]:
     """Paths no agent may read: home (config dirs, logins), this repository (keys and hidden tests), every other run's
     workspace, and the shared temp root. Only paths that exist are listed."""
-    cands = [Path.home(), REPO_ROOT, runs_dir, Path("/home"), Path("/Users"), Path("/tmp"), Path("/private/tmp")]
+    cands = [Path.home(), bench_home(), REPO_ROOT, runs_dir, Path("/home"), Path("/Users"), Path("/tmp"),
+             Path("/private/tmp")]
     return [str(p.resolve()) for p in cands if p.exists()]
 
 

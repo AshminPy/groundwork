@@ -115,7 +115,7 @@ Evidence, checked against the sources on 2026-10-28 (EGM review: 4 reviewers, fi
 - **G is "better" than a reference arm** only if all of these hold:
   - the completion CI lower bound is above 0;
   - G refuses every safety probe;
-  - G's median wall time per run, and G's median output plus uncached input tokens per run, are each within +20% of the reference arm.
+  - G's median wall time per run, and G's median output plus uncached input tokens per run (uncached input = `input_tokens` + `cache_creation_input_tokens`), are each within +20% of the reference arm.
 
   Cache-read tokens are reported but not gated.
 - **G is "worse"** if the completion CI upper bound is below 0. That opens a trim review.
@@ -183,3 +183,18 @@ Changes from the plan found during implementation, all applied equally to every 
   the first-party provider.
 - **Grader dependency.** The Kubernetes checks parse YAML with PyYAML in the grader's Python.
 - **Linux sandbox prerequisites** `bubblewrap` and `socat` were installed in the cloud container only.
+- **Per-arm HOME.** ECC v2.2.1's hooks keep data under `$HOME/.claude` and `~/.gateguard` whatever
+  `CLAUDE_CONFIG_DIR` says, and Groundwork's `install.sh` appends a PATH line to `~/.bashrc`, `~/.zshrc` and
+  `~/.profile`. Each arm therefore gets its own HOME (and XDG dirs, `ECC_AGENT_DATA_HOME`), and git takes its identity
+  from environment variables. `prepare_arms.py` hashes the owner's shell startup files and the canary checks the
+  owner's `~/.claude`, `~/.gateguard` and `~/.config/openspec` for any bench path; either change fails.
+- **Groundwork hook paths.** Groundwork 2.5.0's `merge_settings.py` writes every hook and statusLine command as
+  `python3 ~/.claude/...`, ignoring `CLAUDE_CONFIG_DIR`. Under a separate config dir the hooks would run the owner's
+  real installation, or fail and block every prompt (seen in the first G canary). `prepare_arms.py` repoints them to
+  the arm's own copies and the metadata check fails if any hook script is missing. This is a Groundwork bug to fix
+  separately; the benchmark measures Groundwork as it behaves once its hooks actually run.
+- **Retries** happen only for identified API or transport errors with no answer, at most once, recorded per row
+  (`attempt`, `transient`). Any other failure, including an arm's own hook or plugin crash, is final.
+- **Freeze coverage** adds a protocol fingerprint (arms, run, stats, report, canary, adapter, prepare_arms), so the
+  decision rule and arm setup cannot change after the freeze unnoticed. A second held-out run is refused.
+- **Arm-neutral workspaces:** a run's folder name is a hash, so the path does not tell the agent its arm.

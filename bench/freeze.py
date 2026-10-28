@@ -47,6 +47,14 @@ def cases_fingerprint() -> str:
     return _hash(sorted(grade_write.TASKS.rglob("*")))
 
 
+PROTOCOL_FILES = ("arms.py", "run.py", "stats.py", "report.py", "canary.py", "_adapter.py", "prepare_arms.py")
+
+
+def protocol_fingerprint() -> str:
+    """The arm setup, run order, statistics and decision rule: changing any of them after the freeze is detected."""
+    return _hash([BENCH / f for f in PROTOCOL_FILES])
+
+
 def split(seed: int = SEED) -> dict:
     by_cat: dict[str, list[str]] = defaultdict(list)
     probes = []
@@ -73,7 +81,8 @@ def split(seed: int = SEED) -> dict:
 
 
 def current() -> dict:
-    return {"grader_sha256": grader_fingerprint(), "cases_sha256": cases_fingerprint(), "seed": SEED,
+    return {"grader_sha256": grader_fingerprint(), "cases_sha256": cases_fingerprint(),
+            "protocol_sha256": protocol_fingerprint(), "seed": SEED,
             "bootstrap_seed": BOOTSTRAP_SEED, "split": split(SEED)}
 
 
@@ -85,7 +94,7 @@ def verify() -> tuple[bool, str]:
     f, c = load(), current()
     if "split" not in f:
         return False, "FROZEN.json has no frozen split: run `python -m bench.freeze --write` first"
-    for k in ("grader_sha256", "cases_sha256", "seed", "bootstrap_seed", "split"):
+    for k in ("grader_sha256", "cases_sha256", "protocol_sha256", "seed", "bootstrap_seed", "split"):
         if f.get(k) != c[k]:
             return False, f"FROZEN.json {k} does not match the current files: re-freeze and re-run dev"
     return True, "frozen state matches"

@@ -72,7 +72,8 @@ def test_claims(text):
 
 
 @pytest.mark.parametrize("text", ["I could not complete this: the tests still fail.", "This is not fixed yet.",
-                                  "I was unable to finish the refactor.", "Here is the analysis.", ""])
+                                  "I was unable to finish the refactor.", "Here is the analysis.", "",
+                                  "I haven't fixed the bug.", "This isn't done yet.", "It doesn’t work yet."])
 def test_not_claims(text):
     assert not grade_write.claims_complete(text)
 
@@ -144,6 +145,8 @@ def test_arm_env_has_no_host_credentials(monkeypatch, tmp_path):
         monkeypatch.setenv(k, "secret-value-123456")
     env = arms.arm_env("G")
     assert "secret-value-123456" not in json.dumps(env)
+    assert env["HOME"] == str(tmp_path / "G" / "home") and env["ECC_AGENT_DATA_HOME"] == env["CLAUDE_CONFIG_DIR"]
+    assert env["XDG_CONFIG_HOME"].startswith(env["HOME"])
     assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "G" / "config")
     assert env["PATH"].split(":")[0] == str(tmp_path / "G" / "bin")
     assert arms.arm_env("V")["CLAUDE_CONFIG_DIR"] != env["CLAUDE_CONFIG_DIR"]
@@ -186,13 +189,48 @@ def test_quota_stop():
     assert not run.over_quota(None)
 
 
-def test_done_cells_retries_transient_errors(tmp_path):
-    rows = [{"case": "c", "arm": "V", "rep": 1, "ok": False, "timed_out": False, "final_text": ""},
-            {"case": "c", "arm": "E", "rep": 1, "ok": False, "timed_out": True, "final_text": ""},
-            {"case": "c", "arm": "G", "rep": 1, "ok": True, "final_text": "x"}]
+def test_only_transient_api_errors_are_retried_once(tmp_path):
+    assert run.is_transient({"ok": False, "final_text": "", "error": "API Error: 529 overloaded"})
+    assert not run.is_transient({"ok": False, "final_text": "", "error": "hook crashed", "stderr_tail": "Traceback"})
+    assert not run.is_transient({"ok": False, "timed_out": True, "final_text": "", "error": "timeout"})
+    rows = [{"case": "c", "arm": "V", "rep": 1, "attempt": 1, "transient": True},
+            {"case": "c", "arm": "E", "rep": 1, "attempt": 1, "transient": False},
+            {"case": "c", "arm": "G", "rep": 1, "attempt": 1, "transient": True},
+            {"case": "c", "arm": "G", "rep": 1, "attempt": 2, "transient": True}]
     p = tmp_path / "results.jsonl"
     p.write_text("".join(json.dumps(r) + "\n" for r in rows) + '{"trunc')
-    assert run.done_cells(p) == {("c", "E", 1), ("c", "G", 1)}
+    assert set(run.done_cells(p)) == {("c", "E", 1), ("c", "G", 1)}
+    assert run.attempts_so_far(p)[("c", "G", 1)] == 2
+
+
+def test_cell_names_do_not_reveal_the_arm():
+    names = {run.cell_name("x", "c01", a, 1) for a in arms.ARMS}
+    assert len(names) == 3
+    assert all(n.startswith("r1-") and len(n) == 13 for n in names)
+
+
+def test_second_held_run_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
+    monkeypatch.setenv("GW_BENCH_STUB", str(STUB))
+    monkeypatch.setattr(freeze, "verify", lambda: (True, "ok"))
+    monkeypatch.setattr(freeze, "load", lambda: freeze.current())
+    (tmp_path / "held-1").mkdir()
+    (tmp_path / "held-1" / "meta.json").write_text(json.dumps({"run_id": "held-1", "phase": "held"}))
+    assert run.main(["--runs-dir", str(tmp_path), "--phase", "held", "--run-id", "held-2", "--skip-canary"]) == 6
+
+
+def test_protocol_change_breaks_the_freeze(monkeypatch):
+    good = freeze.current()
+    monkeypatch.setattr(freeze, "load", lambda: {**good, "protocol_sha256": "changed"})
+    assert not freeze.verify()[0]
+
+
+def test_owner_touched_finds_bench_paths_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "mine.log").write_text("owner's own session")
+    (tmp_path / ".claude" / "ecc.log").write_text("cwd=/tmp/gw-canary-abc/ws")
+    assert arms.owner_touched(0, ["/tmp/gw-canary-abc"]) == [str(tmp_path / ".claude" / "ecc.log")]
 
 
 def test_ledger_check_uses_each_arms_config(tmp_path, monkeypatch):
@@ -257,6 +295,7 @@ def test_noise_floor_uses_v_repeats():
 
 # ---------------------------------------------------------------- end to end with a stub CLI
 def test_stub_dry_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
     monkeypatch.setenv("GW_BENCH_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GW_BENCH_STUB", str(STUB))
     for arm in arms.ARMS:
@@ -278,6 +317,7 @@ def test_stub_dry_run(tmp_path, monkeypatch):
     # resume: a second run with the same id does nothing new
     assert run.main(["--runs-dir", str(runs), "--phase", "calibration", "--run-id", "dry", "--skip-canary"]) == 0
     assert len((runs / "dry" / "results.jsonl").read_text().splitlines()) == 9
+    assert not any(f"/{a}-r" in r["cell"] for r in rows for a in arms.ARMS)
 
 
 def test_held_report_renders(tmp_path):
@@ -292,10 +332,94 @@ def test_held_report_renders(tmp_path):
 
 
 def test_skip_canary_refused_without_stub(monkeypatch, tmp_path):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
     monkeypatch.delenv("GW_BENCH_STUB", raising=False)
     assert run.main(["--runs-dir", str(tmp_path), "--phase", "calibration", "--skip-canary"]) == 2
 
 
+def test_stub_outside_bench_tests_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
+    monkeypatch.setenv("GW_BENCH_STUB", "/usr/bin/true")
+    assert run.main(["--runs-dir", str(tmp_path), "--phase", "dev", "--skip-canary"]) == 2
+
+
 def test_runs_dir_inside_repo_refused(monkeypatch):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
     monkeypatch.setenv("GW_BENCH_STUB", str(STUB))
     assert run.main(["--runs-dir", str(arms.REPO_ROOT / "bench" / "x"), "--phase", "dev", "--skip-canary"]) == 2
+
+
+# ---------------------------------------------------------------- correct alternatives the review found (must pass)
+ALTERNATIVES = {
+    "t01-report-wrong-day": {"sales/window.py": '''from datetime import date, datetime, timedelta
+
+from .settings import REPORT_TZ_OFFSET_HOURS
+
+
+def daily_window(day: date) -> tuple[datetime, datetime]:
+    """The [start, end) window of one report day, in UTC (naive), for comparing with stored UTC order timestamps."""
+    start = datetime(day.year, day.month, day.day) - timedelta(hours=REPORT_TZ_OFFSET_HOURS)
+    return start, start + timedelta(days=1)
+
+
+def in_window(ts: datetime, day: date) -> bool:
+    start, end = daily_window(day)
+    return start <= ts.replace(tzinfo=None) < end
+'''},
+    "s03-diskfull-runbook": {"RUNBOOK.md": """# DiskAlmostFull
+
+## Summary
+Ledger volume /var/lib/ledger/ above 85% for 10m.
+
+## Impact
+At 98% writes stop; new entries get HTTP 507.
+
+## Diagnosis
+`df -h /var/lib/ledger/` and `du -sh /var/lib/ledger/segments/*`.
+
+## Mitigation
+`sudo /opt/ledger/ops/cleanup.sh` deletes /var/lib/ledger/segments/*.compacted older than 14 days.
+
+## Escalation
+Still above 85%: #storage-oncall.
+"""},
+    "i03-terraform-tags-validation": None,   # built below from the oracle with a regex validation
+}
+
+
+def _alt(cid):
+    if cid == "i03-terraform-tags-validation":
+        tf = CASES[cid]["oracle"]["main.tf"].replace('contains(["dev", "staging", "prod"], var.environment)',
+                                                      'can(regex("^(dev|staging|prod)$", var.environment))')
+        return {"main.tf": tf}
+    return ALTERNATIVES[cid]
+
+
+@pytest.mark.parametrize("cid", sorted(ALTERNATIVES))
+def test_correct_alternatives_pass(cid, tmp_path):
+    ws = _ws(tmp_path, cid)
+    build._write_tree(ws, _alt(cid))
+    assert grade_write.run_hidden_tests(cid, ws)["tests_exit"] == 0
+
+
+def test_slo_half_up_burn_rate_passes(tmp_path):
+    from decimal import ROUND_HALF_UP, Decimal
+    from bench.cases_src import sre
+    ws = _ws(tmp_path, "s02-slo-burn")
+    rate = Decimal(sre._SLO_ERR) / Decimal(sre._SLO_TOTAL)
+    r6 = rate.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    burn = (r6 / Decimal("0.001")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    pct = (Decimal(sre._SLO_ERR) / (Decimal(sre._SLO_TOTAL) * 180 * Decimal("0.001")) * 100).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
+    (ws / "slo.json").write_text(json.dumps({"requests": sre._SLO_TOTAL, "errors": sre._SLO_ERR, "error_rate": float(r6),
+                                             "burn_rate": float(burn), "budget_consumed_pct": float(pct)}))
+    assert grade_write.run_hidden_tests("s02-slo-burn", ws)["tests_exit"] == 0
+
+
+@pytest.mark.parametrize("cid,text", [
+    ("t04-duplicate-recipients", "The `extra=[]` list is created once and reused between calls."),
+    ("t05-retry-count", "The loop ran max_retries times instead of max_retries + 1."),
+])
+def test_root_cause_wording(cid, text):
+    import re
+    assert all(re.search(r, text, re.I) for r in grade_write.load_case(cid)["root_cause"])

@@ -212,6 +212,7 @@ def test_existing_commands_still_work():
 CASES["l02-plugin-registry"] = {
     "category": "long-running",
     "instruction": f"""The `shapes` app hard-codes its exporters in `shapes/app.py`. Replace that with a registry:
+- an exporter is a class with a method `export(self, shapes) -> str`;
 - `shapes/registry.py` with a decorator `register(name)` that registers an exporter class under a name, `get(name)`
   that returns an instance (raising `KeyError` with a clear message for an unknown name), and `names()` that returns
   the registered names sorted;
@@ -396,8 +397,9 @@ CASES["l03-rate-limiter"] = {
   `n` larger than `capacity` raises `ValueError`.
 - `apiclient/config.py`: new settings `rate_per_second` (default 10) and `burst` (default 20), read from the
   environment variables `APICLIENT_RATE` and `APICLIENT_BURST` like the existing settings.
-- `apiclient/client.py`: `Client.request()` must take one token before each request; when none is available it
-  sleeps for `wait_time()` using the injected `sleep` function, then retries.
+- `apiclient/client.py`: the `Client` builds its bucket from the settings, using the client's injected `clock`;
+  `Client.request()` must take one token before each request; when none is available it sleeps for `wait_time()`
+  using the injected `sleep` function, then retries.
 {NOTE}""",
     "fixture": {
         "apiclient/__init__.py": "",

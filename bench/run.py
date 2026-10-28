@@ -14,8 +14,10 @@ five-hour window or 70% of the weekly one (Claude Code's own rate_limit_event).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +30,10 @@ MODEL, EFFORT = "sonnet", "medium"
 QUOTA_STOP = {"five_hour": 0.80, "seven_day": 0.70}
 REPEATS = {"calibration": 1, "dev": 2, "held": 3}
 AUTH_METHODS = ("claude.ai", "oauth_token")   # oauth_token: a subscription token (e.g. a cloud session)
+# Only these failures are retried, once, on resume: API or transport errors, never an arm's own hook or plugin crash.
+TRANSIENT = re.compile(r"overloaded|rate[ _-]?limit|\b(429|500|502|503|504|529)\b|ECONNRESET|ETIMEDOUT|socket hang up|"
+                       r"network error|api_error|internal server error", re.I)
+MAX_ATTEMPTS = 2
 
 
 def phase_cases(frozen: dict, phase: str) -> list[str]:
@@ -74,17 +80,59 @@ def over_quota(rate_limit: dict | None) -> str | None:
     return None
 
 
-def done_cells(results: Path) -> set[tuple]:
-    """Cells that need no re-run. A run that ended in an API or process error with no answer is retried."""
-    done = set()
+def is_transient(out: dict) -> bool:
+    """An empty, failed run whose error text names an API or transport problem."""
+    if out.get("ok") or out.get("timed_out") or (out.get("final_text") or "").strip():
+        return False
+    return bool(TRANSIENT.search(f"{out.get('error') or ''} {out.get('stderr_tail') or ''}"))
+
+
+def done_cells(results: Path) -> dict[tuple, int]:
+    """{cell: attempts so far} for cells that need no re-run. A transient failure is retried once (MAX_ATTEMPTS);
+    every other result, failed or not, is final."""
+    done, attempts = {}, {}
     for line in results.read_text().splitlines() if results.exists() else []:
         try:
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
-        transient = not r.get("ok") and not r.get("timed_out") and not (r.get("final_text") or "").strip()
-        (done.discard if transient else done.add)((r["case"], r["arm"], r["rep"]))
+        cell = (r["case"], r["arm"], r["rep"])
+        attempts[cell] = max(attempts.get(cell, 0), r.get("attempt", 1))
+        if r.get("transient") and attempts[cell] < MAX_ATTEMPTS:
+            done.pop(cell, None)
+        else:
+            done[cell] = attempts[cell]
     return done
+
+
+def attempts_so_far(results: Path) -> dict[tuple, int]:
+    out = {}
+    for line in results.read_text().splitlines() if results.exists() else []:
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        cell = (r["case"], r["arm"], r["rep"])
+        out[cell] = max(out.get(cell, 0), r.get("attempt", 1))
+    return out
+
+
+def cell_name(run_id: str, case: str, arm: str, rep: int) -> str:
+    """An arm-neutral folder name: the workspace path must not tell the agent which arm it is in."""
+    return f"r{rep}-" + hashlib.sha256(f"{run_id}:{case}:{arm}:{rep}".encode()).hexdigest()[:10]
+
+
+def other_held_runs(runs_dir: Path, run_id: str) -> list[str]:
+    """Held-out results are read once: any other run dir with a held phase blocks a new held run."""
+    out = []
+    for meta in runs_dir.glob("*/meta.json"):
+        try:
+            m = json.loads(meta.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if m.get("phase") == "held" and m.get("run_id") != run_id:
+            out.append(m.get("run_id"))
+    return out
 
 
 def arm_order(k: int, wanted: list[str]) -> list[str]:
@@ -119,7 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--arms", default=",".join(arms.ARMS))
     ap.add_argument("--skip-canary", action="store_true", help="stub dry runs only (refused without GW_BENCH_STUB)")
     a = ap.parse_args(argv)
-    stub = bool(os.environ.get("GW_BENCH_STUB"))
+    arms.scrub_runner_env()
+    stub_path = os.environ.get("GW_BENCH_STUB")
+    stub = bool(stub_path)
+    if stub and Path(stub_path).resolve().parent != (arms.BENCH / "tests").resolve():
+        print("refusing: GW_BENCH_STUB must be a stub inside bench/tests", file=sys.stderr)
+        return 2
     if a.skip_canary and not stub:
         print("refusing: --skip-canary is only for stub dry runs", file=sys.stderr)
         return 2
@@ -135,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     frozen = freeze.load()
     run_id = a.run_id or f"{a.phase}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = runs_dir / run_id
+    if a.phase == "held" and other_held_runs(runs_dir, run_id):
+        print(f"refusing: held-out results already exist ({other_held_runs(runs_dir, run_id)}); held-out results are "
+              "read once. Resume that run with its --run-id instead.", file=sys.stderr)
+        return 6
     if not stub:
         for arm in wanted:
             ok, detail = preflight(arm)
@@ -154,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = [c for c in cases if grade_write.load_case(c)["kind"] == "read"]
     results = run_dir / "results.jsonl"
     done = done_cells(results)
+    tries = attempts_so_far(results)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id, "phase": a.phase, "status": "running"}))
     ledgers_before = {arm: ledger_entries(arm) for arm in wanted}
     stop_reason = None
     for ci, case in enumerate(cases):
@@ -164,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             for pos, arm in enumerate(arm_order(ci + rep, wanted)):
                 if (case, arm, rep) in done or stop_reason:
                     continue
-                cell = run_dir / case / f"{arm}-r{rep}"
+                cell = run_dir / case / cell_name(run_id, case, arm, rep)
                 if cell.exists():
                     shutil.rmtree(cell)   # an unfinished cell from an interrupted run; its workspace is a copy
                 cell.mkdir(parents=True)
@@ -172,12 +231,14 @@ def main(argv: list[str] | None = None) -> int:
                 settings = arms.write_settings(ws, arms.deny_roots(runs_dir))
                 started = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 out = arms.launch(arm, ws, instruction, "write", MODEL, EFFORT, settings=settings)
+                attempt = tries.get((case, arm, rep), 0) + 1
                 (cell / "stream.jsonl").write_text(out.pop("raw_stdout"))
                 (cell / "final.txt").write_text(out["final_text"])
                 events = out.pop("events")
                 g = grade_write.grade(case, ws, out["final_text"], events, before)
                 row = {"case": case, "category": c["category"], "phase": a.phase, "arm": arm, "rep": rep,
-                       "position": pos, "started_at": started, **out, "grade": g}
+                       "position": pos, "started_at": started, "cell": cell.name, "attempt": attempt,
+                       "transient": is_transient(out), **out, "grade": g}
                 with results.open("a") as f:
                     f.write(json.dumps(row) + "\n")
                 verdict = g.get("completed") if g["kind"] == "write" else f"probe_pass={g.get('probe_pass')}"

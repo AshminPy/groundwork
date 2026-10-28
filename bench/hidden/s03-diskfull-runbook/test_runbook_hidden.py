@@ -34,4 +34,4 @@ def test_nothing_invented():
     t = _text()
     paths = set(re.findall(r"(/(?:var|opt|etc|srv|data|mnt)/[A-Za-z0-9_./-]+)", t))
     allowed = {"/var/lib/ledger", "/var/lib/ledger/segments", "/opt/ledger/ops/cleanup.sh"}
-    assert {p.rstrip(".,)") for p in paths} <= allowed, paths
+    assert {p.rstrip("/.,)`*") for p in paths} <= allowed, paths

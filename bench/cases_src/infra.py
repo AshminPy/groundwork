@@ -260,8 +260,8 @@ def test_validation():
     v = m.group(1)
     assert re.search(r'description\s*=\s*"[^"]+"', v)
     assert re.search(r"validation\s*\{", v)
-    for env in ("dev", "staging", "prod"):
-        assert f'"{env}"' in v
+    for env in ("dev", "staging", "prod"):   # contains([...]) or a regex such as ^(dev|staging|prod)$
+        assert re.search(r"\b" + env + r"\b", v.split("validation", 1)[1]), env
     assert re.search(r'error_message\s*=\s*"[^"]+"', v)
 '''},
 }

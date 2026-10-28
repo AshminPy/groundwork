@@ -9,7 +9,10 @@ G: the same bin/ as E (OpenSpec 1.13.2 already on PATH, so install.sh skips its 
    own install.sh from the given tag, with GROUNDWORK_OS=linux and GROUNDWORK_NO_LAUNCHCTL=1 so it never touches
    launchd. On macOS the owner's ~/Library/LaunchAgents/com.groundwork.report.plist is hashed before and after; any
    change fails the preparation.
-Every install step runs with the allow-listed arm environment plus proxy and CA settings: no host tokens.
+Every install step runs with the allow-listed arm environment plus proxy and CA settings: no host tokens, and the
+arm's own HOME (install.sh edits ~/.bashrc, ~/.zshrc and ~/.profile; ECC keeps data under $HOME). The owner's real
+shell startup files are hashed before and after, and the owner's ~/.claude, ~/.gateguard and ~/.config/openspec are
+checked for bench data; any change fails the preparation.
 Writes $GW_BENCH_HOME/arms-meta.json. Safe to re-run: an arm whose meta already matches is left as it is.
 """
 from __future__ import annotations
@@ -95,6 +98,19 @@ def install_groundwork(arm: str, ref: str) -> None:
         archive = subprocess.run(["git", "-C", str(arms.REPO_ROOT), "archive", ref], capture_output=True, check=True)
         subprocess.run(["tar", "-x", "-C", tmp], input=archive.stdout, check=True)
         sh(["bash", str(Path(tmp) / "install.sh")], env, cwd=tmp)
+    repoint_hooks(arm)
+
+
+def repoint_hooks(arm: str) -> int:
+    """Groundwork 2.5.0's merge_settings.py writes every hook and statusLine command as `python3 ~/.claude/...`,
+    ignoring CLAUDE_CONFIG_DIR (the hook scripts themselves honour it). Under a separate config dir those commands
+    would run the owner's real ~/.claude hooks, or none. Point them at this arm's own copies; nothing else changes."""
+    cfg = arms.arm_dirs(arm)["config"]
+    path = cfg / "settings.json"
+    text = path.read_text()
+    n = text.count("~/.claude/")
+    path.write_text(text.replace('"python3 ~/.claude/', f'"python3 {cfg}/'))
+    return n
 
 
 def describe(arm: str) -> dict:
@@ -114,7 +130,26 @@ def describe(arm: str) -> dict:
             "plugins": out(["claude", "plugin", "list"]), "openspec_path": shutil.which("openspec", path=env["PATH"]),
             "openspec_version": out(["openspec", "--version"]) if shutil.which("openspec", path=env["PATH"]) else None,
             "groundwork_version": gw_version, "groundwork_rules": sorted(p.name for p in rules.glob("*.md")),
-            "hooks_in_settings": _hook_events(d["config"] / "settings.json")}
+            "hooks_in_settings": _hook_events(d["config"] / "settings.json"),
+            "missing_hook_scripts": _missing_scripts(d["config"] / "settings.json")}
+
+
+def _missing_scripts(settings: Path) -> list[str]:
+    """Hook or statusLine commands whose script path does not exist (or points outside this arm's config dir)."""
+    try:
+        d = json.loads(settings.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    cmds = [h.get("command", "") for ev in (d.get("hooks") or {}).values() for g in ev for h in g.get("hooks", [])]
+    cmds.append((d.get("statusLine") or {}).get("command", ""))
+    bad = []
+    for c in cmds:
+        parts = c.split()
+        if len(parts) >= 2 and parts[0] == "python3":
+            script = Path(os.path.expanduser(parts[1]))
+            if not script.exists() or not str(script).startswith(str(settings.parent)):
+                bad.append(c)
+    return sorted(set(bad))
 
 
 def _hook_events(settings: Path) -> list[str]:
@@ -129,7 +164,8 @@ EXPECT = {
     "E": lambda m: m["openspec_version"] == OPENSPEC_VERSION and "ecc@ecc" in (m["plugins"] or "")
     and not m["groundwork_rules"],
     "G": lambda m: m["openspec_version"] == OPENSPEC_VERSION and "ecc@ecc" in (m["plugins"] or "")
-    and bool(m["groundwork_rules"]) and m["groundwork_version"] == GROUNDWORK_REF.lstrip("v"),
+    and bool(m["groundwork_rules"]) and m["groundwork_version"] == GROUNDWORK_REF.lstrip("v")
+    and bool(m["hooks_in_settings"]) and not m["missing_hook_scripts"],
 }
 
 
@@ -142,10 +178,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--arms", default="V,E,G")
     ap.add_argument("--groundwork-ref", default=GROUNDWORK_REF)
     a = ap.parse_args(argv)
-    before = plist_hash()
+    import time
+    before, rc_before, started = plist_hash(), arms.owner_rc_hashes(), time.time()
     for arm in a.arms.split(","):
         print(f"== arm {arm} ==", flush=True)
         arms.arm_dirs(arm)["config"].mkdir(parents=True, exist_ok=True)
+        arms.make_home(arm)
         make_bin(arm)
         if arm in ("E", "G"):
             install_openspec(arm)
@@ -154,6 +192,13 @@ def main(argv: list[str] | None = None) -> int:
             install_groundwork(arm, a.groundwork_ref)
     if plist_hash() != before:
         print("FAILED: the owner's report launchd plist changed during preparation", file=sys.stderr)
+        return 3
+    if arms.owner_rc_hashes() != rc_before:
+        print("FAILED: the owner's shell startup files changed during preparation", file=sys.stderr)
+        return 3
+    touched = arms.owner_touched(started, [str(arms.bench_home())])
+    if touched:
+        print(f"FAILED: preparation wrote bench data into the owner's files: {touched}", file=sys.stderr)
         return 3
     meta = {arm: describe(arm) for arm in arms.ARMS if arms.arm_dirs(arm)["config"].exists()}
     meta["_groundwork_ref"] = a.groundwork_ref  # type: ignore[assignment]
