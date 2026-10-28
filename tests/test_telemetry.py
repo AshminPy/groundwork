@@ -3,6 +3,7 @@
 
 Run: python3 tests/test_telemetry.py   (or: python3 -m pytest tests -q)
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import importlib.util
 import json
 import os
@@ -12,6 +13,8 @@ import tempfile
 import time
 from pathlib import Path
 
+# Additive per-turn facts (openspec/changes/add-accuracy-signals D2): citations always; the rest only when known.
+OBSERVED_OPTIONAL = {"citations", "ctx_pct", "cost_usd", "cost_age_s", "head", "repo"}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK = REPO_ROOT / "hooks" / "groundwork_telemetry.py"
 
@@ -171,7 +174,7 @@ def test_telemetry_hook() -> None:
         check("exit 0 and silent", r.returncode == 0 and r.stdout.strip() == "" and r.stderr.strip() == "", r.stdout + r.stderr)
         check("one record appended", events.is_file() and len(events.read_text().splitlines()) == 1)
         rec = last(events); ob, de = rec["observed"], rec["declared"]
-        check("schema 2 with observed / declared split", rec["schema"] == 2 and set(ob) == {"profile", "tools", "mcp_servers", "agent_calls", "agent_types", "files_changed", "tests_run", "implementation_performed", "deployment_performed"} and set(de) == {"block_present", "playbook", "execution_mode", "agent_count", "agent_roles", "evidence_sources", "validation", "environment", "outcome", "clarification_required"}, json.dumps(rec))
+        check("schema 2 with observed / declared split", rec["schema"] == 2 and set(ob) - OBSERVED_OPTIONAL == {"profile", "tools", "mcp_servers", "agent_calls", "agent_types", "files_changed", "tests_run", "implementation_performed", "deployment_performed"} and "citations" in ob and set(de) == {"block_present", "playbook", "execution_mode", "agent_count", "agent_roles", "evidence_sources", "validation", "environment", "outcome", "clarification_required"}, json.dumps(rec))
         check("identifiers and version", rec["session_id"] == "sess-1" and rec["prompt_id"] == "p-9" and rec["harness_version"] == "1.3.2" and rec["harness"] == "Groundwork")
         check("observed profile from GROUNDWORK_PROFILE", ob["profile"] == "work")
         check("concise block parsed: headline playbook, N subagents, evidence, validation", de["playbook"] == "IMPLEMENT" and de["execution_mode"] == "subagents" and de["agent_count"] == 2 and de["evidence_sources"] == ["repo", "tests", "runtime"] and de["validation"] == "verified", json.dumps(de))

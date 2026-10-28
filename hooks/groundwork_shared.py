@@ -9,6 +9,7 @@ helper is used by only one hook, it stays in that hook.
 import json
 import os
 import re
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -131,3 +132,40 @@ def turn_tools(data: dict, current_turn, turn_facts) -> list:
     if path and os.path.isfile(path) and current_turn is not None:
         return turn_facts(current_turn(path) or []).get("tools", [])
     return tools_since_turn_start(str(data.get("session_id") or ""))
+
+
+def signals_path() -> Path:
+    override = os.environ.get("GROUNDWORK_SIGNALS_PATH")
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    return Path(os.path.expanduser(override)) if override else base / "groundwork" / "telemetry" / "signals.jsonl"
+
+
+def append_signal(rec: dict) -> None:
+    """Owner-only append of one record to telemetry/signals.jsonl. Never follows a symlink, never blocks on a FIFO,
+    and writes only to a regular file (openspec/changes/add-accuracy-signals D6). Raises on failure; callers catch."""
+    if os.environ.get("GROUNDWORK_TELEMETRY", "").lower() == "off":
+        return
+    path = signals_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("signals path is not a regular file")
+        os.write(fd, (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def record_guardrail(session_id: str, prompt_id: str, hook: str, decision: str, cause: str = "policy",
+                     tool_use_id: str = "") -> None:
+    """One guardrail decision: hook, decision, cause and ids only. Silent and fail-open."""
+    try:
+        rec = {"schema": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "session_id": str(session_id or "unknown")[:64], "prompt_id": str(prompt_id or "")[:100],
+               "kind": "guardrail", "hook": hook, "decision": decision,
+               "cause": cause if cause in ("policy", "internal_error") else "policy"}
+        if tool_use_id:
+            rec["tool_use_id"] = str(tool_use_id)[:100]
+        append_signal(rec)
+    except Exception:
+        pass

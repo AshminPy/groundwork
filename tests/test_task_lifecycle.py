@@ -7,6 +7,7 @@ The hook is driven exactly as Claude Code drives it: a JSON payload on stdin, in
 with CLAUDE_CONFIG_DIR pointing at a temporary directory (the developer's own ~/.claude is never touched).
 Steps that need the OpenSpec CLI fall back to writing the change by hand when it is not on PATH.
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import json
 import os
 import shutil

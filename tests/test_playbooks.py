@@ -5,6 +5,7 @@ Run: python3 tests/test_playbooks.py   (or: python3 -m pytest tests -q)
 Proves the artefacts and the install layout. It does NOT prove that Claude routes correctly —
 that is model behaviour; see scripts/check_routing.py for the live scenario check.
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import json
 import os
 import re

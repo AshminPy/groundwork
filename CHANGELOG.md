@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **Performance gaps (accuracy signals).** The dashboard and the Markdown snapshot gain a Performance gaps section
+  with one metric per question. Each shows its count, definition and labels (observed, declared, pattern, estimate,
+  opt-in). Below 5 cases it shows "insufficient data (n)"; 5 to 19 cases are marked "low data". The questions:
+  - 1a says complete while its last test failed;
+  - 1b says verified with no check of any kind;
+  - 2 final test state per file-changing turn;
+  - 3a, 3b MATERIAL work shipped before a clean review, and first reviews that found defects (task ledger);
+  - 3c reviews outside the ledger;
+  - 4 user corrections within 2 hours (pattern-matched);
+  - 5 citations that resolve;
+  - 6 CI on commits (opt-in `generate --github`, read-only through your `gh` login);
+  - 7 guardrail firings and follow-through;
+  - 8 cost per completed turn (estimate);
+  - 9 before and after compaction;
+  - 10 by harness version;
+  - 11 replies sent back by the reply check or review gate.
+
+  A turn is (`session_id`, `prompt_id`); several Stops of one prompt are merged. New collection, from documented hook
+  fields only, storing no prompt, reply or command text:
+  - Bash call kind (`test`, `check`, `deploy`, `runtime_read`), result (`pass`, `fail`, `unknown`), and a
+    `git_commit` flag;
+  - `prompt_id` and `tool_use_id` on tool rows;
+  - review results (completed `Agent` reviews and `SubagentStop`), user-correction flags (`UserPromptSubmit`) and
+    compactions (`PostCompact`), in `signals.jsonl`;
+  - citations, context and cost readings, and on commit turns `head` and `owner/repo`, on the per-turn record;
+  - deny, ask and block records from the push guard, task gate, review gate and reply check.
+
+  The telemetry hook is now registered on six events (18 hook entries in all). The "Verified outcome" card is
+  renamed "Complete + test-shaped command", since it is a broad match that ignores results. Test runs no longer write
+  the real telemetry folder. (`openspec/changes/add-accuracy-signals/`)
 - **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
   and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the
   context-window % at task end (`observed.ctx_pct`, from the session's latest statusLine reading, if under 15 minutes

@@ -14,8 +14,8 @@
 #     groundwork_task_gate.py, groundwork_tasks.py, groundwork_reply_check.py, groundwork_brief.py, and the retired owner commands
 #     ~/.claude/commands/gw-approve.md and gw-cancel.md that earlier builds installed
 #     (the task ledger under ~/.claude/groundwork/tasks/ is kept — it is your data)
-#   - the hook entries (seven hook scripts; groundwork_telemetry.py registers three — Stop,
-#     PostToolUse, PostToolUseFailure — groundwork_task_gate.py four, groundwork_reply_check.py
+#   - the hook entries (seven hook scripts; groundwork_telemetry.py registers six — Stop,
+#     PostToolUse, PostToolUseFailure, SubagentStop, UserPromptSubmit, PostCompact — groundwork_task_gate.py four, groundwork_reply_check.py
 #     two, and groundwork_brief.py three), the deny rules,
 #     and the env defaults this repo's install.sh added to settings.json (via
 #     scripts/unmerge_settings.py)

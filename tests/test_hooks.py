@@ -11,6 +11,7 @@ see docs/VALIDATION.md for how they connect to real, live tests.
 AssertionError when any check failed, so pytest reports a real failure (an earlier
 version only printed FAIL lines and pytest still showed "passed").
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import importlib.util
 import json
 import os
@@ -1553,10 +1554,10 @@ def test_settings_merge() -> None:
         fresh = tmp / "fresh.json"
         r = run_script(MERGE, args=[str(fresh)])
         data = load(fresh)
-        events = ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "PreCompact")
+        events = ("PreToolUse", "Stop", "SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "PreCompact", "SubagentStop", "PostCompact")
         cmds = [h["command"] for ev in events for g in data["hooks"][ev] for h in g["hooks"]]
-        check("fresh: fifteen hook entries registered (seven hook scripts; telemetry three times, task gate four times, reply check twice, brief three times)",
-              len(cmds) == 15 and sum(1 for c in cmds if "telemetry" in c) == 3 and sum(1 for c in cmds if "task_gate" in c) == 4
+        check("fresh: eighteen hook entries registered (seven hook scripts; telemetry six times, task gate four times, reply check twice, brief three times)",
+              len(cmds) == 18 and sum(1 for c in cmds if "telemetry" in c) == 6 and sum(1 for c in cmds if "task_gate" in c) == 4
               and sum(1 for c in cmds if "reply_check" in c) == 2 and sum(1 for c in cmds if "groundwork_brief" in c) == 3
               and any("snapshot" in c for c in cmds) and "UserPromptExpansion" not in data["hooks"], r.stdout)
         check("fresh: SessionStart entry has a timeout", data["hooks"]["SessionStart"][0]["hooks"][0].get("timeout") == 10, json.dumps(data["hooks"]["SessionStart"]))

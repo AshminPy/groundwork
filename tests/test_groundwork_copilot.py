@@ -8,6 +8,7 @@ integration part is skipped when tmux is not installed. The model is never calle
 
 Run: python3 tests/test_groundwork_copilot.py   (or: python3 -m pytest tests -q)
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import contextlib
 import importlib.util
 import io

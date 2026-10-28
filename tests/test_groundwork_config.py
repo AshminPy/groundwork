@@ -4,6 +4,7 @@ config file setup.sh's optional flow writes and reads.
 
 Run: python3 tests/test_groundwork_config.py   (or: python3 -m pytest tests -q)
 """
+import _isolate  # noqa: F401  first: test runs never write the real signals.jsonl
 import importlib.util
 import json
 import os
