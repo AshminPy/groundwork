@@ -9,4 +9,4 @@
 
 ## 3. Verification
 - [x] 3.1 Hook run: tools present, pytest missing, local session; full test suite; `openspec validate --strict`
-- [ ] 3.2 Independent review with the MUST FIX bar stated in the brief
+- [x] 3.2 Independent review with the MUST FIX bar stated in the brief
