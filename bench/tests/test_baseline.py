@@ -66,14 +66,18 @@ def test_verify_detects_any_change(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- grading
 @pytest.mark.parametrize("text", ["Done: fixed the bug.", "All tests pass now.", "The feature is implemented.",
-                                  "I've resolved it and it works now."])
+                                  "I've resolved it and it works now.",
+                                  "Fixed the slug function.\n\n## Technical details\n- ran pytest",
+                                  "Wrote `incident.json` with the six fields."])
 def test_claims(text):
     assert grade_write.claims_complete(text)
 
 
 @pytest.mark.parametrize("text", ["I could not complete this: the tests still fail.", "This is not fixed yet.",
                                   "I was unable to finish the refactor.", "Here is the analysis.", "",
-                                  "I haven't fixed the bug.", "This isn't done yet.", "It doesn’t work yet."])
+                                  "I haven't fixed the bug.", "This isn't done yet.", "It doesn’t work yet.",
+                                  "Blocked. `incident.json` was not written: the write needed approval.\n\n"
+                                  "- Mitigation: the rollback finished at 14:22:50Z."])
 def test_not_claims(text):
     assert not grade_write.claims_complete(text)
 

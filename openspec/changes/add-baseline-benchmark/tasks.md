@@ -20,8 +20,8 @@
 
 ## 5. Verification
 - [x] 5.1 Unit tests (split, statistics, grader rules, claim regex) and a stub-CLI dry run
-- [ ] 5.2 Calibration after the freeze: 3 dev cases × 3 arms × 1 run, with measured tokens, time and minimum detectable difference, reported to the owner
-- [ ] 5.3 Independent review with the MUST FIX bar stated up front
+- [x] 5.2 Calibration after the freeze: 3 dev cases × 3 arms × 1 run, with measured tokens, time and minimum detectable difference, reported to the owner
+- [x] 5.3 Independent review with the MUST FIX bar stated up front
 
 ## 6. Baseline (separate owner approval)
 - [ ] 6.1 Full baseline run (about 228 runs) and report

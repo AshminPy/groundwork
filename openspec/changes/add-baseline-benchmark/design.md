@@ -202,3 +202,18 @@ Changes from the plan found during implementation, all applied equally to every 
   every arm (the Bash sandbox does not cover file tools, and a bare `Write` allow rule permits any path). Edit and
   Write are now auto-approved only for `./**`; anything else needs a prompt, which `--permission-prompts none`
   denies. The canary's Write-outside probe now passes in V and G, and a write inside still succeeds.
+
+## Calibration result (2026-10-28, `bench/results/calibration-1/`)
+
+3 dev cases × 3 arms × 1 run, after the freeze, in a Linux cloud container; canary passed on every arm.
+- Completed: V 3/3, E 3/3, G 2/3. G's miss (s01) is a Groundwork behaviour: prompt intake classified an incident-log
+  analysis as a high-risk MATERIAL task (its text names "deploy" and "rollback" as answer values), and the task gate
+  returned `ask` on writing `incident.json`, which `--permission-prompts none` turns into a denial. Scored as is (B2).
+- Median per run: wall 11 s (V), 18 s (E), 24 s (G); tokens (output + uncached input) 10.6k (V), 30.5k (E), 51.6k (G);
+  cache reads 57k, 108k, 166k. Denials: 0, 3, 5 (E and G include ECC's first-Bash "Fact-Forcing Gate").
+- Full-run estimate: about 1.2 h of agent time plus about 40 min of canary per phase start, far below the 6–20 h
+  planned estimate. MDD at 14 held-out cases is on the order of 45 points (3 cases × 1 run: order of magnitude only).
+- Grader fix found here: the claim check read the whole answer and matched a quoted log line ("rollback finished");
+  it now reads only the answer's first paragraph. The grader was re-frozen; no dev or held-out run had happened.
+- Ceiling risk: V completed every calibration case. If the baseline cases are this easy for plain Claude Code, the
+  benchmark can only show "no measurable difference" or "worse" on completion; cost will still be measured.

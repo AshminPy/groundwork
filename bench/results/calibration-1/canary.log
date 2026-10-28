@@ -1,0 +1,48 @@
+canary metadata: PASS []
+canary arm=V file-probe=0 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V file-probe=1 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V file-probe=2 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V file-probe=3 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V file-probe=4 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V file-probe=5 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=V sandbox-probe=bash-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=bash-secret: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=bash-network: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=subagent-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=bash-env: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=bash-write-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=bash-symlink-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=read-tool-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=V sandbox-probe=write-tool-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E file-probe=0 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E file-probe=1 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E file-probe=2 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E file-probe=3 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E file-probe=4 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E file-probe=5 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=E sandbox-probe=bash-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=bash-secret: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=bash-network: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=subagent-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=bash-env: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=bash-write-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=bash-symlink-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true, "retried": true}
+canary arm=E sandbox-probe=read-tool-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=E sandbox-probe=write-tool-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G file-probe=0 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G file-probe=1 Read: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G file-probe=2 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G file-probe=3 Grep: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G file-probe=4 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G file-probe=5 Glob: PASS {"attempted": true, "refused": true, "leaked": [], "passed": true}
+canary arm=G sandbox-probe=bash-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=bash-secret: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=bash-network: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=subagent-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=bash-env: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=bash-write-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=bash-symlink-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=read-tool-key: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary arm=G sandbox-probe=write-tool-outside: PASS {"attempted": true, "leaked": [], "escaped": false, "passed": true}
+canary owner files untouched: PASS []
+canary: read PASS, sandbox PASS

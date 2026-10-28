@@ -1,0 +1,92 @@
+{
+ "run_id": "calibration-1",
+ "phase": "calibration",
+ "finished_at": "2026-10-28T21:55:22+00:00",
+ "arms": [
+  "V",
+  "E",
+  "G"
+ ],
+ "cases": [
+  "c01-slugify-unicode",
+  "s01-incident-timeline",
+  "l03-rate-limiter"
+ ],
+ "repeats": 1,
+ "model": "sonnet",
+ "effort": "medium",
+ "stop_reason": null,
+ "canary": {
+  "read_ok": true,
+  "sandbox_ok": true
+ },
+ "read_only_only": false,
+ "code_commit": "bd14eab6effe",
+ "frozen_at": "2026-10-28T21:45:33+00:00",
+ "planned_runs": {
+  "V": 76,
+  "E": 76,
+  "G": 76
+ },
+ "new_ledger_entries": {
+  "V": [],
+  "E": [],
+  "G": [
+   "repo-0aefbc3030",
+   "repo-e071559899"
+  ]
+ },
+ "arms_meta": {
+  "V": {
+   "arm": "V",
+   "config_dir": "/root/gw-bench/V/config",
+   "claude_version": "2.1.312 (Claude Code)",
+   "plugins": "No plugins installed. Use `claude plugin install` to install a plugin.",
+   "openspec_path": null,
+   "openspec_version": null,
+   "groundwork_version": null,
+   "groundwork_rules": [],
+   "hooks_in_settings": [],
+   "missing_hook_scripts": []
+  },
+  "E": {
+   "arm": "E",
+   "config_dir": "/root/gw-bench/E/config",
+   "claude_version": "2.1.312 (Claude Code)",
+   "plugins": "Installed plugins:\n\n  > ecc@ecc\n    Version: 2.2.1\n    Scope: user\n    Status: \u221a enabled\n    Note: The packages it lists were not installed, because its package.json sets overrides, which this install does not apply",
+   "openspec_path": "/root/gw-bench/E/bin/openspec",
+   "openspec_version": "1.13.2",
+   "groundwork_version": null,
+   "groundwork_rules": [],
+   "hooks_in_settings": [],
+   "missing_hook_scripts": []
+  },
+  "G": {
+   "arm": "G",
+   "config_dir": "/root/gw-bench/G/config",
+   "claude_version": "2.1.312 (Claude Code)",
+   "plugins": "Installed plugins:\n\n  > ecc@ecc\n    Version: 2.2.1\n    Scope: user\n    Status: \u221a enabled\n    Note: The packages it lists were not installed, because its package.json sets overrides, which this install does not apply",
+   "openspec_path": "/root/gw-bench/G/bin/openspec",
+   "openspec_version": "1.13.2",
+   "groundwork_version": "2.5.0",
+   "groundwork_rules": [
+    "architecture-quality.md",
+    "engineering-workflow.md",
+    "evidence-policy.md",
+    "output-contract.md",
+    "task-routing.md"
+   ],
+   "hooks_in_settings": [
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PreCompact",
+    "PreToolUse",
+    "SessionStart",
+    "Stop",
+    "UserPromptSubmit"
+   ],
+   "missing_hook_scripts": []
+  },
+  "_groundwork_ref": "v2.5.0"
+ }
+}
