@@ -198,3 +198,7 @@ Changes from the plan found during implementation, all applied equally to every 
 - **Freeze coverage** adds a protocol fingerprint (arms, run, stats, report, canary, adapter, prepare_arms), so the
   decision rule and arm setup cannot change after the freeze unnoticed. A second held-out run is refused.
 - **Arm-neutral workspaces:** a run's folder name is a hash, so the path does not tell the agent its arm.
+- **File tools scoped to the workspace.** The first full canary showed the Write tool writing outside the workspace in
+  every arm (the Bash sandbox does not cover file tools, and a bare `Write` allow rule permits any path). Edit and
+  Write are now auto-approved only for `./**`; anything else needs a prompt, which `--permission-prompts none`
+  denies. The canary's Write-outside probe now passes in V and G, and a write inside still succeeds.

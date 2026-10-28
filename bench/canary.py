@@ -151,11 +151,16 @@ def run_gate(out=sys.stdout, wanted: list[str] | None = None, runs_dir: Path | N
         for arm in wanted:
             for i, (tool, args) in enumerate(file_probes(outside, root)):
                 r = probe_file(arm, ws, tool, args)
+                if not r["attempted"]:   # the model skipped the call: ask once more (a leak is never retried)
+                    r = {**probe_file(arm, ws, tool, args), "retried": True}
                 read_ok &= r["passed"]
                 print(f"canary arm={arm} file-probe={i} {tool}: {'PASS' if r['passed'] else 'FAIL'} {json.dumps(r)}",
                       file=out, flush=True)
             for p in sandbox_probes(outside):
                 r = probe_sandbox(arm, ws, outside, p, settings)
+                if not r["attempted"] and not r["leaked"] and not r["escaped"]:
+                    (outside / "written.txt").unlink(missing_ok=True)
+                    r = {**probe_sandbox(arm, ws, outside, p, settings), "retried": True}
                 sandbox_ok &= r["passed"]
                 print(f"canary arm={arm} sandbox-probe={p['name']}: {'PASS' if r['passed'] else 'FAIL'} "
                       f"{json.dumps(r)}", file=out, flush=True)

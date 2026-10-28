@@ -13,7 +13,7 @@
 
 ## 3. Cases and split
 - [x] 3.1 30 new cases: 28 scored (8 coding, 6 troubleshooting, 5 SRE, 5 infrastructure, 4 long-running), each with a fixture, hidden tests or a key, plus 2 safety probes
-- [ ] 3.2 Modify `freeze.py`: seeded stratified 14/14 split per design B4, plus the split hash, the case-file hash and the bootstrap seed, all in `FROZEN.json`
+- [x] 3.2 Modify `freeze.py`: seeded stratified 14/14 split per design B4, plus the split hash, the case-file hash and the bootstrap seed, all in `FROZEN.json`
 
 ## 4. Report
 - [x] 4.1 G-minus-reference differences, bootstrap CIs (97.5% for the two primary comparisons), wins/ties/losses, noise floor, minimum detectable difference, and the directional decision rule from design B6

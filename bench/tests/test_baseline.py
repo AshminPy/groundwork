@@ -174,6 +174,10 @@ def test_write_settings(tmp_path):
     a = arms.argv("E", "write", "sonnet", "medium", settings=s)
     assert json.loads(a[a.index("--settings") + 1]) == s
     assert a[a.index("--tools") + 1] == arms.WRITE_TOOLS
+    allowed = a[a.index("--allowedTools") + 1].split(",")
+    assert "Edit(./**)" in allowed and "Write(./**)" in allowed and "Edit" not in allowed and "Write" not in allowed
+    r = arms.argv("E", "read", "sonnet", "medium")
+    assert r[r.index("--allowedTools") + 1] == arms.READ_TOOLS
 
 
 def test_arm_order_rotates():

@@ -148,6 +148,16 @@ def deny_roots(runs_dir: Path) -> list[str]:
     return [str(p.resolve()) for p in cands if p.exists()]
 
 
+def write_allowed(tools: str) -> str:
+    """Auto-approve Edit and Write only inside the working directory (`./**`). The Bash sandbox does not cover the
+    file tools, and a bare `Write` rule lets them write anywhere (seen in the canary); outside paths now need a prompt,
+    which `--permission-prompts none` denies."""
+    out = []
+    for t in tools.split(","):
+        out.append(f"{t}(./**)" if t in ("Edit", "Write") else t)
+    return ",".join(out)
+
+
 def argv(arm: str, kind: str, model: str, effort: str, settings: dict | None = None,
          max_turns: int | None = None, tools: str | None = None) -> list[str]:
     if kind == "read":
@@ -155,9 +165,10 @@ def argv(arm: str, kind: str, model: str, effort: str, settings: dict | None = N
     else:
         flags = ["--setting-sources", "user", "--strict-mcp-config", "--settings", json.dumps(settings)]
         tools = tools or WRITE_TOOLS
+    allowed = tools if kind == "read" else write_allowed(tools)
     out = [arm_claude(arm), "-p", "--output-format", "stream-json", "--verbose", "--include-hook-events",
            "--permission-prompts", "none", *flags, "--model", model, "--effort", effort,
-           "--tools", tools, "--allowedTools", tools, "--no-session-persistence"]
+           "--tools", tools, "--allowedTools", allowed, "--no-session-persistence"]
     return out + (["--max-turns", str(max_turns)] if max_turns else [])
 
 
