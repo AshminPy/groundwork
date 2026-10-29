@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Faster, accurate changes.** `rules/engineering-workflow.md` adds three rules:
+  - every claim a design makes about existing code cites `path:line` and is checked before review;
+  - the reviewer's brief states the existing MUST FIX bar before the review, and pattern-matched edge cases are NICE TO HAVE;
+  - when a task includes pushing or runs in an ephemeral container, the feature branch is pushed after each green step.
+
+  Cloud environments for this repository get pytest and OpenSpec 1.13.2 (the repo's last verified version) from an explicit, pinned
+  `scripts/cloud-setup.sh` (set it as the environment's setup script); a check-only SessionStart hook
+  (`.claude/hooks/session-start.sh`) sets `PYTHONDONTWRITEBYTECODE` and names missing tools. Neither is installed for users.
+  (`openspec/changes/fast-accurate-workflow/`)
+
 ## 2.5.0 — 2026-10-26
 
 - **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`
