@@ -67,6 +67,8 @@ def render(results: Path, meta: dict, frozen: dict) -> str:
               "gated. Cost fields from Claude Code are list-price estimates and are not used."]
     if phase == "held":
         lines += _decision(rs, meta, frozen)
+    elif phase == "focused":
+        lines += _focused(rs, meta)
     elif phase == "calibration":
         lines += _calibration(rs, meta)
     lines += ["", "## Per run", "", "| Case | Arm | Rep | Completed | Claim | Wall s | Tokens | Error |",
@@ -105,6 +107,48 @@ def _decision(rs: list[dict], meta: dict, frozen: dict) -> list[str]:
     out += ["", f"Noise floor (V repeat 1 − repeat 2, {nf['n']} cases): mean {_f(nf['mean'], True)}, 95% CI "
                 f"[{_f(nf['ci'][0], True)}, {_f(nf['ci'][1], True)}].",
             "This is a screening result: 14 held-out cases can only detect large differences (see MDD)."]
+    return out
+
+
+FOCUSED_NOTE = ("**Directional pilot, not statistical proof.** 10 cases × 1 run per arm cannot show that one arm is "
+                "better than another; it can only point at large differences worth a fuller test (design B8).")
+FAIRNESS = ("All arms: same model, effort, tools, time limit, Bash sandbox, workspace-only Edit/Write and "
+            "`--permission-prompts none`; each has its own config dir, HOME and PATH. Unattended permission requests "
+            "count as failures (unattended use) and are listed as denials. G runs Groundwork 2.5.0 with its hook "
+            "commands repointed to its own config dir, a documented workaround for 2.5.0 hard-coding `~/.claude`.")
+
+
+def _focused(rs: list[dict], meta: dict) -> list[str]:
+    scored = [r for r in rs if (r.get("grade") or {}).get("kind") == "write"]
+    probes = [r for r in rs if (r.get("grade") or {}).get("kind") == "probe"]
+    cost = stats.costs(scored) if scored else {}
+    done = {(r["case"], r["arm"]): bool(r["grade"].get("completed")) for r in scored}
+    cases = sorted({r["case"] for r in scored})
+    out = ["", "## Focused pilot", "", FOCUSED_NOTE, "", FAIRNESS, "",
+           "| Arm | Completed | Denials | Median wall s | Median tokens |", "|---|---|---|---|---|"]
+    for arm in ARMS:
+        if arm in cost:
+            n = sum(done.get((c, arm), False) for c in cases)
+            den = sum(r.get("permission_denials", 0) for r in scored if r["arm"] == arm)
+            out.append(f"| {arm} | {n}/{len(cases)} | {den} | {cost[arm]['median_wall_s']:.0f} | "
+                       f"{_f(cost[arm]['median_tokens'])} |")
+    out += ["", "| Comparison | G wins | Ties | G losses | Reading |", "|---|---|---|---|---|"]
+    for ref in ("E", "V"):
+        if "G" not in cost or ref not in cost:
+            continue
+        w = sum(done.get((c, "G"), False) and not done.get((c, ref), False) for c in cases)
+        l_ = sum(done.get((c, ref), False) and not done.get((c, "G"), False) for c in cases)
+        out.append(f"| G vs {ref} | {w} | {len(cases) - w - l_} | {l_} | "
+                   f"{stats.focused_reading(done, cases, ref, cost, stats.probes_pass(probes, 'G'))} |")
+    out += ["", "### Safety probes (separate from the 30 scored runs)", "", "| Probe | Arm | Passed | Detail |",
+            "|---|---|---|---|"]
+    for r in sorted(probes, key=lambda r: (r["case"], r["arm"])):
+        g = r["grade"]
+        detail = ", ".join(f"{k}={v}" for k, v in g.items() if k not in ("kind", "probe", "probe_pass", "claims_complete"))
+        out.append(f"| {r['case']} | {r['arm']} | {g.get('probe_pass')} | {detail} |")
+    out += ["", "### Per case", "", "| Case | V | E | G |", "|---|---|---|---|"]
+    for c in cases:
+        out.append(f"| {c} | " + " | ".join("pass" if done.get((c, a)) else "fail" for a in ARMS) + " |")
     return out
 
 

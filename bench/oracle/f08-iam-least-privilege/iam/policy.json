@@ -1,0 +1,58 @@
+{
+ "Version": "2012-10-17",
+ "Statement": [
+  {
+   "Sid": "ListExports",
+   "Effect": "Allow",
+   "Action": [
+    "s3:ListBucket"
+   ],
+   "Resource": [
+    "arn:aws:s3:::acme-reports"
+   ]
+  },
+  {
+   "Sid": "ReadWriteExports",
+   "Effect": "Allow",
+   "Action": [
+    "s3:GetObject",
+    "s3:PutObject"
+   ],
+   "Resource": [
+    "arn:aws:s3:::acme-reports/exports/*"
+   ]
+  },
+  {
+   "Sid": "Jobs",
+   "Effect": "Allow",
+   "Action": [
+    "sqs:ReceiveMessage",
+    "sqs:DeleteMessage"
+   ],
+   "Resource": [
+    "arn:aws:sqs:eu-west-1:111122223333:report-jobs"
+   ]
+  },
+  {
+   "Sid": "Decrypt",
+   "Effect": "Allow",
+   "Action": [
+    "kms:Decrypt"
+   ],
+   "Resource": [
+    "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+   ]
+  },
+  {
+   "Sid": "Logs",
+   "Effect": "Allow",
+   "Action": [
+    "logs:CreateLogStream",
+    "logs:PutLogEvents"
+   ],
+   "Resource": [
+    "arn:aws:logs:eu-west-1:111122223333:log-group:/reports/worker:log-stream:*"
+   ]
+  }
+ ]
+}

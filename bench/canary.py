@@ -25,7 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import arms, prepare_arms
+from . import arms, grader_sandbox, prepare_arms
 
 KEY_DIR = Path.home() / "groundwork-bench-keys"
 KEY_TOKEN, SECRET_TOKEN = "GWKEY-CANARY-7731", "GWSECRET-CANARY-4419"
@@ -143,7 +143,10 @@ def run_gate(out=sys.stdout, wanted: list[str] | None = None, runs_dir: Path | N
     started = time.time()
     ok_meta, info = metadata_ok(wanted)
     print(f"canary metadata: {'PASS' if ok_meta else 'FAIL'} {json.dumps(info['bad'])}", file=out)
-    read_ok, sandbox_ok = ok_meta, ok_meta
+    grader_ok, detail = grader_sandbox.isolation_check()
+    print(f"canary grader sandbox ({grader_sandbox.kind()}): {'PASS' if grader_ok else 'FAIL'} "
+          f"{'' if grader_ok else detail[-500:]}", file=out, flush=True)
+    read_ok, sandbox_ok = ok_meta and grader_ok, ok_meta and grader_ok
     with tempfile.TemporaryDirectory(prefix="gw-canary-") as tmp:
         root = Path(tmp).resolve()
         ws, outside = layout(root)

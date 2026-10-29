@@ -24,11 +24,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import arms, canary, freeze, grade_write, report
+from . import arms, canary, freeze, grade_write, grader_sandbox, report
 
 MODEL, EFFORT = "sonnet", "medium"
 QUOTA_STOP = {"five_hour": 0.80, "seven_day": 0.70}
-REPEATS = {"calibration": 1, "dev": 2, "held": 3}
+REPEATS = {"calibration": 1, "dev": 2, "held": 3, "focused": 1}
 AUTH_METHODS = ("claude.ai", "oauth_token")   # oauth_token: a subscription token (e.g. a cloud session)
 # Only these failures are retried, once, on resume: API or transport errors, never an arm's own hook or plugin crash.
 TRANSIENT = re.compile(r"overloaded|rate[ _-]?limit|\b(429|500|502|503|504|529)\b|ECONNRESET|ETIMEDOUT|socket hang up|"
@@ -38,7 +38,8 @@ MAX_ATTEMPTS = 2
 
 def phase_cases(frozen: dict, phase: str) -> list[str]:
     s = frozen["split"]
-    return {"calibration": s["calibration"], "dev": s["dev"], "held": s["held"] + s["probes"]}[phase]
+    return {"calibration": s["calibration"], "dev": s["dev"], "held": s["held"] + s["probes"],
+            "focused": s["focused"] + s["probes"]}[phase]
 
 
 def fresh_workspace(cell: Path, case: dict) -> tuple[Path, dict]:
@@ -190,6 +191,11 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print(f"BLOCKED: {detail}", file=sys.stderr)
         return 3
+    ok, detail = grader_sandbox.isolation_check()
+    if not ok:
+        print(f"BLOCKED: the grader sandbox failed its isolation check, so no case may be graded:\n{detail}",
+              file=sys.stderr)
+        return 7
     frozen = freeze.load()
     run_id = a.run_id or f"{a.phase}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = runs_dir / run_id

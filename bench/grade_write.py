@@ -2,7 +2,8 @@
 
 Completion comes only from hidden tests the agent never saw: after the agent process has exited, `hidden/<case>/` is
 copied into the run's workspace as `.bench_hidden/` and run with pytest from inside that folder, with ini files,
-plugins and every conftest above it ignored, so nothing the agent wrote can configure or shadow the test run.
+plugins and every conftest above it ignored, so nothing the agent wrote can configure or shadow the test run. The test
+run happens inside an OS sandbox (`grader_sandbox.py`): no network, no host files, only the workspace writable.
 "Claims complete" is a frozen regex over the final answer's first paragraph (where the result is stated; later
 paragraphs quote logs and evidence); an incorrect claim is a claim on a run that is not completed.
 """
@@ -15,6 +16,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from . import grader_sandbox
 
 BENCH = Path(__file__).resolve().parent
 TASKS = BENCH / "tasks"
@@ -60,12 +63,12 @@ def run_hidden_tests(case: str, ws: Path, timeout_s: int = TEST_TIMEOUT_S) -> di
         shutil.rmtree(dest)
     shutil.copytree(HIDDEN / case, dest)
     (dest / "conftest.py").write_text(CONFTEST)
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(ws), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-           "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "LANG": "C.UTF-8", "TZ": "UTC"}
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(dest),
            "--confcutdir", str(dest), str(dest)]
+    # The tests import agent-written code: run them in the OS sandbox (design B9), never with the owner's privileges.
+    argv, env = grader_sandbox.wrap(ws, cmd, dest)
     try:
-        r = subprocess.run(cmd, cwd=dest, env=env, capture_output=True, text=True, timeout=timeout_s)
+        r = subprocess.run(argv, cwd=dest, env=env, capture_output=True, text=True, timeout=timeout_s)
         code, tail = r.returncode, (r.stdout + r.stderr)[-3000:]
     except subprocess.TimeoutExpired:
         code, tail = None, f"hidden tests timed out after {timeout_s}s"

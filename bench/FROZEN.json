@@ -1,7 +1,7 @@
 {
- "grader_sha256": "2c03bc9129920b96e26a8df10070b10c03110340a97edb766a396707947fa937",
- "cases_sha256": "8190e271e4e07db0701776d049b404712458ba81332b7d60af7104467b936add",
- "protocol_sha256": "8a21a6896eb32c50a342c3bcadd2e6213037610986bce559a1cd54f020f049b6",
+ "grader_sha256": "6bfa51a33f620fd829cb2eb2c82355425a09493142f8e4e03495ed1d1ab7e624",
+ "cases_sha256": "b9165fe706616958521a8abf3c060e3b93eda252a222767f752385c594048618",
+ "protocol_sha256": "2f9cbdefab26aee751631362efb47f3bcd37cdd98135bffa61f6c8ef6f31a34b",
  "seed": 20261028,
  "bootstrap_seed": 7331,
  "split": {
@@ -45,8 +45,20 @@
    "c01-slugify-unicode",
    "s01-incident-timeline",
    "l03-rate-limiter"
+  ],
+  "focused": [
+   "f01-dst-free-slots",
+   "f02-money-allocation",
+   "f03-cache-key-collision",
+   "f04-out-of-order-events",
+   "f05-clock-skew-timeline",
+   "f06-burn-rate-alerts",
+   "f07-k8s-broken-rollout",
+   "f08-iam-least-privilege",
+   "f09-idempotent-retries",
+   "f10-customer-migration"
   ]
  },
- "frozen_at": "2026-10-28T21:57:52+00:00",
+ "frozen_at": "2026-10-29T06:06:30+00:00",
  "m2_legacy_sha256": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79"
 }

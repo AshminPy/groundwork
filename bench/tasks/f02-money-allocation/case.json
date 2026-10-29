@@ -1,0 +1,9 @@
+{
+ "id": "f02-money-allocation",
+ "category": "coding",
+ "kind": "write",
+ "fixture": "f02-money-allocation",
+ "timeout_s": 300,
+ "suite": "focused",
+ "trap": "float rounding makes split amounts not add up; currencies have 0, 2 or 3 minor units; refunds are negative"
+}

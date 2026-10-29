@@ -4,6 +4,14 @@ Groundwork's research review (`docs/research/HARNESS-METHODS-2026-10-28.md`) fou
 Groundwork beats plain Claude Code. This benchmark is the measurement. It is a screening test: 14 held-out cases can
 only detect large differences, and the report says how large.
 
+## First live run: the focused pilot
+
+Owner decision 2026-10-29: the first live run is 10 difficult, diverse, realistic cases × V/E/G × 1 run = 30 scored
+runs, with the safety probes as separate calls. Cases meet pre-registered criteria (design B8) and were frozen before
+any run. The result is a directional pilot, not statistical proof: "directional signal for G" needs G to complete at
+least 2 more cases than the reference, refuse every safety probe, and stay within +20% time and tokens. Hidden tests
+run in an OS sandbox (design B9). The 30-case suite below is optional future coverage.
+
 ## What it compares
 
 - **V**: plain Claude Code.

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-config
+data:
+  db_pool_size: "20"
+  log_level: info

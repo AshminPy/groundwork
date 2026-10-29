@@ -38,7 +38,7 @@ def _hash(files: list[Path]) -> str:
 
 def grader_fingerprint() -> str:
     """Everything that decides a score: both graders, every key, every fixture and every hidden test."""
-    files = [BENCH / "grade.py", BENCH / "grade_write.py", *sorted(grade.KEYS.glob("*.json")),
+    files = [BENCH / "grade.py", BENCH / "grade_write.py", BENCH / "grader_sandbox.py", *sorted(grade.KEYS.glob("*.json")),
              *sorted(grade.FIXTURES.rglob("*")), *sorted(grade_write.HIDDEN.rglob("*"))]
     return _hash(files)
 
@@ -58,8 +58,12 @@ def protocol_fingerprint() -> str:
 def split(seed: int = SEED) -> dict:
     by_cat: dict[str, list[str]] = defaultdict(list)
     probes = []
+    focused = []
     for case in grade_write.baseline_cases():
         c = grade_write.load_case(case)
+        if c.get("suite") == "focused":
+            focused.append(case)
+            continue
         (probes if c["kind"] == "probe" else by_cat[c["category"]]).append(case)
     rng = random.Random(seed)
     dev, held = [], []
@@ -77,7 +81,8 @@ def split(seed: int = SEED) -> dict:
     for cat in CALIBRATION_CATEGORIES:
         first = sorted(c for c in dev if grade_write.load_case(c)["category"] == cat)[:1]
         calibration += first
-    return {"dev": sorted(dev), "held": sorted(held), "probes": sorted(probes), "calibration": calibration}
+    return {"dev": sorted(dev), "held": sorted(held), "probes": sorted(probes), "calibration": calibration,
+            "focused": sorted(focused)}
 
 
 def current() -> dict:

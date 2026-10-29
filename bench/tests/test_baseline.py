@@ -18,9 +18,18 @@ CASES = build.all_cases()
 
 # ---------------------------------------------------------------- cases and split
 def test_thirty_cases_by_category():
-    counts = Counter(c["category"] for c in CASES.values())
+    counts = Counter(c["category"] for c in CASES.values() if c.get("suite") != "focused")
     assert counts == {"coding": 8, "troubleshooting": 6, "sre": 5, "infrastructure": 5, "long-running": 4, "safety": 2}
     assert sorted(grade_write.baseline_cases()) == sorted(CASES)
+
+
+def test_focused_cases_meet_the_pre_registered_bar():
+    focused = {k: c for k, c in CASES.items() if c.get("suite") == "focused"}
+    assert len(focused) == 10 and not build.check_focused(CASES)
+    calibration = set(freeze.split()["calibration"])
+    assert not calibration & set(focused)
+    for cid in focused:
+        assert grade_write.load_case(cid)["suite"] == "focused" and grade_write.load_case(cid)["trap"]
 
 
 def test_generated_files_match_the_source():
@@ -50,6 +59,7 @@ def test_split_is_seeded_stratified_and_balanced():
         h = sum(1 for c in s["held"] if cat[c] == k)
         assert abs(d - h) <= 1, k
     assert set(s["calibration"]) <= set(s["dev"]) and len(s["calibration"]) == 3
+    assert len(s["focused"]) == 10 and not set(s["focused"]) & set(s["dev"] + s["held"] + s["probes"])
     assert {cat[c] for c in s["calibration"]} == {"coding", "sre", "long-running"}
 
 
@@ -435,3 +445,62 @@ def test_slo_half_up_burn_rate_passes(tmp_path):
 def test_root_cause_wording(cid, text):
     import re
     assert all(re.search(r, text, re.I) for r in grade_write.load_case(cid)["root_cause"])
+
+
+# ---------------------------------------------------------------- grader sandbox (design B9)
+def test_grader_isolation_regression():
+    """Deterministic: inside the grader sandbox a test cannot read a host file or the owner's home, open a network
+    connection or write outside the workspace, and can still write inside it and import pytest and yaml."""
+    from bench import grader_sandbox
+    assert grader_sandbox.kind() is not None, "no grader sandbox on this machine: grading must refuse to run"
+    ok, out = grader_sandbox.isolation_check()
+    assert ok, out
+
+
+def test_grader_isolation_check_detects_a_leak():
+    from bench import grader_sandbox
+    ok, out = grader_sandbox.isolation_check(sandboxed=False)
+    assert not ok and "failed" in out
+
+
+def test_grading_refuses_without_a_sandbox(tmp_path, monkeypatch):
+    from bench import grader_sandbox
+    monkeypatch.setattr(grader_sandbox, "kind", lambda: None)
+    ws = _ws(tmp_path, "c03-lru-recency")
+    with pytest.raises(grader_sandbox.SandboxUnavailable):
+        grade_write.run_hidden_tests("c03-lru-recency", ws)
+
+
+def test_focused_reading():
+    cases = [f"k{i}" for i in range(10)]
+    cost = {"G": {"median_wall_s": 10, "median_tokens": 100}, "E": {"median_wall_s": 10, "median_tokens": 100}}
+    done = {(c, "G"): True for c in cases} | {(c, "E"): i < 7 for i, c in enumerate(cases)}
+    assert stats.focused_reading(done, cases, "E", cost, True) == "directional signal for G"
+    assert stats.focused_reading(done, cases, "E", cost, False) == "no clear signal"
+    done = {(c, "G"): i < 8 for i, c in enumerate(cases)} | {(c, "E"): i < 9 for i, c in enumerate(cases)}
+    assert stats.focused_reading(done, cases, "E", cost, True) == "no clear signal"
+    done = {(c, "G"): i < 5 for i, c in enumerate(cases)} | {(c, "E"): i < 7 for i, c in enumerate(cases)}
+    assert stats.focused_reading(done, cases, "E", cost, True) == "directional signal against G"
+
+
+def test_focused_stub_dry_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(arms, "scrub_runner_env", lambda: None)
+    monkeypatch.setenv("GW_BENCH_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GW_BENCH_STUB", str(STUB))
+    for arm in arms.ARMS:
+        (tmp_path / "home" / arm / "config").mkdir(parents=True)
+    (tmp_path / "home" / "G" / "config" / ".stub_solve").write_text("")
+    good = freeze.current()
+    monkeypatch.setattr(freeze, "verify", lambda: (True, "ok"))
+    monkeypatch.setattr(freeze, "load", lambda: good)
+    runs = tmp_path / "runs"
+    assert run.main(["--runs-dir", str(runs), "--phase", "focused", "--run-id", "f", "--skip-canary"]) == 0
+    rows = report.rows(runs / "f" / "results.jsonl")
+    scored = [r for r in rows if r["grade"]["kind"] == "write"]
+    assert len(scored) == 30 and len(rows) == 36
+    # the stub's canned answer names no root cause, so the two troubleshooting cases are rightly not completed
+    g_done = {r["case"] for r in scored if r["arm"] == "G" and r["grade"]["completed"]}
+    assert g_done == {r["case"] for r in scored if r["arm"] == "G"} - {"f03-cache-key-collision", "f04-out-of-order-events"}
+    text = (runs / "f" / "report.md").read_text()
+    assert "Directional pilot, not statistical proof" in text and "| G | 8/10 |" in text
+    assert "directional signal for G" in text and "Safety probes (separate" in text and "repointed" in text

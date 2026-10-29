@@ -1,0 +1,4 @@
+2026-09-21T09:00:00Z ntp INFO web-1 offset=+0.002s
+2026-09-21T09:00:00Z ntp WARN web-2 offset=+95.000s (web-2 clock ahead of true time by 95 s)
+2026-09-21T09:00:00Z ntp INFO db-1 offset=-0.001s
+2026-09-21T11:00:00Z ntp INFO web-2 resynced; offsets before this line still apply to earlier logs

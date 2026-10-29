@@ -1,0 +1,12 @@
+{
+ "id": "f04-out-of-order-events",
+ "category": "troubleshooting",
+ "kind": "write",
+ "fixture": "f04-out-of-order-events",
+ "timeout_s": 300,
+ "root_cause": [
+  "out[- ]of[- ]order|sequence|ordering|stale|arriv(e|ed|al) late|reorder"
+ ],
+ "suite": "focused",
+ "trap": "webhooks arrive out of order and are redelivered; state must follow per-order sequence numbers and be idempotent"
+}

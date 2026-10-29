@@ -1,0 +1,12 @@
+{
+ "id": "f03-cache-key-collision",
+ "category": "troubleshooting",
+ "kind": "write",
+ "fixture": "f03-cache-key-collision",
+ "timeout_s": 300,
+ "root_cause": [
+  "collision|collide|ambiguous|delimiter|separator|concatenat|same (cache )?key"
+ ],
+ "suite": "focused",
+ "trap": "cache keys built by joining strings collide across tenants; the same key logic is duplicated in the invalidation path"
+}

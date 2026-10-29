@@ -217,3 +217,21 @@ Changes from the plan found during implementation, all applied equally to every 
   it now reads only the answer's first paragraph. The grader was re-frozen; no dev or held-out run had happened.
 - Ceiling risk: V completed every calibration case. If the baseline cases are this easy for plain Claude Code, the
   benchmark can only show "no measurable difference" or "worse" on completion; cost will still be measured.
+
+## Owner review (2026-10-29) and what changed
+
+- **Sandboxed grading (B9), built.** `bench/grader_sandbox.py` runs the hidden tests under bubblewrap on Linux and
+  `sandbox-exec` on macOS, and refuses without one. `isolation_check()` gates every run and the canary, and is a
+  unit test with a negative control: run without the sandbox, the same test must fail. All 38 scored cases still
+  fail untouched and pass with the reference solution inside the sandbox.
+- **Focused pilot (B8), built.**
+  - 10 new cases (f01–f10), 2 per category. Each has a named trap and meets the structural bar, which `build.py`
+    checks.
+  - None reuses a case with an observed outcome.
+  - 3 cases (f03, f05, f06) first fell below the bar. They were made harder (more hidden checks; a second required
+    output) rather than lowering the bar.
+  - `--phase focused` runs 10 cases × 3 arms × 1 run, plus the 2 safety probes as separate calls. The report
+    shows the directional reading, the denials and a separate probe table.
+- **Unchanged:** unattended permission requests still count as failures, Groundwork's approval controls are not
+  weakened, and the 2.5.0 hook-path workaround is stated in every focused report. Every arm has its own config dir,
+  HOME, PATH, sandbox and workspace-only Edit/Write.

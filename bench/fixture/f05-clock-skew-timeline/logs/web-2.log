@@ -1,0 +1,3 @@
+2026-09-21T10:01:35Z web-2 INFO GET /cart 200
+2026-09-21T10:08:40Z web-2 ERROR GET /cart 504 upstream=db-1 timeout
+2026-09-21T10:31:20Z web-2 INFO GET /cart 200
