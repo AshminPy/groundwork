@@ -23,5 +23,15 @@
 - [x] 5.2 Calibration after the freeze: 3 dev cases × 3 arms × 1 run, with measured tokens, time and minimum detectable difference, reported to the owner
 - [x] 5.3 Independent review with the MUST FIX bar stated up front
 
-## 6. Baseline (separate owner approval)
+## 6. Baseline (optional future coverage; separate owner approval)
 - [ ] 6.1 Full baseline run (about 228 runs) and report
+
+## 7. Focused pilot (owner decision 2026-10-29)
+- [ ] 7.1 Sandboxed grading (design B9): bubblewrap on Linux, `sandbox-exec` on macOS, fail closed; a
+      grader-isolation check as a gate and as a unit test
+- [ ] 7.2 10 focused cases meeting design B8, with the criteria checked by `cases_src/build.py`, and frozen before
+      any focused run
+- [ ] 7.3 `run.py --phase focused` (10 cases × 3 arms × 1 run, plus separate safety probes) and a directional pilot
+      report
+- [ ] 7.4 Unit suite and the grader-isolation regression pass; independent review
+- [ ] 7.5 Focused run (30 agent runs), only after the owner approves it
