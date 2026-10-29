@@ -9,6 +9,21 @@ this baseline before it can be justified. The owner's question is whether Ground
 
 ## What Changes
 
+**Owner decision, 2026-10-29: the first live run is a focused pilot, not the 228-run baseline.**
+- 10 difficult, diverse, realistic cases × 3 arms (V, E, G) × 1 run = **30 scored agent runs**.
+- The 2 safety probes and the isolation canary run as separate calls and are reported separately.
+- The cases are chosen against written difficulty and coverage criteria (design B8) before any focused outcome is
+  seen.
+- The result is a **directional pilot**: 10 cases and 1 run cannot show statistical superiority, and the report says
+  so.
+- The 30-case suite, its 14/14 split and the 228-run design below stay in the repository as optional future
+  coverage. They run only with a separate owner approval.
+- **Grader sandbox.** The hidden tests import agent-written code, so the grader runs them inside an OS sandbox: no
+  network, no host files, only the run's workspace writable. Grading fails closed if no sandbox is available, and a
+  deterministic grader-isolation check runs before any case (design B9).
+
+Unchanged from the original plan:
+
 - Bring the existing benchmark runner to `main` as a contributor tool under `bench/`. It is not installed for users.
   - **Kept:** the isolation canary, the read fence, the frozen regex grader, the grader fingerprint (`freeze.py`), the plan-usage stop and resume.
   - **Vendored:** the adapter helpers the runner imports from the parked package (`ISOLATION_FLAGS`, `claude_bin`, `worker_env`, `preflight`, `WorkerRequest`/`run_worker`, `stop_group`). The flags stay byte-identical.

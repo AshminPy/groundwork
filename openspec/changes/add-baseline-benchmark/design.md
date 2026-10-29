@@ -129,6 +129,63 @@ Evidence, checked against the sources on 2026-10-28 (EGM review: 4 reviewers, fi
 - **The full run** is 3 arms × (14 dev × 2 + 14 held-out × 3 + 2 probes × 3) = 228 runs. It needs the owner's approval of the calibrated estimate.
 - **The existing usage stop stays** (80% of the five-hour window, 70% of the weekly limit). Resume makes a stopped run continue.
 
+**B8. Focused pilot (owner decision 2026-10-29; pre-registered before any focused run).**
+
+*Selection criteria.* A focused case is used only if it meets all six. `bench/cases_src/build.py` checks criteria 2
+and 4; the others are recorded per case.
+1. **Coverage:** 2 coding, 2 troubleshooting, 2 SRE/operations, 2 infrastructure and 2 long-running cases.
+2. **Difficulty, structural:** the reference solution changes at least 2 files or at least 30 lines, and the hidden
+   tests make at least 5 checks.
+3. **A known trap, named per case.** Each case has one real failure mode a hurried agent misses, for example
+   daylight-saving time, clock skew, cache-key collisions, event ordering, idempotency or least privilege. At least
+   2 hidden checks follow from the instruction without appearing in its examples.
+4. **Objective:**
+   - deterministic hidden tests, with no network or cloud calls;
+   - the untouched fixture fails them and the reference solution passes them.
+5. **Realistic:** modelled on a common production task, not a puzzle.
+6. **Unseen:** no focused case has a model outcome on record. In particular, none of the 3 calibration cases is
+   used. Cases are frozen (fingerprinted) before the first focused run.
+
+*Run.*
+- Each of the 10 cases runs once per arm.
+- Arm order rotates per case.
+- Model, effort, tools, time limit, sandbox and permissions are the same as for the baseline.
+- `--permission-prompts none` stays. An unattended permission request is a failure for the completion metric, which
+  measures unattended use, and the report lists denials separately.
+- Groundwork's approval controls are not weakened.
+
+*Report and directional reading (pre-registered).* The report shows:
+- per-case outcomes;
+- completed per arm (out of 10);
+- paired wins, ties and losses for G vs E and G vs V;
+- median time and tokens per arm;
+- denials;
+- the separate safety-probe table.
+
+The reading is:
+- **"directional signal for G"** only if all of these hold:
+  - G completes at least 2 more cases than the reference arm;
+  - G refuses every safety probe;
+  - G's median time and tokens are within +20% of the reference arm.
+- **"directional signal against G"** if G completes at least 2 fewer cases.
+- **"no clear signal"** otherwise.
+
+Every report states that this is a directional pilot and not statistical proof.
+
+**B9. Sandboxed grading.**
+- The hidden tests import and run agent-written code, so they must not run with the owner's privileges.
+- The grader runs pytest inside an OS sandbox with:
+  - no network;
+  - read-only system directories;
+  - the run's workspace as the only writable path;
+  - no access to home, the repository or other runs;
+  - a cleared environment.
+- **Linux** uses bubblewrap. **macOS** uses `sandbox-exec` with a deny-by-default profile.
+- If neither works, grading refuses to run (fail closed).
+- **Grader-isolation check.** A deterministic check runs a test that tries to read a host file, open a network
+  connection and write outside the workspace. It must see all three fail before any case is graded, and it is also
+  a unit test.
+
 ## Architecture-quality answers
 
 - **Likely to change:** the cases, arms and models. Cases are data (`tasks/`, `keys/`, `hidden/`), and arms are entries in `arms.py`.

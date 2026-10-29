@@ -114,6 +114,12 @@ These are freeze candidates, not delete candidates, until usage data exists.
 
 ## 4. Baseline benchmark design
 
+> **Owner decision, 2026-10-29.** The first live run is a focused pilot: 10 difficult, diverse, realistic cases × 3
+> arms × 1 run (30 scored runs), with safety probes reported separately. The cases are chosen against pre-registered
+> criteria, and the result is reported as a directional pilot, not statistical proof. Hidden tests run in an OS sandbox,
+> because they execute agent-written code. The design below stays as optional future coverage. See
+> `openspec/changes/add-baseline-benchmark/design.md` B8–B9.
+
 - **Arms:**
   - **V:** plain Claude Code, empty `CLAUDE_CONFIG_DIR` with login only.
   - **E:** Claude Code + ECC `v2.2.1` + OpenSpec `1.13.2`.

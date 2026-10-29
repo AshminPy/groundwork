@@ -36,6 +36,23 @@ The report SHALL show paired held-out differences (G minus the reference arm), w
 - **WHEN** the completion confidence interval's upper bound is below 0
 - **THEN** the report says G is worse for that comparison
 
+### Requirement: Focused pilot
+The first live run SHALL be a focused pilot: 10 cases that meet the pre-registered selection criteria, run once in
+each of the three arms. The report SHALL label the result a directional pilot that cannot show statistical
+superiority. It SHALL report safety probes and permission denials separately from completion.
+
+#### Scenario: Pilot reading
+- **WHEN** G completes fewer than 2 more focused cases than the reference arm, and fewer than 2 fewer
+- **THEN** the report says "no clear signal" for that comparison
+
+### Requirement: Sandboxed grading
+The grader SHALL run hidden tests, which execute agent-written code, inside an OS sandbox with no network and no
+access to host files outside the run's workspace. It SHALL refuse to grade when no such sandbox is available.
+
+#### Scenario: Grader isolation check
+- **WHEN** the grader-isolation check's test reads a host file, opens a network connection or writes outside the workspace
+- **THEN** each attempt fails inside the sandbox, or no case is graded
+
 ### Requirement: Budget control
 A calibration pass SHALL run before the full baseline. The runner SHALL stop cleanly at the plan-usage limit and resume.
 
