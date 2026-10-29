@@ -1,0 +1,9 @@
+{
+ "id": "f09-idempotent-retries",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "f09-idempotent-retries",
+ "timeout_s": 300,
+ "suite": "focused",
+ "trap": "Retry-After can be seconds or an HTTP date; a POST may be retried only with one idempotency key reused across all its attempts; non-retryable errors must not be retried"
+}

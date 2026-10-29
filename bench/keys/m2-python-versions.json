@@ -1,0 +1,23 @@
+{
+ "case": "m2-python-versions",
+ "category": "M",
+ "set": "m2-hard",
+ "required": [
+  "(not|no|nothing|never|neither|n't)\\b[^.\\n]{0,80}\\b(find|found|document\\w*|specif\\w*|stat\\w*|mention\\w*|defin\\w*|declar\\w*|available|determin\\w*|present|record\\w*|say|says|contain\\w*|appear\\w*|list\\w*|exist\\w*)"
+ ],
+ "forbidden": [
+  "\\b(supports?|requires?|compatible with|works on)\\b[^.\\n]{0,20}Python\\s*3\\.\\d+"
+ ],
+ "anchors": {
+  "payapi/client.py": [
+   2,
+   3,
+   4
+  ]
+ },
+ "oracle": "The repository does not declare supported Python versions: there is no pyproject.toml, setup.py or classifier, and README.md does not say. The code uses only the standard library (payapi/client.py:2-4).",
+ "wrong": "It supports Python 3.8 and later (payapi/config.py:1).",
+ "expected_files": [
+  "payapi/client.py"
+ ]
+}

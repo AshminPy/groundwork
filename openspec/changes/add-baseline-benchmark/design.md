@@ -115,7 +115,7 @@ Evidence, checked against the sources on 2026-10-28 (EGM review: 4 reviewers, fi
 - **G is "better" than a reference arm** only if all of these hold:
   - the completion CI lower bound is above 0;
   - G refuses every safety probe;
-  - G's median wall time per run, and G's median output plus uncached input tokens per run, are each within +20% of the reference arm.
+  - G's median wall time per run, and G's median output plus uncached input tokens per run (uncached input = `input_tokens` + `cache_creation_input_tokens`), are each within +20% of the reference arm.
 
   Cache-read tokens are reported but not gated.
 - **G is "worse"** if the completion CI upper bound is below 0. That opens a trim review.
@@ -223,3 +223,84 @@ Every report states that this is a directional pilot and not statistical proof.
 ## Rollback
 
 `bench/` is a contributor tool outside the install path. Removing the directory and the benchmark config dirs removes the change.
+
+## As built (2026-10-28)
+
+Changes from the plan found during implementation, all applied equally to every arm:
+- **Allow-listed environment.** The cloud container's environment held real host credentials (GitHub, cloud) and
+  session variables that made a child run reuse the parent session id and sync account skills. Each arm now gets
+  only locale, home, temp dir, proxy and CA settings (`bench/arms.py` `ENV_KEEP`); the canary's `env` probe checks it.
+- **No per-case Bash allow list.** The Bash sandbox is the boundary instead (`autoAllowBashIfSandboxed: true`, no
+  unsandboxed retry, no network, reads of home, the repo, other runs and `/tmp` denied except the run's workspace).
+  A per-case allow list would have added prompts that `--permission-prompts none` turns into denials for all arms.
+- **Case layout.** New cases use `tasks/<id>/case.json` (standard-library JSON on Python 3.10) and generated
+  `fixture/`, `hidden/` and `oracle/` folders from `bench/cases_src/`. `oracle/` holds a reference solution used only
+  to prove each case is solvable and that the untouched fixture fails; the repository is outside every agent's reads.
+- **Login check** accepts `authMethod` `claude.ai` or `oauth_token` (a subscription token, as in a cloud session), on
+  the first-party provider.
+- **Grader dependency.** The Kubernetes checks parse YAML with PyYAML in the grader's Python.
+- **Linux sandbox prerequisites** `bubblewrap` and `socat` were installed in the cloud container only.
+- **Per-arm HOME.** ECC v2.2.1's hooks keep data under `$HOME/.claude` and `~/.gateguard` whatever
+  `CLAUDE_CONFIG_DIR` says, and Groundwork's `install.sh` appends a PATH line to `~/.bashrc`, `~/.zshrc` and
+  `~/.profile`. Each arm therefore gets its own HOME (and XDG dirs, `ECC_AGENT_DATA_HOME`), and git takes its identity
+  from environment variables. `prepare_arms.py` hashes the owner's shell startup files and the canary checks the
+  owner's `~/.claude`, `~/.gateguard` and `~/.config/openspec` for any bench path; either change fails.
+- **Groundwork hook paths.** Groundwork 2.5.0's `merge_settings.py` writes every hook and statusLine command as
+  `python3 ~/.claude/...`, ignoring `CLAUDE_CONFIG_DIR`. Under a separate config dir the hooks would run the owner's
+  real installation, or fail and block every prompt (seen in the first G canary). `prepare_arms.py` repoints them to
+  the arm's own copies and the metadata check fails if any hook script is missing. This is a Groundwork bug to fix
+  separately; the benchmark measures Groundwork as it behaves once its hooks actually run.
+- **Retries** happen only for identified API or transport errors with no answer, at most once, recorded per row
+  (`attempt`, `transient`). Any other failure, including an arm's own hook or plugin crash, is final.
+- **Freeze coverage** adds a protocol fingerprint (arms, run, stats, report, canary, adapter, prepare_arms), so the
+  decision rule and arm setup cannot change after the freeze unnoticed. A second held-out run is refused.
+- **Arm-neutral workspaces:** a run's folder name is a hash, so the path does not tell the agent its arm.
+- **File tools scoped to the workspace.** The first full canary showed the Write tool writing outside the workspace in
+  every arm (the Bash sandbox does not cover file tools, and a bare `Write` allow rule permits any path). Edit and
+  Write are now auto-approved only for `./**`; anything else needs a prompt, which `--permission-prompts none`
+  denies. The canary's Write-outside probe now passes in V and G, and a write inside still succeeds.
+
+## Calibration result (2026-10-28, `bench/results/calibration-1/`)
+
+3 dev cases × 3 arms × 1 run, after the freeze, in a Linux cloud container; canary passed on every arm.
+- Completed: V 3/3, E 3/3, G 2/3. G's miss (s01) is a Groundwork behaviour: prompt intake classified an incident-log
+  analysis as a high-risk MATERIAL task (its text names "deploy" and "rollback" as answer values), and the task gate
+  returned `ask` on writing `incident.json`, which `--permission-prompts none` turns into a denial. Scored as is (B2).
+- Median per run: wall 11 s (V), 18 s (E), 24 s (G); tokens (output + uncached input) 10.6k (V), 30.5k (E), 51.6k (G);
+  cache reads 57k, 108k, 166k. Denials: 0, 3, 5 (E and G include ECC's first-Bash "Fact-Forcing Gate").
+- Full-run estimate: about 1.2 h of agent time plus about 40 min of canary per phase start, far below the 6–20 h
+  planned estimate. MDD at 14 held-out cases is on the order of 45 points (3 cases × 1 run: order of magnitude only).
+- Grader fix found here: the claim check read the whole answer and matched a quoted log line ("rollback finished");
+  it now reads only the answer's first paragraph. The grader was re-frozen; no dev or held-out run had happened.
+- Ceiling risk: V completed every calibration case. If the baseline cases are this easy for plain Claude Code, the
+  benchmark can only show "no measurable difference" or "worse" on completion; cost will still be measured.
+
+## Owner review (2026-10-29) and what changed
+
+- **Sandboxed grading (B9), built.** `bench/grader_sandbox.py` runs the hidden tests under bubblewrap on Linux and
+  `sandbox-exec` on macOS, and refuses without one. `isolation_check()` gates every run and the canary, and is a
+  unit test with a negative control: run without the sandbox, the same test must fail. All 38 scored cases still
+  fail untouched and pass with the reference solution inside the sandbox.
+- **Focused pilot (B8), built.**
+  - 10 new cases (f01–f10), 2 per category. Each has a named trap and meets the structural bar, which `build.py`
+    checks.
+  - None reuses a case with an observed outcome.
+  - 3 cases (f03, f05, f06) first fell below the bar. They were made harder (more hidden checks; a second required
+    output) rather than lowering the bar.
+  - `--phase focused` runs 10 cases × 3 arms × 1 run, plus the 2 safety probes as separate calls. The report
+    shows the directional reading, the denials and a separate probe table.
+- **Unchanged:** unattended permission requests still count as failures, Groundwork's approval controls are not
+  weakened, and the 2.5.0 hook-path workaround is stated in every focused report. Every arm has its own config dir,
+  HOME, PATH, sandbox and workspace-only Edit/Write.
+- **Independent review of the above (2026-10-29), 3 must-fix, all fixed.**
+  - **macOS grading** is off by default (fail closed). The `sandbox-exec` profile let code under test use system
+    services (`open`, `osascript`, the pasteboard) and had never been run on a Mac. It is enabled only with
+    `GW_BENCH_MACOS_GRADER=verified`, after the isolation check has passed on that Mac. The profile is now narrower,
+    and the check now probes those services. Until then, grading happens in Linux.
+  - **f05** now states a rounding rule.
+  - **f04** hidden tests use unique event ids, so a correct process-wide de-duplication also passes.
+  - **Also done:**
+    - the isolation check reads a repository file;
+    - completion requires pytest's own pass summary, so `os._exit(0)` cannot fake a pass;
+    - a runs dir under a sandbox-bound system directory is refused;
+    - f01 and f03 instructions were clarified.

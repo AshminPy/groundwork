@@ -1,0 +1,1 @@
+MINOR_UNITS = {"USD": 2, "EUR": 2}

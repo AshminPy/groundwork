@@ -1,0 +1,5 @@
+2026-07-14T10:02:11Z INFO cache miss tenant=ab user=c key=abc
+2026-07-14T10:02:11Z INFO cache store tenant=ab user=c key=abc
+2026-07-14T10:05:40Z INFO cache hit tenant=a user=bc key=abc
+2026-07-14T10:05:40Z WARN support ticket: user bc (tenant a) saw profile of c@ab
+2026-07-14T10:09:02Z INFO invalidate tenant=a:b user=x key=a:bx

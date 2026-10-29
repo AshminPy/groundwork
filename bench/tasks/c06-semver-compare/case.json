@@ -1,0 +1,7 @@
+{
+ "id": "c06-semver-compare",
+ "category": "coding",
+ "kind": "write",
+ "fixture": "c06-semver-compare",
+ "timeout_s": 300
+}

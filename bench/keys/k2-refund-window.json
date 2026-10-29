@@ -1,0 +1,26 @@
+{
+ "case": "k2-refund-window",
+ "category": "K",
+ "set": "m2-hard",
+ "required": [
+  "\\b90\\b",
+  "2024-06"
+ ],
+ "forbidden": [
+  "(?<!not )(?<!n't )\\b(is|are|up to|within)\\s+180\\b"
+ ],
+ "anchors": {
+  "payapi/config.py": [
+   5
+  ],
+  "vendor-docs/payapi-2024-06.md": [
+   14
+  ]
+ },
+ "oracle": "90 days. The repo pins API version 2024-06 (payapi/config.py:5), and the 2024-06 page allows refunds up to 90 days after the charge (vendor-docs/payapi-2024-06.md:14). The 180-day rule is from version 2023-01, which is not used.",
+ "wrong": "Refunds are allowed up to 180 days after the charge (vendor-docs/payapi-2023-01.md:12).",
+ "expected_files": [
+  "payapi/config.py",
+  "vendor-docs/payapi-2024-06.md"
+ ]
+}

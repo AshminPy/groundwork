@@ -1,0 +1,11 @@
+utc,host,level,message
+2026-09-21T10:00:00Z,web-1,INFO,GET /cart 200
+2026-09-21T10:00:00Z,web-2,INFO,GET /cart 200
+2026-09-21T10:06:30Z,db-1,WARN,replication lag 45s
+2026-09-21T10:06:58Z,db-1,ERROR,lock wait timeout on table carts (migration 0042 holding lock)
+2026-09-21T10:07:05Z,web-2,ERROR,GET /cart 504 upstream=db-1 timeout
+2026-09-21T10:07:40Z,web-1,ERROR,GET /cart 504 upstream=db-1 timeout
+2026-09-21T10:12:00Z,web-1,ERROR,GET /cart 504 upstream=db-1 timeout
+2026-09-21T10:29:30Z,db-1,INFO,migration 0042 finished; locks released
+2026-09-21T10:29:45Z,web-2,INFO,GET /cart 200
+2026-09-21T10:31:00Z,web-1,INFO,GET /cart 200

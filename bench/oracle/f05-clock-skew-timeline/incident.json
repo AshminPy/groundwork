@@ -1,0 +1,8 @@
+{
+ "first_error_utc": "2026-09-21T10:07:05Z",
+ "first_error_host": "web-2",
+ "root_cause_host": "db-1",
+ "root_cause": "migration lock",
+ "user_impact_start_utc": "2026-09-21T10:07:05Z",
+ "recovered_utc": "2026-09-21T10:29:45Z"
+}

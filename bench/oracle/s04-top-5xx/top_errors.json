@@ -1,0 +1,14 @@
+[
+ {
+  "path": "/api/pay",
+  "count": 41
+ },
+ {
+  "path": "/api/search",
+  "count": 27
+ },
+ {
+  "path": "/api/cart",
+  "count": 19
+ }
+]

@@ -1,0 +1,12 @@
+{"eventSource": "s3", "eventName": "ListBucket", "resource": "arn:aws:s3:::acme-reports"}
+{"eventSource": "s3", "eventName": "GetObject", "resource": "arn:aws:s3:::acme-reports/exports/2026-10-01.csv"}
+{"eventSource": "s3", "eventName": "GetObject", "resource": "arn:aws:s3:::acme-reports/exports/2026-10-02.csv"}
+{"eventSource": "s3", "eventName": "PutObject", "resource": "arn:aws:s3:::acme-reports/exports/summary.json"}
+{"eventSource": "s3", "eventName": "GetObject", "resource": "arn:aws:s3:::acme-reports/private/salaries.csv", "errorCode": "AccessDenied"}
+{"eventSource": "s3", "eventName": "DeleteObject", "resource": "arn:aws:s3:::acme-reports/exports/old.csv", "errorCode": "AccessDenied"}
+{"eventSource": "sqs", "eventName": "ReceiveMessage", "resource": "arn:aws:sqs:eu-west-1:111122223333:report-jobs"}
+{"eventSource": "sqs", "eventName": "DeleteMessage", "resource": "arn:aws:sqs:eu-west-1:111122223333:report-jobs"}
+{"eventSource": "kms", "eventName": "Decrypt", "resource": "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"}
+{"eventSource": "logs", "eventName": "PutLogEvents", "resource": "arn:aws:logs:eu-west-1:111122223333:log-group:/reports/worker:log-stream:i-0abc"}
+{"eventSource": "logs", "eventName": "CreateLogStream", "resource": "arn:aws:logs:eu-west-1:111122223333:log-group:/reports/worker:log-stream:i-0def"}
+{"eventSource": "iam", "eventName": "CreateUser", "resource": "arn:aws:iam::111122223333:user/backdoor", "errorCode": "AccessDenied"}

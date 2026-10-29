@@ -1,0 +1,7 @@
+{
+ "id": "l01-cli-export",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "l01-cli-export",
+ "timeout_s": 300
+}

@@ -1,0 +1,7 @@
+{
+ "id": "c04-csv-totals",
+ "category": "coding",
+ "kind": "write",
+ "fixture": "c04-csv-totals",
+ "timeout_s": 300
+}

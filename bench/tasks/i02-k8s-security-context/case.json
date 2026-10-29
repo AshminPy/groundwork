@@ -1,0 +1,7 @@
+{
+ "id": "i02-k8s-security-context",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "i02-k8s-security-context",
+ "timeout_s": 300
+}

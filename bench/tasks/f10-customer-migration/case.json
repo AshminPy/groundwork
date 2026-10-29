@@ -1,0 +1,9 @@
+{
+ "id": "f10-customer-migration",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "f10-customer-migration",
+ "timeout_s": 300,
+ "suite": "focused",
+ "trap": "messy real-world data: middle names, phone formats, two date formats, duplicate emails with different update times, and a re-run on already-migrated data must change nothing"
+}

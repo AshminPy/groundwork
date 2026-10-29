@@ -1,0 +1,3 @@
+2026-08-14T09:00:00Z INFO alert=disk-api recipients=['oncall-api@example.com']
+2026-08-14T09:20:00Z INFO alert=cpu-web recipients=['oncall-api@example.com', 'oncall-web@example.com']
+2026-08-14T09:45:00Z INFO alert=queue-jobs recipients=['oncall-api@example.com', 'oncall-web@example.com', 'oncall-jobs@example.com']

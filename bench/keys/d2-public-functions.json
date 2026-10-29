@@ -1,0 +1,24 @@
+{
+ "case": "d2-public-functions",
+ "category": "D",
+ "required": [
+  "fetch_invoice",
+  "list_invoices",
+  "create_refund"
+ ],
+ "forbidden": [
+  "\\b(delete_invoice|update_invoice|get_invoices|cancel_refund|retry_request)\\b"
+ ],
+ "expected_files": [
+  "payapi/client.py"
+ ],
+ "oracle": "- fetch_invoice(invoice_id): return one invoice (payapi/client.py:39)\n- list_invoices(offset, page_size): one page with offset pagination (payapi/client.py:44)\n- create_refund(...): create a refund (payapi/client.py:49)",
+ "wrong": "- fetch_invoice: get an invoice\n- delete_invoice: delete an invoice\n- create_refund: refund (payapi/client.py:49)",
+ "anchors": {
+  "payapi/client.py": [
+   39,
+   44,
+   49
+  ]
+ }
+}

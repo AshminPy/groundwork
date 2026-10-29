@@ -1,0 +1,1 @@
+"""PayAPI client package."""

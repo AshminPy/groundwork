@@ -1,0 +1,5 @@
+[metadata]
+category = "K"
+fixture = "payments-client"
+executes_code = false
+set = "m2-hard"

@@ -1,0 +1,8 @@
+2026-04-11T14:02:10Z api INFO GET /orders 200 41ms
+2026-04-11T14:03:55Z api INFO GET /orders 200 39ms
+2026-04-11T14:05:02Z api WARN upstream payments slow 2210ms
+2026-04-11T14:05:31Z api ERROR GET /checkout 502 upstream=payments
+2026-04-11T14:06:10Z api ERROR GET /checkout 502 upstream=payments
+2026-04-11T14:21:44Z api ERROR GET /checkout 502 upstream=payments
+2026-04-11T14:23:05Z api INFO GET /checkout 200 120ms
+2026-04-11T14:24:30Z api INFO GET /checkout 200 98ms

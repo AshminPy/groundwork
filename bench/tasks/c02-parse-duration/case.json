@@ -1,0 +1,7 @@
+{
+ "id": "c02-parse-duration",
+ "category": "coding",
+ "kind": "write",
+ "fixture": "c02-parse-duration",
+ "timeout_s": 300
+}

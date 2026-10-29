@@ -1,0 +1,4 @@
+2026-03-10T05:00:02Z INFO report day=2026-03-09 window_start=2026-03-09T00:00:00 window_end=2026-03-10T00:00:00
+2026-03-10T05:00:02Z INFO matched orders=412
+2026-03-10T05:00:03Z WARN order o-88121 ts=2026-03-09T02:10:00Z counted, customer says it was placed 2026-03-08 21:10 local
+2026-03-10T05:00:03Z WARN order o-88907 ts=2026-03-10T03:55:00Z not counted, placed 2026-03-09 22:55 local

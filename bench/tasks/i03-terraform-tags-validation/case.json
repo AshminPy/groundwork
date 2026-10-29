@@ -1,0 +1,7 @@
+{
+ "id": "i03-terraform-tags-validation",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "i03-terraform-tags-validation",
+ "timeout_s": 300
+}

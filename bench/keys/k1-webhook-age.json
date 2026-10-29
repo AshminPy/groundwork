@@ -1,0 +1,26 @@
+{
+ "case": "k1-webhook-age",
+ "category": "K",
+ "set": "m2-hard",
+ "required": [
+  "(no|not|doesn't|never|without)\\b[^.\\n]{0,80}\\b(timestamp|age|expir\\w*|tolerance|replay|old|time)"
+ ],
+ "forbidden": [
+  "(?<!not )(?<!n't )(?<!docs )(?<!claims )\\bverify_signature\\b[^.\\n]{0,40}\\brejects?\\b[^.\\n]{0,40}\\b(5|five) minutes"
+ ],
+ "anchors": {
+  "payapi/webhooks.py": [
+   11,
+   16
+  ],
+  "docs/WEBHOOKS.md": [
+   5
+  ]
+ },
+ "oracle": "verify_signature does not check the signature's age at all: it only compares the HMAC (payapi/webhooks.py:11-16). docs/WEBHOOKS.md:5 claims signatures older than 5 minutes are rejected, but no code does that.",
+ "wrong": "verify_signature rejects signatures older than 5 minutes (docs/WEBHOOKS.md:5).",
+ "expected_files": [
+  "docs/WEBHOOKS.md",
+  "payapi/webhooks.py"
+ ]
+}

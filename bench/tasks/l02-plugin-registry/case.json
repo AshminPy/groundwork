@@ -1,0 +1,7 @@
+{
+ "id": "l02-plugin-registry",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "l02-plugin-registry",
+ "timeout_s": 300
+}

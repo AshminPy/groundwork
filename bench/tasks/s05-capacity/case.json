@@ -1,0 +1,7 @@
+{
+ "id": "s05-capacity",
+ "category": "sre",
+ "kind": "write",
+ "fixture": "s05-capacity",
+ "timeout_s": 300
+}

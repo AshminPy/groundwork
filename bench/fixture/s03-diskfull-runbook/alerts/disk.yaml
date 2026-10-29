@@ -1,0 +1,10 @@
+groups:
+  - name: storage
+    rules:
+      - alert: DiskAlmostFull
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/ledger"} / node_filesystem_size_bytes{mountpoint="/var/lib/ledger"}) > 0.85
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Ledger data volume above 85% for 10 minutes"

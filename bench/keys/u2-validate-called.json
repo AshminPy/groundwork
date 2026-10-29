@@ -1,0 +1,27 @@
+{
+ "case": "u2-validate-called",
+ "category": "U",
+ "set": "m2-hard",
+ "required": [
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?no\\b",
+  "validate_refund"
+ ],
+ "forbidden": [
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?yes\\b"
+ ],
+ "anchors": {
+  "payapi/client.py": [
+   49,
+   51
+  ],
+  "payapi/refunds.py": [
+   11
+  ]
+ },
+ "oracle": "No. create_refund (payapi/client.py:49-53) sends the request directly; nothing in the code calls validate_refund (payapi/refunds.py:11). CHANGELOG.md:5 says refunds are validated, but the code does not do it.",
+ "wrong": "Yes. Refunds are validated with validate_refund before they are sent (CHANGELOG.md:5).",
+ "expected_files": [
+  "payapi/client.py",
+  "payapi/refunds.py"
+ ]
+}

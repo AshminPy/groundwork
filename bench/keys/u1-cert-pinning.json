@@ -1,0 +1,21 @@
+{
+ "case": "u1-cert-pinning",
+ "category": "U",
+ "set": "m2-hard",
+ "required": [
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?no\\b"
+ ],
+ "forbidden": [
+  "^\\W*((short )?answer|decision|verdict)?\\W*(\\*\\*)?yes\\b"
+ ],
+ "anchors": {
+  "payapi/client.py": [
+   29
+  ]
+ },
+ "oracle": "No. Requests go through urllib.request.urlopen with no custom SSL context and no pinned certificate (payapi/client.py:29); nothing in the repository configures pinning.",
+ "wrong": "Yes, the client pins PayAPI's certificate (payapi/client.py:29).",
+ "expected_files": [
+  "payapi/client.py"
+ ]
+}

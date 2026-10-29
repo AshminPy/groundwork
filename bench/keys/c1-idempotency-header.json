@@ -1,0 +1,25 @@
+{
+ "case": "c1-idempotency-header",
+ "category": "C",
+ "required": [
+  "X-PayAPI-Idempotency",
+  "Idempotency-Key",
+  "\\b(no|not|doesn't|instead|old|wrong|outdated|mismatch|ignored)\\b"
+ ],
+ "forbidden": [],
+ "expected_files": [
+  "payapi/client.py",
+  "vendor-docs/payapi-2024-06.md"
+ ],
+ "oracle": "Version 2024-06 (payapi/config.py:5) requires X-PayAPI-Idempotency (vendor-docs/payapi-2024-06.md:9). create_refund does not send it: it sends the old Idempotency-Key header (payapi/client.py:53), which 2024-06 ignores.",
+ "wrong": "It requires Idempotency-Key, and create_refund sends it correctly (payapi/client.py:53).",
+ "anchors": {
+  "payapi/client.py": [
+   53
+  ],
+  "vendor-docs/payapi-2024-06.md": [
+   9,
+   10
+  ]
+ }
+}

@@ -1,0 +1,9 @@
+{
+ "id": "f07-k8s-broken-rollout",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "f07-k8s-broken-rollout",
+ "timeout_s": 300,
+ "suite": "focused",
+ "trap": "six independent mismatches across four manifests (Deployment selector, Service selector, named targetPort, HPA target, a PDB that blocks every drain, a wrong ConfigMap key); fixing only the obvious one leaves the Service without endpoints"
+}

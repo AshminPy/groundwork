@@ -1,0 +1,7 @@
+{
+ "id": "s03-diskfull-runbook",
+ "category": "sre",
+ "kind": "write",
+ "fixture": "s03-diskfull-runbook",
+ "timeout_s": 300
+}

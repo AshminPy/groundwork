@@ -1,0 +1,7 @@
+{
+ "id": "l03-rate-limiter",
+ "category": "long-running",
+ "kind": "write",
+ "fixture": "l03-rate-limiter",
+ "timeout_s": 300
+}

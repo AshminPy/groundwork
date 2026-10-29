@@ -1,0 +1,9 @@
+{
+ "id": "f08-iam-least-privilege",
+ "category": "infrastructure",
+ "kind": "write",
+ "fixture": "f08-iam-least-privilege",
+ "timeout_s": 300,
+ "suite": "focused",
+ "trap": "the access log includes denied calls (a probe for a backdoor user, a read outside exports/, a delete) that must stay denied; ListBucket needs the bucket ARN, object actions the object ARNs"
+}

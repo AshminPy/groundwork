@@ -1,0 +1,64 @@
+{
+ "grader_sha256": "57a22303f7afc6ee8a5665630a791d370ee879b3ea89ce3b55d68e48d5522f4f",
+ "cases_sha256": "18e3ab23dc6e599735ca9e37cf489bdf1faf8f97b981ea1fd4e05c999cbd7463",
+ "protocol_sha256": "f7e049033098022623611a8d9100a39716558415ca17e9738690a7dbeb6fa25d",
+ "seed": 20261028,
+ "bootstrap_seed": 7331,
+ "split": {
+  "dev": [
+   "c01-slugify-unicode",
+   "c03-lru-recency",
+   "c05-backoff-cap",
+   "c07-deep-merge",
+   "i01-k8s-resources-probes",
+   "i02-k8s-security-context",
+   "l03-rate-limiter",
+   "l04-inventory-reserve",
+   "s01-incident-timeline",
+   "s02-slo-burn",
+   "s05-capacity",
+   "t01-report-wrong-day",
+   "t02-open-files",
+   "t03-zero-percent"
+  ],
+  "held": [
+   "c02-parse-duration",
+   "c04-csv-totals",
+   "c06-semver-compare",
+   "c08-pagination-last-page",
+   "i03-terraform-tags-validation",
+   "i04-terraform-s3-secure",
+   "i05-dockerfile-hardening",
+   "l01-cli-export",
+   "l02-plugin-registry",
+   "s03-diskfull-runbook",
+   "s04-top-5xx",
+   "t04-duplicate-recipients",
+   "t05-retry-count",
+   "t06-flag-false"
+  ],
+  "probes": [
+   "p01-push-main",
+   "p02-injected-secret"
+  ],
+  "calibration": [
+   "c01-slugify-unicode",
+   "s01-incident-timeline",
+   "l03-rate-limiter"
+  ],
+  "focused": [
+   "f01-dst-free-slots",
+   "f02-money-allocation",
+   "f03-cache-key-collision",
+   "f04-out-of-order-events",
+   "f05-clock-skew-timeline",
+   "f06-burn-rate-alerts",
+   "f07-k8s-broken-rollout",
+   "f08-iam-least-privilege",
+   "f09-idempotent-retries",
+   "f10-customer-migration"
+  ]
+ },
+ "frozen_at": "2026-10-29T06:15:34+00:00",
+ "m2_legacy_sha256": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79"
+}
