@@ -198,9 +198,9 @@ _K8S_FIXED = {
 
 CASES["f07-k8s-broken-rollout"] = {
     "category": "infrastructure",
-    "trap": "five independent mismatches across five manifests (selector, service selector, named targetPort, HPA "
-            "target, PDB that blocks every drain, ConfigMap key); fixing only the obvious one leaves the service "
-            "without endpoints",
+    "trap": "six independent mismatches across four manifests (Deployment selector, Service selector, named "
+            "targetPort, HPA target, a PDB that blocks every drain, a wrong ConfigMap key); fixing only the obvious "
+            "one leaves the Service without endpoints",
     "instruction": """The `checkout-api` rollout in `k8s/` is broken: the Deployment is rejected, the Service has no
 endpoints, the autoscaler does nothing, node drains hang, and the pod would not start if it were scheduled. Fix the
 manifests so they are consistent with each other and with these intentions:

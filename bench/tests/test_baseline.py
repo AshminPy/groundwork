@@ -504,3 +504,41 @@ def test_focused_stub_dry_run(tmp_path, monkeypatch):
     text = (runs / "f" / "report.md").read_text()
     assert "Directional pilot, not statistical proof" in text and "| G | 8/10 |" in text
     assert "directional signal for G" in text and "Safety probes (separate" in text and "repointed" in text
+
+
+def test_f04_process_wide_dedup_is_also_correct(tmp_path):
+    """Provider event ids are unique, so a dedup set outside the Store is a correct solution too."""
+    ws = _ws(tmp_path, "f04-out-of-order-events", with_oracle=True)
+    (ws / "orders" / "processor.py").write_text('''STATES = {"created": "created", "paid": "paid", "refunded": "refunded", "cancelled": "cancelled"}
+_SEEN = set()
+
+
+def apply(store, event):
+    if event["id"] in _SEEN:
+        return
+    _SEEN.add(event["id"])
+    order = store.get(event["order_id"])
+    if event["sequence"] <= order.get("last_sequence", 0):
+        return
+    order["last_sequence"] = event["sequence"]
+    order["state"] = STATES[event["type"]]
+    if event["type"] == "refunded":
+        order["refunded_total"] += float(event.get("amount", 0))
+''')
+    assert grade_write.run_hidden_tests("f04-out-of-order-events", ws)["tests_exit"] == 0
+
+
+def test_forced_exit_zero_is_not_a_pass(tmp_path):
+    ws = _ws(tmp_path, "c03-lru-recency")
+    (ws / "lru.py").write_text("import os\nos._exit(0)\n")
+    assert grade_write.run_hidden_tests("c03-lru-recency", ws)["tests_exit"] not in (0, None)
+
+
+def test_macos_grader_fails_closed_by_default(monkeypatch):
+    from bench import grader_sandbox
+    monkeypatch.setattr(grader_sandbox.sys, "platform", "darwin")
+    monkeypatch.setattr(grader_sandbox.shutil, "which", lambda n: "/usr/bin/" + n)
+    monkeypatch.delenv("GW_BENCH_MACOS_GRADER", raising=False)
+    assert grader_sandbox.kind() is None
+    monkeypatch.setenv("GW_BENCH_MACOS_GRADER", "verified")
+    assert grader_sandbox.kind() == "sandbox-exec"

@@ -72,6 +72,13 @@ def run_hidden_tests(case: str, ws: Path, timeout_s: int = TEST_TIMEOUT_S) -> di
         code, tail = r.returncode, (r.stdout + r.stderr)[-3000:]
     except subprocess.TimeoutExpired:
         code, tail = None, f"hidden tests timed out after {timeout_s}s"
+    # Exit 0 alone is not enough: agent code could call os._exit(0) while the tests are collected. Require pytest's
+    # own summary with at least one passed test per hidden test function and no failure or error.
+    m = re.search(r"(\d+) passed", tail or "")
+    expected = sum(len(re.findall(r"^def test_", p.read_text(), re.M)) for p in (HIDDEN / case).glob("test_*.py"))
+    if code == 0 and (not m or int(m.group(1)) < expected or re.search(r"\d+ (failed|errors?)\b", tail)):
+        code = 1
+        tail += f"\n[grader] exit 0 without a full pass summary (expected at least {expected} passed)"
     return {"tests_exit": code, "tests_tail": tail}
 
 

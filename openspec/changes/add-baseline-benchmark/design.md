@@ -292,3 +292,15 @@ Changes from the plan found during implementation, all applied equally to every 
 - **Unchanged:** unattended permission requests still count as failures, Groundwork's approval controls are not
   weakened, and the 2.5.0 hook-path workaround is stated in every focused report. Every arm has its own config dir,
   HOME, PATH, sandbox and workspace-only Edit/Write.
+- **Independent review of the above (2026-10-29), 3 must-fix, all fixed.**
+  - **macOS grading** is off by default (fail closed). The `sandbox-exec` profile let code under test use system
+    services (`open`, `osascript`, the pasteboard) and had never been run on a Mac. It is enabled only with
+    `GW_BENCH_MACOS_GRADER=verified`, after the isolation check has passed on that Mac. The profile is now narrower,
+    and the check now probes those services. Until then, grading happens in Linux.
+  - **f05** now states a rounding rule.
+  - **f04** hidden tests use unique event ids, so a correct process-wide de-duplication also passes.
+  - **Also done:**
+    - the isolation check reads a repository file;
+    - completion requires pytest's own pass summary, so `os._exit(0)` cannot fake a pass;
+    - a runs dir under a sandbox-bound system directory is refused;
+    - f01 and f03 instructions were clarified.

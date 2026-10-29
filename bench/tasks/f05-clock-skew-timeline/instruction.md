@@ -10,4 +10,4 @@ root with exactly these keys, all times in true UTC as `YYYY-MM-DDTHH:MM:SSZ`:
 Also write `timeline.csv` in the repository root: a CSV with the header `utc,host,level,message` and one row per line
 of the web and db logs (not the ntp log), with `utc` in true UTC, sorted by `utc` and then by `host`; `message` is
 the rest of the line after the level, unchanged.
-A host whose clock is ahead logged timestamps later than true time.
+A host whose clock is ahead logged timestamps later than true time. Round corrected times to the nearest second.

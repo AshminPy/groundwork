@@ -1,7 +1,7 @@
 {
- "grader_sha256": "6bfa51a33f620fd829cb2eb2c82355425a09493142f8e4e03495ed1d1ab7e624",
- "cases_sha256": "b9165fe706616958521a8abf3c060e3b93eda252a222767f752385c594048618",
- "protocol_sha256": "2f9cbdefab26aee751631362efb47f3bcd37cdd98135bffa61f6c8ef6f31a34b",
+ "grader_sha256": "57a22303f7afc6ee8a5665630a791d370ee879b3ea89ce3b55d68e48d5522f4f",
+ "cases_sha256": "18e3ab23dc6e599735ca9e37cf489bdf1faf8f97b981ea1fd4e05c999cbd7463",
+ "protocol_sha256": "f7e049033098022623611a8d9100a39716558415ca17e9738690a7dbeb6fa25d",
  "seed": 20261028,
  "bootstrap_seed": 7331,
  "split": {
@@ -59,6 +59,6 @@
    "f10-customer-migration"
   ]
  },
- "frozen_at": "2026-10-29T06:06:30+00:00",
+ "frozen_at": "2026-10-29T06:15:34+00:00",
  "m2_legacy_sha256": "226a1f991a44d56554fda6e7cac2fb81273a8e1cfc1158ca2b6c8d0640005b79"
 }

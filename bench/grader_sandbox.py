@@ -3,8 +3,10 @@ owner's privileges: no network, read-only system directories, the run's workspac
 repository or other runs, and a cleared environment.
 
 - Linux: bubblewrap (`bwrap --unshare-all`).
-- macOS: `sandbox-exec` with a deny-by-default profile. UNVERIFIED on a real Mac when written; the isolation check
-  below must pass there before any case is graded.
+- macOS: `sandbox-exec` with a deny-by-default profile, OFF by default (fail closed). It has not been verified on a
+  real Mac, and code under test could ask system services (LaunchServices `open`, `osascript`, the pasteboard) to
+  act outside the sandbox. Enable it only with GW_BENCH_MACOS_GRADER=verified, after the isolation check, which then
+  also probes `open`, `osascript` and `pbpaste`, has passed on that Mac. Until then grade in Linux.
 - Anything else: refuse (fail closed).
 
 `isolation_check()` is the deterministic regression: a test that must fail to read a host file, open a network
@@ -31,7 +33,8 @@ class SandboxUnavailable(RuntimeError):
 def kind() -> str | None:
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
         return "bwrap"
-    if sys.platform == "darwin" and shutil.which("sandbox-exec"):
+    if sys.platform == "darwin" and shutil.which("sandbox-exec") and \
+            os.environ.get("GW_BENCH_MACOS_GRADER") == "verified":
         return "sandbox-exec"
     return None
 
@@ -72,9 +75,12 @@ def _profile(ws: Path) -> str:
              "/dev", *_python_dirs()]
     sub = " ".join(f'(subpath "{os.path.realpath(r)}")' for r in reads)
     w = os.path.realpath(ws)
+    py = os.path.realpath(sys.executable)
     return f"""(version 1)
 (deny default)
-(allow process-exec process-fork signal sysctl-read mach-lookup ipc-posix-shm)
+(allow process-fork signal sysctl-read ipc-posix-shm)
+(allow process-exec (literal "{py}") (subpath "/bin") (literal "/usr/bin/env"))
+(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.system.logger"))
 (allow file-read-metadata)
 (allow file-read* (literal "/") {sub})
 (allow file-read* file-write* (subpath "{w}"))
@@ -98,6 +104,7 @@ import socket
 from pathlib import Path
 
 HOST_FILE = {host_file!r}
+REPO_FILE = {repo_file!r}
 OUTSIDE_DIR = {outside_dir!r}
 OWNER_HOME = {owner_home!r}
 
@@ -135,6 +142,30 @@ def test_write_outside_is_blocked():
     raise AssertionError("wrote outside the workspace")
 
 
+def test_no_escape_through_system_services():
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform != "darwin":
+        return
+    for cmd in (["open", "-g", "-a", "Terminal", "/"], ["osascript", "-e", "return 1"], ["pbpaste"]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        assert r.returncode != 0, f"{{cmd[0]}} worked inside the sandbox"
+
+
+def test_repository_is_unreadable():
+    try:
+        Path(REPO_FILE).read_text()
+    except OSError:
+        return
+    raise AssertionError("read a file in the benchmark repository")
+
+
 def test_positive_controls():
     Path(__file__).with_name("inside.txt").write_text("ok")
     import pytest  # noqa: F401
@@ -158,7 +189,8 @@ def isolation_check(timeout_s: int = 120, sandboxed: bool = True) -> tuple[bool,
         dest = ws / ".bench_hidden"
         dest.mkdir(parents=True)
         (dest / "test_isolation.py").write_text(ISOLATION_TEST.format(
-            host_file=str(host_file), outside_dir=str(outside), owner_home=str(Path.home())))
+            host_file=str(host_file), outside_dir=str(outside), owner_home=str(Path.home()),
+            repo_file=str(Path(__file__).resolve().parent / "FROZEN.json")))
         cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", os.devnull, "--rootdir", str(dest),
                "--confcutdir", str(dest), str(dest)]
         argv, env = wrap(ws, cmd, dest) if sandboxed else (cmd, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
@@ -168,5 +200,5 @@ def isolation_check(timeout_s: int = 120, sandboxed: bool = True) -> tuple[bool,
             return False, "isolation check timed out"
         out = (r.stdout + r.stderr)[-2000:]
         escaped = (outside / "escaped.txt").exists()
-        ok = r.returncode == 0 and "5 passed" in out and not escaped and (dest / "inside.txt").exists()
+        ok = r.returncode == 0 and "7 passed" in out and not escaped and (dest / "inside.txt").exists()
         return ok, out

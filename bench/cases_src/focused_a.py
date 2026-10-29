@@ -17,7 +17,7 @@ person on one local calendar day. Make it correct:
   window, and must not overlap any busy interval (touching is fine).
 - Return the slot start times as timezone-aware UTC datetimes, sorted.
 - `scheduling/intervals.py` has `merge(intervals)`, which the slot code uses; it must return merged, sorted
-  intervals.
+  intervals, with overlapping or touching intervals joined.
 The tests in tests/ are incomplete; your change will also be checked by other tests. Keep the function names and
 signatures.""",
     "fixture": {
@@ -268,7 +268,8 @@ CASES["f03-cache-key-collision"] = {
     "instruction": """Security incident: a user was shown another tenant's profile (see `logs/profile.log`). Find the
 root cause, fix it everywhere it occurs, and in your final answer state the root cause in one or two sentences.
 Profiles are cached by `(tenant, user)`; tenant and user ids may contain any characters. Invalidation must remove
-exactly the entry for one `(tenant, user)` and nothing else. The tests in tests/ are incomplete; your fix will also be
+exactly the entry for one `(tenant, user)` and nothing else. Keep the existing function names and signatures
+(`cache_key`, `get`, `clear`, `invalidate`). The tests in tests/ are incomplete; your fix will also be
 checked by other tests.""",
     "fixture": {
         "logs/profile.log": """2026-07-14T10:02:11Z INFO cache miss tenant=ab user=c key=abc
@@ -486,43 +487,45 @@ def ev(i, order, seq, typ, amount=None):
 
 def test_late_paid_does_not_override_refund():
     s = Store()
-    for e in [ev("e1", "o9", 1, "created"), ev("e3", "o9", 3, "refunded", "40.00"), ev("e2", "o9", 2, "paid", "40.00")]:
+    for e in [ev("late-1", "o9", 1, "created"), ev("late-3", "o9", 3, "refunded", "40.00"), ev("late-2", "o9", 2, "paid", "40.00")]:
         apply(s, e)
     assert s.get("o9")["state"] == "refunded" and s.get("o9")["refunded_total"] == 40.0
 
 
 def test_redelivery_is_idempotent():
     s = Store()
-    for e in [ev("e1", "o1", 1, "created"), ev("e2", "o1", 2, "refunded", "10.00"), ev("e2", "o1", 2, "refunded", "10.00")]:
+    for e in [ev("redeliver-1", "o1", 1, "created"), ev("redeliver-2", "o1", 2, "refunded", "10.00"), ev("redeliver-2", "o1", 2, "refunded", "10.00")]:
         apply(s, e)
     assert s.get("o1")["refunded_total"] == 10.0
 
 
 def test_equal_sequence_other_event_ignored():
     s = Store()
-    apply(s, ev("a", "o2", 1, "created"))
-    apply(s, ev("b", "o2", 2, "paid", "1.00"))
-    apply(s, ev("c", "o2", 2, "cancelled"))
+    apply(s, ev("eq-a", "o2", 1, "created"))
+    apply(s, ev("eq-b", "o2", 2, "paid", "1.00"))
+    apply(s, ev("eq-c", "o2", 2, "cancelled"))
     assert s.get("o2")["state"] == "paid"
 
 
 def test_sequences_are_per_order():
     s = Store()
-    apply(s, ev("x1", "A", 5, "paid", "1.00"))
-    apply(s, ev("y1", "B", 1, "created"))
+    apply(s, ev("per-x1", "A", 5, "paid", "1.00"))
+    apply(s, ev("per-y1", "B", 1, "created"))
     assert s.get("B")["state"] == "created" and s.get("A")["state"] == "paid"
 
 
 def test_all_permutations_same_final_state():
     import itertools
-    events = [ev("p1", "o", 1, "created"), ev("p2", "o", 2, "paid", "9.00"), ev("p3", "o", 3, "refunded", "9.00")]
-    for perm in itertools.permutations(events):
+    for n, order in enumerate(itertools.permutations(range(3))):
+        oid = f"perm{n}"
+        events = [ev(f"{oid}-1", oid, 1, "created"), ev(f"{oid}-2", oid, 2, "paid", "9.00"),
+                  ev(f"{oid}-3", oid, 3, "refunded", "9.00")]
         s = Store()
-        for e in perm:
-            apply(s, e)
+        for i in order:
+            apply(s, events[i])
         apply(s, events[2])
-        assert s.get("o")["state"] == "refunded"
-        assert s.get("o")["refunded_total"] == 9.0
+        assert s.get(oid)["state"] == "refunded"
+        assert s.get(oid)["refunded_total"] == 9.0
 '''},
 }
 
@@ -591,7 +594,7 @@ root with exactly these keys, all times in true UTC as `YYYY-MM-DDTHH:MM:SSZ`:
 Also write `timeline.csv` in the repository root: a CSV with the header `utc,host,level,message` and one row per line
 of the web and db logs (not the ntp log), with `utc` in true UTC, sorted by `utc` and then by `host`; `message` is
 the rest of the line after the level, unchanged.
-A host whose clock is ahead logged timestamps later than true time.""",
+A host whose clock is ahead logged timestamps later than true time. Round corrected times to the nearest second.""",
     "fixture": {**_skew_logs(), "README.md": "# cart incident logs\n"},
     "oracle": {"incident.json": json.dumps(_SKEW_ANSWER, indent=1) + "\n", "timeline.csv": _TIMELINE},
     "hidden": {"test_skew_hidden.py": f'''import json

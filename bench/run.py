@@ -184,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     wanted = [x for x in a.arms.split(",") if x]
     runs_dir = Path(a.runs_dir).resolve()
+    if any(runs_dir == Path(d) or Path(d) in runs_dir.parents for d in grader_sandbox.SYSTEM_DIRS):
+        print("refusing: the runs dir must not be under a system directory the grader sandbox binds read-only",
+              file=sys.stderr)
+        return 2
     if arms.REPO_ROOT == runs_dir or arms.REPO_ROOT in runs_dir.parents:
         print("refusing: workspaces must not be inside the repository that holds the hidden tests", file=sys.stderr)
         return 2
