@@ -14,9 +14,12 @@ The owner's aim is faster, accurate results for everything that runs through Gro
   - §2.3, fact-check the plan: claims about existing code cite `path:line` and are checked before review;
   - §2.6, state the MUST FIX bar in the reviewer's brief before the review;
   - §4, push the feature branch after each green step when the task includes pushing or runs in an ephemeral container.
-- A project SessionStart hook for cloud sessions (`.claude/hooks/session-start.sh`, registered in
-  `.claude/settings.json`) installs pytest and OpenSpec 1.13.2 (the repo's last verified version) when missing and sets
-  `PYTHONDONTWRITEBYTECODE=1`. It does nothing outside cloud sessions and is not installed to users' machines.
+- An explicit, pinned cloud setup script (`scripts/cloud-setup.sh`: pytest 9.2.0 and OpenSpec 1.13.2, the repo's last
+  verified version, installed user-local). The owner sets it as the cloud environment's Setup script or runs it; it
+  never runs implicitly.
+- A check-only project SessionStart hook for cloud sessions (`.claude/hooks/session-start.sh`, registered in
+  `.claude/settings.json`): it sets `PYTHONDONTWRITEBYTECODE=1` and names any missing tool, and installs nothing. It
+  does nothing outside cloud sessions and is not installed to users' machines.
 
 ## Capabilities
 

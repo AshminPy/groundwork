@@ -7,8 +7,9 @@
   - the reviewer's brief states the existing MUST FIX bar before the review, and pattern-matched edge cases are NICE TO HAVE;
   - when a task includes pushing or runs in an ephemeral container, the feature branch is pushed after each green step.
 
-  Cloud sessions on this repository now get pytest and OpenSpec 1.13.2 (the repo's last verified version) from a project SessionStart hook
-  (`.claude/hooks/session-start.sh`); it does nothing locally and is not installed for users.
+  Cloud environments for this repository get pytest and OpenSpec 1.13.2 (the repo's last verified version) from an explicit, pinned
+  `scripts/cloud-setup.sh` (set it as the environment's setup script); a check-only SessionStart hook
+  (`.claude/hooks/session-start.sh`) sets `PYTHONDONTWRITEBYTECODE` and names missing tools. Neither is installed for users.
   (`openspec/changes/fast-accurate-workflow/`)
 
 ## 2.5.0 — 2026-10-26

@@ -22,7 +22,8 @@ Evidence:
 - Pushing per green step could commit the step that completes `tasks.md` and so skip the review Stop hook, which
   checks only uncommitted changes (`hooks/require_material_review.py`, via `dirty_change_names` in
   `hooks/groundwork_shared.py:28`); the rule keeps that step uncommitted until a review reports `Must-fix: 0`.
-- `pip install` can be refused on a system Python that blocks it (PEP 668); the hook then warns and continues.
+- **Owner review (2026-10-29):** no implicit installs at session start. Tools come from the explicit, pinned `scripts/cloud-setup.sh` (pytest 9.2.0, OpenSpec 1.13.2, user-local; set as the cloud environment's Setup script or run by hand). The hook only sets `PYTHONDONTWRITEBYTECODE` and names what is missing; it ran in 0.15 s. The setup script installed OpenSpec from an empty home in 6.6 s and was a no-op on a second run; its pip path was not exercised (pytest was already present), and `pip install --user` can be refused on a PEP 668 system Python.
+- **Push rule:** per-step pushes stay on the task's own feature branch; ready-for-review, merge, release and approval still need the independent review and the owner's authorization.
 
 - Pinning means a later OpenSpec fix is not picked up until the pin is raised.
 - The npm install path was not exercised from an empty npm prefix in validation (RUNTIME VALIDATION REQUIRED in a fresh
