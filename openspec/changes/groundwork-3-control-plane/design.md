@@ -62,7 +62,9 @@ Supplementary design pages (owner-reviewed; this document is complete without th
 | A model switch causes an uncached turn | docs index (llms.txt) |
 | Python 3.11 standard library has `tomllib` (read only) and no YAML parser | Python docs |
 
-Still unverified, checked in Phase 0 (tasks group 1):
+Phase 0 results (tasks 1.1–1.8, 2026-10-30) are in `phase0-results.md`. They confirmed D5, D7 and D8 as designed, and changed D1, D2 and D16 as noted below. Only one item stays open: whether mods run in claude.ai cloud sessions.
+
+Originally unverified and checked in Phase 0:
 
 - Whether mods run in cloud sessions and in `-p`.
 - Whether `agent_id` stays the same from SubagentStart through PreToolUse to SubagentStop.
@@ -99,11 +101,15 @@ Still unverified, checked in Phase 0 (tasks group 1):
 - **Choice:** the `groundwork` plugin, plus `profile/work.json` and `profile/personal.json`, applied by `gw profile apply` with a diff, a backup and owner approval.
 - **Why:** plugins can't ship permissions, the sandbox, the default model, env or the main status line.
 - **Rejected:** `install.sh` copy-and-merge, which caused the 2.x hook-path and rc-file problems.
+- **Phase 0 (1.5):** `permissions.defaultMode: "auto"` takes effect only from user or managed settings. So each profile is the user `settings.json` of its own `CLAUDE_CONFIG_DIR` (work and personal), which also keeps the two apart. The confirmed keys are in `phase0-results.md` §1.5.
+- **Phase 0 (1.7):** the work profile sets `sandbox.filesystem.allowWrite` to the vault path. Pre-guard limits Write and Edit for docs to the vault, because the sandbox doesn't cover the Write tool.
+- **Plugin location:** the plugin lives in `plugin/` at the repository root, so 2.x stays untouched until cutover.
 
 ### D2. Safety in settings hooks; display and routing in the mod
 
 - **Choice:** every deny and block is a command hook in `hooks/hooks.json`. The mod only draws the console and corrects models.
 - **Why:** the mods reference covers only Terminal, Desktop and VS Code, so a mod failure must not weaken safety.
+- **Phase 0 (1.3):** mods run with `-p` and in the interactive terminal. claude.ai cloud sessions are not tested; the hooks and status-line fallback stays.
 
 ### D3. No hook asks
 
@@ -124,7 +130,7 @@ Still unverified, checked in Phase 0 (tasks group 1):
   - `agent-start` records `agent_id → (run, task, owned paths)` in `bindings.json`.
   - `pre-guard` reads `agent_type` (plugin-scoped, e.g. `groundwork:builder-terraform`) and `agent_id` to find the binding.
   - Phase 0 checks that `agent_id` stays the same across events.
-- **Fallback:** if it doesn't, builds run one at a time and the binding is keyed by `agent_type`.
+- **Phase 0 (1.1):** confirmed. `agent_id` is stable across events, `agent_type` is `groundwork:<agent>`, and pre-dispatch reads the target from `tool_input.subagent_type`. No fallback is needed.
 
 ### D6. Scope is checked before and after
 
@@ -143,6 +149,7 @@ Still unverified, checked in Phase 0 (tasks group 1):
 
 - **Choice:** `pre-guard` and `pre-dispatch` set `"onFailure": "block"`. The minimum supported Claude Code version is 2.1.295.
 - **Stop checks:** `Stop` and `SubagentStop`, where `onFailure` has no effect, get a file-kept block counter keyed by session id and agent id. After 2 blocks, the task is marked blocked and the stop is allowed. They also honour `stop_hook_active`.
+- **Phase 0 (1.2):** Claude Code imposed no cap in 12 consecutive blocks, so the counter is required. A main-session `Stop` can fire while a subagent still runs in the background, so stop-verify allows the stop while any bound agent hasn't reached SubagentStop.
 
 ### D7a. Agents without Bash hand off through files
 
@@ -152,6 +159,7 @@ Still unverified, checked in Phase 0 (tasks group 1):
 
 - **Choice:** JSON state with a lock and atomic replace (`fcntl.flock`, then a temp file and `os.replace`), per-task revisions, and a hash-chained append-only log. Each log entry stores the sha256 of `run.json` and `tasks.json` after its operation, and `gw` compares that hash on every read, so an outside edit to either file is detected.
 - **Run root:** the folder that holds `git rev-parse --git-common-dir`, so worktrees share one run folder. TOML (read with `tomllib`) for owner-edited config.
+- **Phase 0 (1.6):** worktrees live at `<repo>/.claude/worktrees/agent-<id>`, and `--git-common-dir` resolves to the main `.git`. Snapshot diffs exclude `.claude/worktrees/`. Builders run git commands one per call, because the worktree isolation check refused a chained git command.
 - **Why:**
   - Subagents start fresh.
   - The standard library has no YAML parser.
@@ -213,7 +221,10 @@ Still unverified, checked in Phase 0 (tasks group 1):
 ### D16. Toolchain roles
 
 - **OpenSpec:** the T3/T4 plan format, with the CLI version pinned.
-- **ECC:** every component is inventoried in `toolchain/ecc-inventory.toml` as reuse, wrap or disable. Any hook that can ask is disabled or wrapped.
+- **ECC:** every component is inventoried in `plugin/toolchain/ecc-inventory.toml` (Phase 0, 1.8).
+  - The ECC plugin is not enabled: it would list 68 agents, 286 skills and 94 commands every turn, and its GateGuard, plan-canvas and MCP health hooks conflict with Groundwork's.
+  - Ten components are ported with attribution under ECC's MIT licence. The rest are disabled.
+  - No ECC hook returns ask.
 - **TDD:** qa's red evidence comes before build and green evidence before done.
 - **EGM:** egm and final-reviewer are the fresh-context reviewers, with one shared rubric.
 
@@ -420,7 +431,7 @@ All hooks are command hooks written in Python 3.11 with the standard library onl
 |---|---|
 | `gw` and hook scripts | Unit tests on fixtures |
 | Hook sequences | A hook-replay harness that feeds recorded event JSON (SubagentStart → PreToolUse → SubagentStop …) to the hook scripts and `gw` in order. It is used for tier runs in 12.1 |
-| Mod | `claude plugin test`, once Phase 0 confirms it |
+| Mod | `claude plugin test` (confirmed in Phase 0, 1.4). `claude plugin validate --strict` needs an `author` in the manifest |
 | Live behaviour | The gw-bench focused eval, only with owner approval |
 
 ## Risks / Trade-offs
@@ -436,7 +447,7 @@ All hooks are command hooks written in Python 3.11 with the standard library onl
 ## Migration Plan
 
 1. Phase 0 checks, which can run alongside plan approval. Live checks need owner approval.
-2. The 2.5.0 focused-pilot baseline (gw-bench #78 task 7.5), with owner approval. It must exist before 12.3.
+2. The 2.5.0 focused-pilot baseline (gw-bench #78 task 7.5). **Deferred by the owner on 2026-10-30.** The focus is Groundwork 3, so 12.1 and 12.3 wait for an owner decision. Until a baseline exists, no 3.x release is marked as replacing 2.x (release-gating).
 3. Alpha after task groups 2 to 5: the owner uses it daily.
 4. The full tiers, packs, mod, MCP, dashboard and release gate.
 5. A cutover change after 3.x meets or beats the baseline.

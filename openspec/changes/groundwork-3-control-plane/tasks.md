@@ -9,21 +9,21 @@ Rules for every group:
 
 ## 1. Phase 0 platform checks (can run alongside plan approval)
 
-- [ ] 1.1 **[live]** Start a throwaway plugin agent twice and log `agent_id` and `agent_type` from SubagentStart, PreToolUse and SubagentStop; verify the plugin-scoped `agent_type` value, and whether `agent_id` is stable, are recorded in design.md D5 (about 2 sessions)
-- [ ] 1.2 **[live]** Check that SubagentStart can add context, and how SubagentStop blocking behaves (re-prompt, continuation cap, `stop_hook_active`); verify the results are recorded in design.md D7 (about 2 sessions)
-- [ ] 1.3 **[live]** Load a minimal mod in the terminal, in a cloud session and with `-p`; verify which surfaces run it, recorded in design.md D2 (about 3 sessions)
-- [ ] 1.4 Confirm `claude plugin validate --strict` and `claude plugin test` exist and behave as documented on 2.1.314; verify the command output is recorded in design.md "Testing strategy"
-- [ ] 1.5 Check every intended profile key (permission mode, sandbox and `denyRead`, deny rules, model, env, statusLine) against the settings reference; verify a confirmed-key table is added to design.md D1
-- [ ] 1.6 **[live]** Check the hook working directory and `CLAUDE_PROJECT_DIR` in an `isolation: worktree` subagent, and that `git rev-parse --git-common-dir` finds the main checkout; verify the result is recorded in design.md D8 (about 1 session)
-- [ ] 1.7 **[live]** Check that a write to a folder outside the working directory, standing in for the vault, works in auto mode with the sandbox without a prompt; verify the result and any needed `allowWrite` entry are recorded in design.md D1 (about 1 session)
-- [ ] 1.8 Inventory the installed ECC v2.2.1 agents, skills, commands and hooks with a role for each (reuse, wrap or disable), and flag any hook that can return ask; verify `toolchain/ecc-inventory.toml` lists every component found on disk
+- [x] 1.1 **[live]** Start a throwaway plugin agent twice and log `agent_id` and `agent_type` from SubagentStart, PreToolUse and SubagentStop; verify the plugin-scoped `agent_type` value, and whether `agent_id` is stable, are recorded in design.md D5 (about 2 sessions)
+- [x] 1.2 **[live]** Check that SubagentStart can add context, and how SubagentStop blocking behaves (re-prompt, continuation cap, `stop_hook_active`); verify the results are recorded in design.md D7 (about 2 sessions)
+- [ ] 1.3 **[live]** (terminal and `-p` done; claude.ai cloud session not yet tested, see phase0-results.md) Load a minimal mod in the terminal, in a cloud session and with `-p`; verify which surfaces run it, recorded in design.md D2 (about 3 sessions)
+- [x] 1.4 Confirm `claude plugin validate --strict` and `claude plugin test` exist and behave as documented on 2.1.314; verify the command output is recorded in design.md "Testing strategy"
+- [x] 1.5 Check every intended profile key (permission mode, sandbox and `denyRead`, deny rules, model, env, statusLine) against the settings reference; verify a confirmed-key table is added to design.md D1
+- [x] 1.6 **[live]** Check the hook working directory and `CLAUDE_PROJECT_DIR` in an `isolation: worktree` subagent, and that `git rev-parse --git-common-dir` finds the main checkout; verify the result is recorded in design.md D8 (about 1 session)
+- [x] 1.7 **[live]** Check that a write to a folder outside the working directory, standing in for the vault, works in auto mode with the sandbox without a prompt; verify the result and any needed `allowWrite` entry are recorded in design.md D1 (about 1 session)
+- [x] 1.8 Inventory the installed ECC v2.2.1 agents, skills, commands and hooks with a role for each (reuse, wrap or disable), and flag any hook that can return ask; verify `toolchain/ecc-inventory.toml` lists every component found on disk
 
 ## 2. Plugin skeleton, profile and doctor
 
 - [ ] 2.1 Create the plugin tree: manifest version `3.0.0-alpha.1`, `userConfig` for `vault_path` and `profile`, no `bin/`, an empty `components.json`; verify `claude plugin validate --strict` passes
 - [ ] 2.2 Write `profile/work.json` and `profile/personal.json` using only the keys confirmed in 1.5 (auto mode, sandbox with secret `denyRead`, deny rules, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, statusLine); verify a test checks every key against the table in D1
 - [ ] 2.3 Implement `gw profile diff | apply | revert` with a backup and an approval step (reuse `scripts/merge_settings.py` and `unmerge_settings.py`); verify by tests that apply writes nothing without approval and that revert restores the file byte for byte
-- [ ] 2.4 Implement `gw doctor` as a report-only framework with its first checks (plugin version, profile drift, pinned OpenSpec CLI version) and a fix command for each problem; later groups add their own checks (3.3, 4.6, 10.2); verify by fixture tests that each drift case prints its fix and changes no file
+- [ ] 2.4 Implement `gw doctor` as a report-only framework with its first checks (plugin version, profile drift, pinned OpenSpec CLI version, `TMPDIR` length over 60 characters) and a fix command for each problem; later groups add their own checks (3.3, 4.6, 10.2); verify by fixture tests that each drift case prints its fix and changes no file
 - [ ] 2.5 Document install, profile apply, doctor and rollback in the plugin README; verify the documented commands run on a clean config directory
 
 ## 3. Run state core
@@ -122,7 +122,7 @@ Rules for every group:
 
 ## 12. Baseline and integration
 
-- [ ] 12.1 **[paid]** Run the 2.5.0 focused pilot (gw-bench #78 task 7.5: 30 agent runs plus 6 canary calls) after the owner approves; verify `bench/results/focused-1/report.md` exists with per-arm results and denials reported separately
+- [ ] 12.1 **[paid]** (deferred by owner 2026-10-30) Run the 2.5.0 focused pilot (gw-bench #78 task 7.5: 30 agent runs plus 6 canary calls) after the owner approves; verify `bench/results/focused-1/report.md` exists with per-arm results and denials reported separately
 - [ ] 12.2 Run hook-replay end-to-end sequences for T0 to T4; verify each run starts only its tier's agents, passes its gates, and produces a valid report
 - [ ] 12.3 **[paid]** Run the Groundwork 3 focused eval against the baseline from 12.1, after owner approval; verify the comparison report states accuracy, safety and cost against the pre-registered criteria
 

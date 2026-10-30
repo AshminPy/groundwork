@@ -1,0 +1,2839 @@
+# ECC v2.2.1 inventory for Groundwork 3 (toolchain-integration spec, task 1.8).
+# Source: ECC plugin cache, git 5064474d, MIT licence. Generated 2026-10-30.
+# Decision: the ECC plugin is NOT enabled in Groundwork 3 profiles. Enabling it lists all
+# 68 agents, 286 skills and 94 commands in context every turn, and its hooks overlap with or
+# conflict with Groundwork hooks. Selected content is ported (role "port") with attribution.
+# No ECC hook returns an "ask" decision (scanned 2026-10-30); several deny or block.
+format = 1
+ecc_version = "2.2.1"
+plugin_enabled = false
+
+[[component]]
+kind = "agent"
+name = "a11y-architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "agent-evaluator"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "build-error-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "chief-of-staff"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "code-architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "code-explorer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "code-reviewer"
+role = "port"
+target = "internal skill review-rubric"
+reason = "review checklist folded into the rubric; the agent itself is not used"
+
+[[component]]
+kind = "agent"
+name = "code-simplifier"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "comment-analyzer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "conversation-analyzer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "cpp-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "cpp-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "csharp-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "dart-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "database-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "django-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "django-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "doc-updater"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "docs-lookup"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "e2e-runner"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "fastapi-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "flutter-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "fsharp-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "gan-evaluator"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "gan-generator"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "gan-planner"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "go-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "go-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "harmonyos-app-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "harness-optimizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "healthcare-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "homelab-architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "java-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "java-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "kotlin-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "kotlin-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "loop-operator"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "marketing-agent"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "mle-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "network-architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "network-config-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "network-troubleshooter"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "opensource-forker"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "opensource-packager"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "opensource-sanitizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "performance-optimizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "php-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "planner"
+role = "port"
+target = "internal skill planning"
+reason = "planning checklist compared with OpenSpec planning; only non-duplicate steps kept"
+
+[[component]]
+kind = "agent"
+name = "pr-test-analyzer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "python-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "pytorch-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "rag-pipeline-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "react-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "react-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "refactor-cleaner"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "rust-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "rust-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "security-reviewer"
+role = "port"
+target = "internal skill review-rubric"
+reason = "security review checklist folded into the rubric"
+
+[[component]]
+kind = "agent"
+name = "seo-specialist"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "silent-failure-hunter"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "spec-miner"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "swift-build-resolver"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "swift-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "tdd-guide"
+role = "port"
+target = "internal skill test-design"
+reason = "TDD guidance folded into test-design"
+
+[[component]]
+kind = "agent"
+name = "type-design-analyzer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "typescript-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "agent"
+name = "vue-reviewer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "accessibility"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-architecture-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-eval"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-harness-construction"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-introspection-debugging"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-payment-x402"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-self-evaluation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agent-sort"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agentic-engineering"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "agentic-os"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ai-first-engineering"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ai-regression-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "android-clean-architecture"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "angular-developer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "api-connector-builder"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "api-design"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "architecture-decision-records"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "article-writing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "automation-audit-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "autonomous-agent-harness"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "autonomous-loops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "backend-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "benchmark"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "benchmark-methodology"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "benchmark-optimization-loop"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "blender-motion-state-inspection"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "blueprint"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "brand-discovery"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "brand-voice"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "browser-qa"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "bun-runtime"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "canary-watch"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "carrier-relationship-management"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "cisco-ios-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ck"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "claude-devfleet"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "click-path-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "clickhouse-io"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "code-tour"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "codebase-onboarding"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "codehealth-mcp"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "coding-standards"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "competitive-platform-analysis"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "competitive-report-structure"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "compose-multiplatform-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "config-gc"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "configure-ecc"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "connections-optimizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "content-engine"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "content-hash-cache-pattern"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "context-budget"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "continuous-agent-loop"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "continuous-learning"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "continuous-learning-v2"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "contract-first"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "cost-aware-llm-pipeline"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "cost-tracking"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "council"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "council-multi-model"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "cpp-coding-standards"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "cpp-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "crosspost"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "csharp-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "customer-billing-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "customs-trade-compliance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dart-flutter-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dashboard-builder"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "data-scraper-agent"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "data-throughput-accelerator"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "database-migrations"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "deep-research"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "defi-amm-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "delivery-gate"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "deployment-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "design-system"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dev-team"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "django-celery"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "django-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "django-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "django-tdd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "django-verification"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dmux-workflows"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "docker-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "documentation-lookup"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dotnet-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "dynamic-workflow-mode"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "e2e-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ecc-guide"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ecc-recipes"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ecc-tools-cost-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "email-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "energy-procurement"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "enterprise-agent-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "error-handling"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "eval-harness"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "evm-token-decimals"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "exa-search"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "fal-ai-media"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "fastapi-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "finance-billing-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "flox-environments"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "flutter-dart-code-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "foundation-models-on-device"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "frontend-a11y"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "frontend-design-direction"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "frontend-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "frontend-slides"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "fsharp-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "gan-style-harness"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "gateguard"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "generating-python-installer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "git-workflow"
+role = "port"
+target = "internal skill git-flow"
+reason = "branch and commit conventions; trailers added by Groundwork"
+
+[[component]]
+kind = "skill"
+name = "github-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "golang-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "golang-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "google-workspace-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "growth-log"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "healthcare-cdss-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "healthcare-emr-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "healthcare-eval-harness"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "healthcare-phi-compliance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "hermes-imports"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "hexagonal-architecture"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "hipaa-compliance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "homelab-network-readiness"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "homelab-network-setup"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "homelab-pihole-dns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "homelab-vlan-segmentation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "homelab-wireguard-vpn"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "hookify-rules"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "inherit-legacy-style"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "intent-driven-development"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "inventory-demand-planning"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "investor-materials"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "investor-outreach"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ios-icon-gen"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "iterative-retrieval"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ito-baskets"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ito-compute"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ito-inference"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ito-training"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "java-coding-standards"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "jira-integration"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "jpa-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "knowledge-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kotlin-coroutines-flows"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kotlin-exposed-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kotlin-ktor-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kotlin-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kotlin-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "kubernetes-patterns"
+role = "port"
+target = "domains/kubernetes skill k8s-core"
+reason = "general Kubernetes patterns; vendored under MIT with attribution"
+
+[[component]]
+kind = "skill"
+name = "laravel-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "laravel-plugin-discovery"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "laravel-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "laravel-tdd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "laravel-verification"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "latency-critical-systems"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "lead-intelligence"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "liquid-glass-design"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "living-docs-governance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "llm-trading-agent-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "logistics-exception-management"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "loop-design-check"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "mailtrap-email-integration"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "make-interfaces-feel-better"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "manim-video"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "market-research"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "marketing-campaign"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "mcp-server-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "messages-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ml-adoption-playbook"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "mle-workflow"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "motion-advanced"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "motion-foundations"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "motion-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "motion-ui"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "mysql-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nanoclaw-repl"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nasiko-control-plane"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nestjs-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "netmiko-ssh-automation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "network-bgp-diagnostics"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "network-config-validation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "network-interface-health"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nextjs-turbopack"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nodejs-keccak256"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nutrient-document-processing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "nuxt4-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "openclaw-persona-forge"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "opensource-pipeline"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-add-feature"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-build-mvp"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-change-feature"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-fix-defect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-pipeline"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "orch-refine-code"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "parallel-execution-optimizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "perl-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "perl-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "perl-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "plan-canvas"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "plan-orchestrate"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "plankton-code-quality"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "postgres-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "prediction-market-oracle-research"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "prediction-market-risk-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "prisma-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "product-capability"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "product-lens"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "production-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "production-scheduling"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "project-flow-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "prompt-optimizer"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "python-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "python-testing"
+role = "port"
+target = "builder-general"
+reason = "pytest practice for the general builder"
+
+[[component]]
+kind = "skill"
+name = "pytorch-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "quality-nonconformance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "quarkus-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "quarkus-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "quarkus-tdd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "quarkus-verification"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ralphinho-rfc-pipeline"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "react-native-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "react-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "react-performance"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "react-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "recsys-pipeline-architect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "recursive-decision-ledger"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "redis-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "regex-vs-llm-structured-text"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "remotion-video-creation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "repo-scan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "research-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "returns-reverse-logistics"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "rules-distill"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "rust-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "rust-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "safety-guard"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "santa-method"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "scientific-db-pubmed-database"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "scientific-db-uspto-database"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "scientific-pkg-gget"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "scientific-thinking-literature-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "scientific-thinking-scholar-evaluation"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "search-first"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "security-bounty-hunter"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "security-review"
+role = "port"
+target = "internal skill review-rubric"
+reason = "security checklist folded into the shared rubric"
+
+[[component]]
+kind = "skill"
+name = "security-scan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "seo"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "skill-comply"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "skill-scout"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "skill-stocktake"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "social-graph-ranker"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "social-publisher"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "springboot-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "springboot-security"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "springboot-tdd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "springboot-verification"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "strategic-compact"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "swift-actor-persistence"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "swift-concurrency-6-2"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "swift-protocol-di-testing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "swiftui-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "taste"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "tasteforge-video"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "tdd-workflow"
+role = "port"
+target = "internal skill test-design"
+reason = "red-green-refactor steps match the TDD requirement"
+
+[[component]]
+kind = "skill"
+name = "team-agent-orchestration"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "team-builder"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "terminal-opener"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "terminal-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "tinystruct-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "token-budget-advisor"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ui-demo"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "ui-to-vue"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "uncloud"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "unified-memory"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "unified-notifications-ops"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "verification-loop"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "video-editing"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "videodb"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "visa-doc-translate"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "vite-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "vue-patterns"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "windows-desktop-e2e"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "workspace-surface-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "skill"
+name = "x-api"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "aside"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "auto-update"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "build-fix"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "checkpoint"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "code-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "cost-report"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "cpp-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "cpp-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "cpp-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "ecc-guide"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-claim"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-decompose"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-publish"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-sync"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-unblock"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "epic-validate"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "evolve"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "fastapi-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "feature-dev"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "flutter-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "flutter-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "flutter-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "gan-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "gan-design"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "go-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "go-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "go-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "gradle-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "harness-audit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "hookify-configure"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "hookify-help"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "hookify-list"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "hookify"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "instinct-export"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "instinct-import"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "instinct-status"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "jira"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "kotlin-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "kotlin-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "kotlin-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "learn-eval"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "learn"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "loop-start"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "loop-status"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "marketing-campaign"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "model-route"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "multi-backend"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "multi-execute"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "multi-frontend"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "multi-plan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "multi-workflow"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-add-feature"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-build-mvp"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-change-feature"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-fix-defect"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-refine-code"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "orch-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "plan-canvas"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "plan-prd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "plan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "pm2"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "pr"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "project-init"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "projects"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "promote"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prp-commit"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prp-implement"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prp-plan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prp-pr"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prp-prd"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "prune"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "python-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "quality-gate"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "react-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "react-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "react-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "refactor-clean"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "resume-session"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "review-pr"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "rust-build"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "rust-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "rust-test"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "santa-loop"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "save-session"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "security-scan"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "sessions"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "setup-pm"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "skill-create"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "skill-health"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "test-coverage"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "update-codemaps"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "update-docs"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "command"
+name = "vue-review"
+role = "disable"
+reason = "plugin not enabled; not used by wave 1"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:pre-bash-dispatcher"
+role = "port"
+target = "pre-guard"
+reason = "dispatches block-no-verify and dev-server checks; the deny on git commit/push --no-verify is re-implemented in pre-guard; the rest is disabled"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:gateguard-fact-force"
+role = "disable"
+reason = "denies edits until facts are listed; Groundwork's plan and qa stages replace it, and it slowed work"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:doc-file-warning"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:suggest-compact"
+role = "disable"
+reason = "the status band shows context use"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:observe-runner"
+role = "disable"
+reason = "Groundwork telemetry replaces it"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:governance-capture"
+role = "disable"
+reason = "Groundwork telemetry and decision records replace it"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:config-protection"
+role = "disable"
+reason = "pre-guard protected paths and the sandbox cover it"
+
+[[component]]
+kind = "hook"
+name = "PreToolUse:mcp-health-check"
+role = "disable"
+reason = "makes network calls from a hook; /groundwork:mcp check replaces it"
+
+[[component]]
+kind = "hook"
+name = "PreCompact:pre-compact"
+role = "disable"
+reason = "Groundwork pre-compact brief replaces it"
+
+[[component]]
+kind = "hook"
+name = "SessionStart:session-start-bootstrap"
+role = "disable"
+reason = "Groundwork session-start replaces it"
+
+[[component]]
+kind = "hook"
+name = "SessionStart:plan-canvas-sessions"
+role = "disable"
+reason = "not needed; OpenSpec is the plan format"
+
+[[component]]
+kind = "hook"
+name = "PostToolUse:posttooluse-dispatcher"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "PostToolUseFailure:mcp-health-check"
+role = "disable"
+reason = "makes network calls from a hook; /groundwork:mcp check replaces it"
+
+[[component]]
+kind = "hook"
+name = "PostToolUseFailure:skill-run-tracker"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "Stop:plan-canvas-pending"
+role = "disable"
+reason = "blocks Stop; would conflict with Groundwork stop-verify; makes network calls"
+
+[[component]]
+kind = "hook"
+name = "Stop:stop-format-typecheck"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "Stop:check-console-log"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "Stop:session-end"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "Stop:evaluate-session"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "Stop:cost-tracker"
+role = "disable"
+reason = "Groundwork telemetry and the dashboard replace it"
+
+[[component]]
+kind = "hook"
+name = "Stop:desktop-notify"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
+
+[[component]]
+kind = "hook"
+name = "SessionEnd:session-end-marker"
+role = "disable"
+reason = "plugin not enabled; behaviour not needed or covered by Groundwork hooks"
