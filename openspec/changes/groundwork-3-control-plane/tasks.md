@@ -20,11 +20,11 @@ Rules for every group:
 
 ## 2. Plugin skeleton, profile and doctor
 
-- [ ] 2.1 Create the plugin tree: manifest version `3.0.0-alpha.1`, `userConfig` for `vault_path` and `profile`, no `bin/`, an empty `components.json`; verify `claude plugin validate --strict` passes
-- [ ] 2.2 Write `profile/work.json` and `profile/personal.json` using only the keys confirmed in 1.5 (auto mode, sandbox with secret `denyRead`, deny rules, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, statusLine); verify a test checks every key against the table in D1
-- [ ] 2.3 Implement `gw profile diff | apply | revert` with a backup and an approval step (reuse `scripts/merge_settings.py` and `unmerge_settings.py`); verify by tests that apply writes nothing without approval and that revert restores the file byte for byte
-- [ ] 2.4 Implement `gw doctor` as a report-only framework with its first checks (plugin version, profile drift, pinned OpenSpec CLI version, `TMPDIR` length over 60 characters) and a fix command for each problem; later groups add their own checks (3.3, 4.6, 10.2); verify by fixture tests that each drift case prints its fix and changes no file
-- [ ] 2.5 Document install, profile apply, doctor and rollback in the plugin README; verify the documented commands run on a clean config directory
+- [x] 2.1 Create the plugin tree: manifest version `3.0.0-alpha.1`, `userConfig` for `vault_path` and `profile`, no `bin/`, an empty `components.json`; verify `claude plugin validate --strict` passes
+- [x] 2.2 Write `profile/work.json` and `profile/personal.json` using only the keys confirmed in 1.5 (auto mode, sandbox with secret `denyRead`, deny rules, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, statusLine); verify a test checks every key against the table in D1
+- [x] 2.3 Implement `gw profile diff | apply | revert` with a backup and an approval step (reuse `scripts/merge_settings.py` and `unmerge_settings.py`); verify by tests that apply writes nothing without approval and that revert restores the file byte for byte
+- [x] 2.4 Implement `gw doctor` as a report-only framework with its first checks (plugin version, profile drift, pinned OpenSpec CLI version, `TMPDIR` length over 60 characters) and a fix command for each problem; later groups add their own checks (3.3, 4.6, 10.2); verify by fixture tests that each drift case prints its fix and changes no file
+- [x] 2.5 Document install, profile apply, doctor and rollback in the plugin README; verify the documented commands run on a clean config directory
 
 ## 3. Run state core
 

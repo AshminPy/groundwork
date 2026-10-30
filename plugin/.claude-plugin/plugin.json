@@ -1,0 +1,23 @@
+{
+  "name": "groundwork",
+  "displayName": "Groundwork",
+  "version": "3.0.0-alpha.1",
+  "description": "On-demand agent control plane for Claude Code: tier routing, deterministic guards, run state and evidence in files.",
+  "author": { "name": "AshminPy" },
+  "license": "MIT",
+  "repository": "https://github.com/AshminPy/groundwork",
+  "userConfig": {
+    "vault_path": {
+      "type": "directory",
+      "title": "Obsidian work vault",
+      "description": "Folder the docs agent writes run pages to. Leave empty to keep docs in the run folder."
+    },
+    "profile": {
+      "type": "string",
+      "title": "Profile",
+      "description": "Which Groundwork profile this config directory uses.",
+      "options": ["work", "personal"],
+      "default": "work"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# Pinned external tools (toolchain-integration spec). `gw doctor` reports a mismatch.
+format = 1
+openspec = "1.15.0"
+claude_code_min = "2.1.295"   # onFailure: block (design D7)

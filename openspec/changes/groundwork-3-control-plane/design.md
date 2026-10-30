@@ -104,6 +104,9 @@ Originally unverified and checked in Phase 0:
 - **Phase 0 (1.5):** `permissions.defaultMode: "auto"` takes effect only from user or managed settings. So each profile is the user `settings.json` of its own `CLAUDE_CONFIG_DIR` (work and personal), which also keeps the two apart. The confirmed keys are in `phase0-results.md` §1.5.
 - **Phase 0 (1.7):** the work profile sets `sandbox.filesystem.allowWrite` to the vault path. Pre-guard limits Write and Edit for docs to the vault, because the sandbox doesn't cover the Write tool.
 - **Plugin location:** the plugin lives in `plugin/` at the repository root, so 2.x stays untouched until cutover.
+- **Profile config directories:** `~/.claude-gw3-work` and `~/.claude-gw3-personal`, so the owner's `~/.claude` (with 2.5) is never changed.
+- **Approval:** `gw profile apply` needs `apply` typed at an interactive terminal; it refuses when stdin is not a TTY, so Claude cannot apply it. `revert` restores the backup taken before the first apply, byte for byte.
+- **Found in group 2:** `claude doctor` warns that on Linux, glob patterns in `Read(...)` deny rules are not enforced by the Bash sandbox. The Read tool still honours them, and pre-guard's secret-path checks (4.3) are the main control. The sandbox `denyRead` holds only the plain path `~/.ssh`.
 
 ### D2. Safety in settings hooks; display and routing in the mod
 

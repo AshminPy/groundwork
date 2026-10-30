@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "profile": "work",
+  "config_dir": "~/.claude-gw3-work",
+  "note": "Applied by `gw profile apply`. Only user settings in this profile's own CLAUDE_CONFIG_DIR; permissions.defaultMode auto has no effect from project or local settings (phase0-results 1.5).",
+  "settings": {
+    "permissions": {
+      "defaultMode": "auto",
+      "deny": [
+        "Read(~/.ssh/**)",
+        "Read(~/.aws/credentials)",
+        "Read(~/.config/gcloud/**/*credentials*)",
+        "Read(~/.config/gcloud/**/*.json)",
+        "Read(~/.kube/config)",
+        "Read(**/.env)",
+        "Read(**/.env.*)",
+        "Read(**/*.pem)",
+        "Read(**/*.key)"
+      ]
+    },
+    "sandbox": {
+      "enabled": true,
+      "failIfUnavailable": true,
+      "allowUnsandboxedCommands": false,
+      "filesystem": {
+        "denyRead": [
+          "~/.ssh"
+        ],
+        "allowWrite": [
+          "${VAULT}"
+        ]
+      }
+    },
+    "env": {
+      "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+    },
+    "model": "opus"
+  }
+}

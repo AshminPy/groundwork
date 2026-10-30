@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Groundwork 3 state script. The only code that changes run state (run-state spec)."""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gwlib import doctor, profile  # noqa: E402
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="gw", description="Groundwork 3 state script")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pr = sub.add_parser("profile", help="show, apply or revert a settings profile")
+    pr.add_argument("action", choices=["diff", "apply", "revert"])
+    pr.add_argument("name", choices=list(profile.PROFILES))
+    pr.add_argument("--config-dir", help="the profile's CLAUDE_CONFIG_DIR (default from the profile file)")
+    pr.add_argument("--vault", help="Obsidian work vault path, added to the sandbox allowWrite list")
+    sub.add_parser("doctor", help="report problems and the command that fixes each")
+    return p
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        if args.cmd == "profile":
+            return profile.main(args)
+        return doctor.run()
+    except profile.ProfileError as e:
+        print(f"gw: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
