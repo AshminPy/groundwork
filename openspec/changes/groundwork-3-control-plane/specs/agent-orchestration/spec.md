@@ -7,61 +7,94 @@ Decides which on-demand agents run for a request, in what order, and when the wo
 ## ADDED Requirements
 
 ### Requirement: Every request is routed to exactly one tier
-The main session SHALL classify each request into exactly one tier: T0 answer, T1 quick fix, T2 standard, T3 material, or T4 guarded. Deterministic rules SHALL be evaluated before model judgment, and T4 rules SHALL take precedence over all others. When neither the rules nor the judgment settle it, the higher of the candidate tiers SHALL be chosen.
+The main session SHALL classify each new request into exactly one tier: T0 answer, T1 quick fix, T2 standard, T3 material, or T4 guarded. Deterministic rules SHALL set a minimum tier, and the main session SHALL NOT open a run below it. When several rules match, the highest tier SHALL apply.
 
-#### Scenario: Production keyword forces T4
-- **WHEN** a request names a production environment or a destructive command such as `terraform destroy`
-- **THEN** the run is recorded as T4, even if the change is one line
+#### Scenario: Rule floor cannot be lowered
+- **WHEN** a prompt matches a T4 rule and the main session runs `gw run new --tier T2`
+- **THEN** the command is refused, and the message names the T4 rule
 
-#### Scenario: Uncertain classification goes up
-- **WHEN** the routing judgment cannot decide between T2 and T3
-- **THEN** the run is recorded as T3
+#### Scenario: Conflicting rules
+- **WHEN** a prompt matches one T2 rule and one T3 rule
+- **THEN** the minimum tier is T3
+
+#### Scenario: Negated wording
+- **WHEN** a prompt says "make this production-ready" or "never touch prod"
+- **THEN** no T4 rule matches on those words alone
+
+### Requirement: Follow-up prompts join the active run
+A prompt SHALL join the active run unless the owner starts a new one with `/groundwork:run`, or no run is active. Joining a run SHALL NOT change its tier, except through tier-up.
+
+#### Scenario: Owner says continue
+- **WHEN** a T3 run is active and the owner types "yes, continue"
+- **THEN** no new run is created, and the T3 run continues
 
 ### Requirement: The routing decision is recorded
-Each run SHALL record its tier, the rule or judgment that chose it, and the time, as a decision record that can be traced back later.
+Each run SHALL record its tier, the rules that matched, and the main session's reason, as a decision record. T0 answers SHALL be recorded in the session's routing log with the rules that matched.
 
 #### Scenario: Owner asks why a run was T3
-- **WHEN** the owner runs `gw why` on a run
-- **THEN** the output shows the tier and the routing rule that matched
+- **WHEN** the owner runs `gw why <run-id>`
+- **THEN** the output shows the tier, the matched rules and the reason
 
-### Requirement: Each tier starts only its own agents
-The main session SHALL start only the agents defined for the run's tier. T0 uses explorer. T1 uses a builder and the verify gate. T2 adds investigator (for bugs), qa and final-reviewer. T3 adds planner, egm and docs. T4 adds investigator, planner, egm, the owner approval gate, final-reviewer and docs.
+### Requirement: Each tier has a fixed agent roster
+The main session SHALL start only the agents listed for the run's tier. T0: none, with explorer optional for large searches. T1: none, because the main session edits under the guards. T2: investigator for bugs only, qa, one builder, final-reviewer. T3: planner, qa, egm, builders, final-reviewer, docs. T4: investigator, planner, qa, egm, builders, final-reviewer, docs.
 
-#### Scenario: Typo fix runs no planner
+#### Scenario: Typo fix starts no agent
 - **WHEN** a run is T1
-- **THEN** no planner, qa, egm, final-reviewer or docs agent is started
+- **THEN** no subagent is started, and the verify gate still runs
+
+#### Scenario: T4 includes qa
+- **WHEN** a T4 run reaches the test stage
+- **THEN** qa is started
 
 ### Requirement: Stages run in order behind gates
-An agent SHALL be started only when its stage is open. On T3 and T4, builders SHALL NOT start until egm has approved the plan and tests. On T4, builders SHALL NOT start until the owner has approved. Docs SHALL NOT start until every task is done or explicitly blocked.
+An agent SHALL start only when its stage is open. On T3 and T4, builders SHALL NOT start until egm has approved. On T4, builders SHALL NOT start until the owner has approved through `gw approve`. Docs SHALL NOT start until every task is done or blocked.
 
-#### Scenario: Builder before approval is refused
-- **WHEN** the main session tries to start a builder on a T3 run whose egm verdict is missing
+#### Scenario: Builder before egm approval
+- **WHEN** the main session starts a builder on a T3 run with no egm approval
 - **THEN** the start is denied with the reason "egm approval required"
 
-### Requirement: Agents do not start other agents
-No Groundwork agent SHALL be able to start another agent. Only the main session SHALL assign tasks and start agents.
+#### Scenario: Builder before owner approval
+- **WHEN** egm has approved a T4 plan but the owner has not run `gw approve`
+- **THEN** the builder start is denied
 
-#### Scenario: Builder tries to delegate
-- **WHEN** a builder agent attempts to start a subagent
-- **THEN** the attempt is not possible or is denied, and the builder must return a handoff instead
+### Requirement: Each agent start names its task
+Every start of a Groundwork task agent (every Groundwork agent except explorer) SHALL name the run id and task id. A start that doesn't name them SHALL be denied. The agent SHALL stay bound to that task until it stops. Explorer and non-Groundwork subagents SHALL run read-only.
+
+#### Scenario: Missing task id
+- **WHEN** the main session starts builder-terraform without a task id
+- **THEN** the start is denied with the reason "task id required"
+
+### Requirement: Agents do not start other agents
+Every Groundwork agent SHALL declare its `tools` list, and no list SHALL include the `Agent` tool. Only the main session SHALL start agents.
+
+#### Scenario: Agent file without tools
+- **WHEN** an agent file omits `tools`
+- **THEN** the release check fails, because the agent would inherit `Agent`
 
 ### Requirement: Review loops are limited to two rounds
-The egm-to-planner loop and the final-reviewer-to-builder loop SHALL each run at most two rounds. After the second failed round, the run SHALL stop that loop and ask the owner, listing the open items.
+The egm-to-planner loop and the final-reviewer-to-builder loop SHALL each run at most two rounds. After the second failed round, the loop SHALL stop, and the open items SHALL be shown to the owner.
 
 #### Scenario: Third review round is not started
 - **WHEN** final-reviewer reports open items after round 2
-- **THEN** no builder is restarted for those items and the owner is shown the open items
+- **THEN** no builder is restarted for those items, and the owner sees the list
 
 ### Requirement: Work can move up a tier
-Any agent SHALL be able to return "tier up" with a reason when the work is bigger than its tier allows. The main session SHALL then re-route the run and record the change as a decision.
+Any agent, or the guard at action time, SHALL be able to raise the run's tier with a reason. The run SHALL then continue under the higher tier's roster and gates, and the change SHALL be recorded as a decision. A tier SHALL never be lowered during a run.
 
 #### Scenario: Quick fix turns out to be material
-- **WHEN** a T1 builder finds that the change touches a module interface
-- **THEN** the builder returns tier up, and the run is re-routed to T3 with a new decision record
+- **WHEN** a T1 edit would change a module interface
+- **THEN** the run moves to T3 with a decision record, and planning starts
 
 ### Requirement: A blocked task does not stop other tasks
-When a task cannot continue because of missing access, an unclear requirement or a failed dependency, it SHALL be marked blocked with a reason, and independent tasks SHALL continue.
+When a task cannot continue, it SHALL be marked blocked with a reason. Tasks that don't depend on it SHALL continue.
 
-#### Scenario: One domain is blocked
-- **WHEN** a task needs a builder that does not exist yet
-- **THEN** that task is marked blocked with the reason, and the other tasks keep running
+#### Scenario: Independent task continues
+- **WHEN** T6 is blocked and T5 doesn't depend on it
+- **THEN** T5 is still assigned and finishes
+
+### Requirement: The owner approves or rejects through a command
+`gw approve <run>` and `gw reject <run> --reason` SHALL record an owner decision and open or close the waiting stage. They SHALL be the only way to pass the T4 gate and the only way to continue after a loop limit.
+
+#### Scenario: Owner rejects a T4 plan
+- **WHEN** the owner runs `gw reject r-1 --reason "rollback missing"`
+- **THEN** the run stops, no builder starts, and an owner decision with the reason is recorded
