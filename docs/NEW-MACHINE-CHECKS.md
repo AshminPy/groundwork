@@ -27,8 +27,8 @@ groundwork doctor    # Groundwork's own install check
 In a git repo, ask for something that runs a command, for example "run `git status` and tell me the branch in one
 word".
 
-Pass: if the first reply lacks `Technical details`, a reference or `HARNESS METADATA`, Claude adds them in one
-follow-up. The app shows this as "Stop hook error"; that is Claude Code's label for any Stop-hook request. A plain
+Pass: if the first reply lacks `Technical details`, the `Harness metadata · …` line, or (when files changed) a
+reference, Claude adds them in one follow-up. The app shows this as "Stop hook error"; that is Claude Code's label for any Stop-hook request. A plain
 question with no tools ("what is 2+2?") gets no follow-up. Off switch: `GROUNDWORK_REPLY_CHECK=off`.
 
 ## 2. Usage visibility (feature 2)

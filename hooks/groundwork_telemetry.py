@@ -22,8 +22,8 @@ never prints, never raises past main(). The user's task is primary, telemetry is
 
 ## Per-turn record (Stop)
 
-Trigger: the turn was substantive — the response carries a "Harness metadata" block (the block
-output-contract.md asks for) OR the current turn used at least one tool. A conversational reply
+Trigger: the turn was substantive — the response carries harness metadata (the one-line form
+output-contract.md asks for, or the older block) OR the current turn used at least one tool. A conversational reply
 with no tool use produces no record. When the block is missing, observed facts are still
 recorded and `declared.block_present` is false (declared fields stay "unknown").
 
@@ -100,6 +100,10 @@ except Exception:
     TEST_CMD = re.compile(r"(?!x)x")
 
 META_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?Harness metadata(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
+# One-line form (default since the compact reply format): "Harness metadata · Groundwork 2.5.0 · PLAN ·
+# single agent · evidence: repo, docs · validation: partial", optionally in backticks. The block above stays accepted.
+META_LINE = re.compile(r"^[ \t]*`?[ \t]*Harness metadata[ \t]*·[ \t]*([^\n]{1,400}?)[ \t]*`?[ \t]*$", re.MULTILINE | re.IGNORECASE)
+SUBAGENTS = re.compile(r"^\d{1,3}\s+subagents?$", re.IGNORECASE)
 # Accepts the code-block layout ("Playbook:       IMPLEMENT") and, for tolerance, a bullet or bold key.
 META_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z ]+?)\s*\**\s*:\s*\**\s*(.+?)\s*$")
 # Free text copied from the model's block is stored only if it looks like a short label:
@@ -163,11 +167,34 @@ def harness_version() -> str:
         return "unknown"
 
 
+def has_metadata(text: str) -> bool:
+    """The reply carries harness metadata in either accepted form."""
+    return bool(META_HEADING.search(text or "") or META_LINE.search(text or ""))
+
+
+def parse_metadata_line(body: str) -> dict:
+    """Fields of the one-line form: positional playbook and execution, then `key: value` segments."""
+    fields = {}
+    for seg in body.split("·"):
+        seg = seg.strip().strip("`*").strip()
+        if not seg or re.match(r"^Groundwork\s+\S+$", seg, re.IGNORECASE):
+            continue  # the version is observed by the hook itself
+        key, sep, value = seg.partition(":")
+        if sep and re.match(r"^[A-Za-z ]{1,20}$", key.strip()):
+            fields[key.strip().lower()] = value.strip()
+        elif seg.upper() in PLAYBOOKS and "playbook" not in fields:
+            fields["playbook"] = seg
+        elif (seg.lower() in EXEC_MODES or SUBAGENTS.match(seg)) and "execution" not in fields:
+            fields["execution"] = seg
+    return fields
+
+
 def parse_metadata(text: str) -> dict:
-    """Fields of the 'Harness metadata' block as the model stated them (lower-cased keys)."""
+    """Fields of the harness metadata (block or one-line form) as the model stated them (lower-cased keys)."""
     m = META_HEADING.search(text)
     if not m:
-        return {}
+        line = META_LINE.search(text)
+        return parse_metadata_line(line.group(1)) if line else {}
     fields = {}
     for line in text[m.end():].splitlines():
         if not line.strip():

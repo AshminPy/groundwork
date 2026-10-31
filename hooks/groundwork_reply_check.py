@@ -13,11 +13,12 @@ Stop: when the turn used a real tool (bookkeeping tools such as ToolSearch do no
 final reply (`last_assistant_message`) must have:
   - a plain-language result first (not a Technical details / Evidence / metadata heading);
   - a `Technical details` section when Bash ran;
-  - an `Evidence & references` section (or `Evidence`) with at least one URL, file:line or
-    file path inside it, so every reply carries the sources a reader can check and reuse. The owner
-    asked for this after first measuring that 34 of 40 saved benchmark answers cited file:line only
-    inline: a reference anywhere is not enough, it must be in the section;
-  - the `HARNESS METADATA` block.
+  - when the turn changed files (Edit / Write / MultiEdit / NotebookEdit), an `Evidence & references`
+    section (or `Evidence`) with at least one URL, file:line or file path inside it: a reference
+    anywhere else is not enough (34 of 40 saved benchmark answers cited file:line only inline). Other
+    turns follow the contract's "only when the conclusion depends on sources" (owner, 2026-10-31,
+    openspec/changes/compact-reply-format: the section on every reply was noise);
+  - harness metadata: the one-line form or the older four-line block.
 If anything is missing it returns `decision: "block"` once, naming the missing parts; Claude
 then adds them. It never asks twice: when `stop_hook_active` is true (Claude is already
 continuing because of a Stop hook) it does nothing, so it cannot loop
@@ -34,9 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from groundwork_telemetry import META_HEADING, current_turn, turn_facts  # shared transcript parsing
+    from groundwork_telemetry import META_HEADING, current_turn, has_metadata, turn_facts  # shared transcript parsing
 except Exception:  # a missing sibling must not break the session
-    META_HEADING = current_turn = turn_facts = None
+    META_HEADING = current_turn = has_metadata = turn_facts = None
 try:
     from groundwork_shared import mark_turn_start, turn_tools  # tool use without a transcript (telemetry fallback)
 except Exception:
@@ -44,6 +45,7 @@ except Exception:
 
 BOOKKEEPING = {"ToolSearch", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
 BOOKKEEPING_PREFIXES = ("mcp__ccd_turn__",)
+FILE_CHANGING = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 HEADING = r"^[ \t]*(?:#{{1,6}}[ \t]*)?\**[ \t]*(?:{name})[ \t]*\**[ \t]*:?[ \t]*\**[ \t]*$"
 TECH_HEAD = re.compile(HEADING.format(name=r"Technical details"), re.MULTILINE | re.IGNORECASE)
@@ -60,15 +62,17 @@ REFERENCE = re.compile(
 
 REMINDER = (
     "[Groundwork reply format] If this turn uses tools, the final reply has, in order: the "
-    "plain-language result first; a `Technical details` section when commands ran; an "
-    "`Evidence & references` section with at least one link or file:line; and the fenced "
-    "`HARNESS METADATA` block at the end. A Stop hook checks this and asks once if a part is missing."
+    "plain-language result first; a `Technical details` section (evidence only, no restated result) "
+    "when commands ran; an `Evidence & references` section with at least one link or file:line when "
+    "files changed or the conclusion depends on sources; and one last line "
+    "`Harness metadata · Groundwork <version> · <PLAYBOOK> · <execution> · evidence: <types> · validation: <state>`. "
+    "State each fact once and do not repeat a recap the app already shows. A Stop hook checks this and asks once if a part is missing."
 )
 MISSING_TEXT = {
     "explanation": "a plain-language result first (the reply opens with a section heading instead)",
     "technical_details": "a `Technical details` section (commands ran this turn)",
-    "evidence": "an `Evidence & references` section listing at least one link or file:line that supports the result",
-    "metadata": "the fenced `HARNESS METADATA` block at the end",
+    "evidence": "an `Evidence & references` section listing at least one link or file:line for what changed (files changed this turn)",
+    "metadata": "the one-line `Harness metadata · Groundwork <version> · <PLAYBOOK> · …` at the end",
 }
 
 ROUTES = {  # one category must match alone; any overlap means "not confident" and routes nothing
@@ -109,13 +113,14 @@ def check_reply(text: str, tools) -> list:
     missing = []
     first = next((ln for ln in text.splitlines() if ln.strip()), "")
     if (not first or first.strip().startswith("```") or TECH_HEAD.match(first) or EVID_HEAD.match(first)
-            or (META_HEADING is not None and META_HEADING.match(first)) or "HARNESS METADATA" in first.upper()):
+            or (META_HEADING is not None and META_HEADING.match(first)) or "HARNESS METADATA" in first.upper()
+            or (has_metadata is not None and has_metadata(first))):
         missing.append("explanation")
     if "Bash" in used and not TECH_HEAD.search(text):
         missing.append("technical_details")
-    if not evidence_ok(text):
+    if FILE_CHANGING.intersection(used) and not evidence_ok(text):
         missing.append("evidence")
-    if META_HEADING is None or not META_HEADING.search(text):
+    if has_metadata is None or not has_metadata(text):
         missing.append("metadata")
     return missing
 
