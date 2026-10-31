@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Compact reply format** (`openspec/changes/compact-reply-format/`). Replies are easier to scan in the Claude app:
+  - Harness metadata is one line at the end instead of a four-line fenced block. Telemetry reads it into the same
+    fields; the old block is still accepted.
+  - The reply-check hook asks for `Evidence & references` only when the turn changed files (Edit, Write, MultiEdit,
+    NotebookEdit). Other turns follow the contract's existing "only when the conclusion depends on sources" rule,
+    which the hook used to override. This reverses the earlier "links in every reply" check, at the owner's request.
+  - The contract says to state each fact once: `Technical details` holds evidence only, and the message does not
+    repeat a recap the host app already shows.
+
 ## 2.5.0 — 2026-10-26
 
 - **Security fixes from the 2026-10-12 Claude Security scan** (roadmap M1, `openspec/changes/groundwork-vision-roadmap/`

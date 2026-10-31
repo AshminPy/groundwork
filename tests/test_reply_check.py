@@ -61,6 +61,7 @@ def transcript(tmp: Path, tool_names, name="t.jsonl") -> Path:
     return p
 
 
+LINE_META = "`Harness metadata · Groundwork 2.6.0 · IMPLEMENT · single agent · evidence: repo, tests · validation: verified`"
 META = "```\nHARNESS METADATA\nGroundwork 2.4.0 · IMPLEMENT\nExecution:   single agent\nEvidence:    repo / tests\nValidation:  verified\n```"
 TECH = "**Technical details**\n- Command: `python3 -m pytest tests -q` → 12 passed\n\n"
 EVID = "**Evidence & references**\n- `hooks/parser.py:42` — the new empty-input branch\n\n"
@@ -85,18 +86,27 @@ def test_check_reply() -> None:
     mention = no_tech.replace("Complete.", "Complete. See the Technical details below.")
     check("an inline mention is not a Technical details section", m.check_reply(mention, ["Bash"]) == ["technical_details"])
     no_ref = FULL.replace("- `hooks/parser.py:42` — the new empty-input branch", "- the parser was checked")
-    check("reply with no reference anywhere is reported", m.check_reply(no_ref, ["Bash"]) == ["evidence"])
-    check("no Evidence section and no reference is reported", m.check_reply(FULL.replace(EVID, ""), ["Bash"]) == ["evidence"])
+    check("file-changing turn with no reference anywhere is reported", m.check_reply(no_ref, ["Bash", "Edit"]) == ["evidence"])
+    check("file-changing turn with no Evidence section is reported", m.check_reply(FULL.replace(EVID, ""), ["Write"]) == ["evidence"])
+    check("Bash-only turn does not need the Evidence section (owner, compact reply format)", m.check_reply(FULL.replace(EVID, ""), ["Bash"]) == [])
+    for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        check(f"{tool} counts as a file-changing turn", m.check_reply(FULL.replace(EVID, ""), ["Bash", tool]) == ["evidence"])
     inline = FULL.replace(EVID, "").replace("Complete.", "Complete. The fix is at `hooks/parser.py:42`.")
-    check("inline file:line without an Evidence & references section is reported (owner: links in every reply)",
-          m.check_reply(inline, ["Bash"]) == ["evidence"], str(m.check_reply(inline, ["Bash"])))
+    check("inline file:line without an Evidence & references section is reported on a file-changing turn",
+          m.check_reply(inline, ["Bash", "Edit"]) == ["evidence"], str(m.check_reply(inline, ["Bash", "Edit"])))
     empty_section = FULL.replace("- `hooks/parser.py:42` — the new empty-input branch", "- see above")
     check("an Evidence section with no link or file:line inside it is reported",
-          m.check_reply(empty_section + "\nAlso `hooks/parser.py:42`.", ["Bash"]) == ["evidence"])
+          m.check_reply(empty_section + "\nAlso `hooks/parser.py:42`.", ["Bash", "Edit"]) == ["evidence"])
     in_meta = FULL.replace(EVID, "").replace("Validation:  verified", "Validation:  verified https://example.com/x")
-    check("a link inside the metadata block does not count as the Evidence section", "evidence" in m.check_reply(in_meta, ["Bash"]))
+    check("a link inside the metadata block does not count as the Evidence section", "evidence" in m.check_reply(in_meta, ["Bash", "Edit"]))
     read_only = FULL.replace(TECH, "").replace(EVID, "")
-    check("read-only tool turns need the Evidence section too", m.check_reply(read_only, ["Read"]) == ["evidence"])
+    check("read-only tool turns do not need the Evidence section", m.check_reply(read_only, ["Read"]) == [])
+    line_only = "Complete. The parser now accepts empty input.\n\n" + TECH + EVID + LINE_META
+    check("one-line metadata satisfies the metadata check", m.check_reply(line_only, ["Bash", "Edit"]) == [], str(m.check_reply(line_only, ["Bash", "Edit"])))
+    check("a reply opening with the metadata line misses the explanation", "explanation" in m.check_reply(LINE_META + "\n\nDone.", ["Read"]))
+    check("a mention of harness metadata in prose is not the line", "metadata" in m.check_reply("Done. The Harness metadata line moved.", ["Read"]))
+    check("a prose line starting with 'Harness metadata:' is not the line", "metadata" in m.check_reply("Done.\nHarness metadata: the block is removed", ["Read"]))
+    check("one-line metadata as the first line misses the explanation", "explanation" in m.check_reply(LINE_META + "\n\nDone.", ["Read"]))
     for heading in ("## Evidence & references", "Evidence and references", "**Evidence**", "### Evidence & References"):
         variant = FULL.replace("**Evidence & references**", heading)
         check(f"evidence heading variant accepted: {heading}", m.check_reply(variant, ["Bash"]) == [])
@@ -110,12 +120,12 @@ def test_check_reply() -> None:
     t0 = _t.monotonic()
     m.check_reply("Done. " + "a" * 20000 + "\n" + META, ["Bash"])
     check("a 20,000-character token is checked in well under a second", _t.monotonic() - t0 < 1.0, f"{_t.monotonic() - t0:.2f}s")
-    saved = m.META_HEADING
-    m.META_HEADING = None
+    saved = m.has_metadata
+    m.has_metadata = None
     check("telemetry module unavailable: metadata check cannot pass silently but never crashes",
           isinstance(m.check_reply(FULL, ["Bash"]), list))
-    m.META_HEADING = saved
-    got = m.check_reply(META, ["Bash"])
+    m.has_metadata = saved
+    got = m.check_reply(META, ["Bash", "Edit"])
     check("metadata-only reply misses explanation, technical details and evidence",
           got == ["explanation", "technical_details", "evidence"], str(got))
     finish()
@@ -152,15 +162,15 @@ def test_prompt_hook() -> None:
         r = run({"hook_event_name": "UserPromptSubmit", "prompt": "debug this crash in the parser"}, env)
         ctx = context_of(r)
         check("prompt hook exits 0", r.returncode == 0, r.stderr)
-        check("reminder added", "HARNESS METADATA" in ctx and "Evidence & references" in ctx, ctx)
+        check("reminder added", "Harness metadata ·" in ctx and "Evidence & references" in ctx and "recap" in ctx, ctx)
         check("confident route adds that playbook's Output Format", "Root cause" in ctx and "ignored" not in ctx, ctx)
         check("context stays small", len(ctx) < 2000, str(len(ctx)))
         ctx = context_of(run({"hook_event_name": "UserPromptSubmit", "prompt": "review the design and deploy it"}, env))
-        check("low-confidence route: reminder only", "Output Format" not in ctx and "HARNESS METADATA" in ctx, ctx)
+        check("low-confidence route: reminder only", "Output Format" not in ctx and "Harness metadata ·" in ctx, ctx)
         r = run({"hook_event_name": "UserPromptSubmit", "prompt": "/compact"}, env)
         check("slash command: no output", r.returncode == 0 and r.stdout.strip() == "", r.stdout)
         r = run({"hook_event_name": "UserPromptSubmit", "prompt": "explain how hooks work"}, env)
-        check("missing playbook file: reminder only, no crash", r.returncode == 0 and "HARNESS METADATA" in context_of(r), r.stderr)
+        check("missing playbook file: reminder only, no crash", r.returncode == 0 and "Harness metadata ·" in context_of(r), r.stderr)
     finish()
 
 
@@ -173,7 +183,7 @@ def test_stop_hook() -> None:
         out = json.loads(r.stdout) if r.stdout.strip() else {}
         check("tool turn missing parts is asked once (block)", out.get("decision") == "block", r.stdout)
         check("reason names the missing parts",
-              all(w in out.get("reason", "") for w in ("HARNESS METADATA", "Evidence")), out.get("reason", ""))
+              all(w in out.get("reason", "") for w in ("Harness metadata ·", "Technical details")), out.get("reason", ""))
         r = run({**base, "last_assistant_message": FULL})
         check("complete reply: no output", r.returncode == 0 and r.stdout.strip() == "", r.stdout)
         r = run({**base, "stop_hook_active": True, "last_assistant_message": "Done."})

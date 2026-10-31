@@ -434,8 +434,31 @@ def test_tool_call_telemetry() -> None:
     finish()
 
 
+def test_metadata_line() -> None:
+    """The one-line form (compact reply format) records the same declared fields as the block."""
+    print("metadata line")
+    m = load_module()
+    line = "Complete. Done.\n\n`Harness metadata · Groundwork 2.6.0 · PLAN · single agent · evidence: repo, docs · validation: partial`"
+    check("one-line form detected", m.has_metadata(line))
+    check("block form still detected", m.has_metadata(BLOCK))
+    check("prose mention is not metadata", not m.has_metadata("The Harness metadata line moved to the end."))
+    got = m.parse_metadata(line)
+    check("one-line fields parsed", got == {"playbook": "PLAN", "execution": "single agent", "evidence": "repo, docs", "validation": "partial"}, str(got))
+    got = m.parse_metadata("Harness metadata · Groundwork 2.6.0 · IMPLEMENT · 2 subagents · agents: a, b · validation: verified")
+    check("subagent count and agents key parsed", got.get("execution") == "2 subagents" and got.get("agents") == "a, b", str(got))
+    check("block form parse unchanged", m.parse_metadata(BLOCK).get("execution") == "2 subagents")
+    with tempfile.TemporaryDirectory() as d:
+        tp = transcript(Path(d), [[{"name": "Read", "input": {}}]])
+        rec = m.build_record({"transcript_path": str(tp), "session_id": "s"}, line)
+        dec = rec.get("declared", {})
+        check("record from one-line form", dec.get("block_present") and dec.get("playbook") == "PLAN"
+              and dec.get("execution_mode") == "single_agent" and dec.get("validation") == "partial"
+              and dec.get("evidence_sources") == ["repo", "docs"], str(dec))
+    finish()
+
+
 if __name__ == "__main__":
-    for fn in (test_outcome_classifier, test_telemetry_hook, test_classify_tool, test_tool_call_telemetry):
+    for fn in (test_outcome_classifier, test_telemetry_hook, test_classify_tool, test_tool_call_telemetry, test_metadata_line):
         try:
             fn()
         except AssertionError:
