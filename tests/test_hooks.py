@@ -1055,8 +1055,12 @@ def test_snapshot_worktrees() -> None:
         (shim / "git").chmod(0o755)
         old_path = os.environ["PATH"]
         os.environ["PATH"] = f"{shim}:{old_path}"
+        # Budget: the listing and rev-parse (two slowed calls) must finish before it, or the section is
+        # cut to nothing. 1.3s left ~0.5s of slack, and one slow process start on macOS (listing seen
+        # at 0.92s) used it up. 2.0s still cannot fit the 8+ siblings at >= 0.4s each.
+        budget_s = 2.0
         try:
-            mod.WORKTREE_BUDGET_SECONDS = 1.3
+            mod.WORKTREE_BUDGET_SECONDS = budget_s
             started = time.monotonic()
             lines = mod.worktree_facts(str(repo))
             elapsed = time.monotonic() - started
@@ -1064,7 +1068,7 @@ def test_snapshot_worktrees() -> None:
             os.environ["PATH"] = old_path
             mod.WORKTREE_BUDGET_SECONDS = 3.0
         check("with every git call slow, the whole section ends near its budget, not after all siblings",
-              elapsed < 1.3 + 0.6 and any("not examined" in l for l in lines), f"{elapsed:.2f}s " + "\n".join(lines))
+              elapsed < budget_s + 0.6 and any("not examined" in l for l in lines), f"{elapsed:.2f}s " + "\n".join(lines))
         mod.HOOK_DEADLINE_SECONDS = 8.0
         mod._T0 = time.monotonic() - 100.0
         spawned = []
