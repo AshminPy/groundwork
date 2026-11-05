@@ -1129,12 +1129,18 @@ def on_prompt(data: dict) -> None:
             risk = t.get("risk") or {}
             status = res.get("openspec") or "exists"
             create = "" if status in ("created", "exists") else (
-                f" The change was not created ({status}); create it: openspec new change {t['change']}.")
+                f" The change was not created ({status}); create it: {gt.openspec_cmd(root, 'new', 'change', t['change'])}.")
             checklist = "\n".join(f"  - {c}" for c in t.get("checklist", []))
             how = "now tracks" if res.get("escalated") else "recorded"
+            # The OpenSpec skills behind /opsx:* pass --store <id> when told the work lives in a store ("Store
+            # selection" in each SKILL.md); naming the store here is what tells them.
+            store = gt.openspec_location(root)[1]
+            if store:
+                create += (f" This change lives in the OpenSpec store '{store}', outside the repository: pass "
+                           f"--store {store} to every openspec command, including the ones /opsx:* runs.")
             add_context("UserPromptSubmit", (
                 f"[Groundwork] {how} {t['key']} as a MATERIAL task (risk {risk.get('level')}: "
-                f"{', '.join(risk.get('categories', []))}). Its OpenSpec change is openspec/changes/{t['change']}/ "
+                f"{', '.join(risk.get('categories', []))}). Its OpenSpec change is {gt.plan_rel(root, t)}/ "
                 f"({status}).{create}\n"
                 "Work the native OpenSpec way: plan the change (proposal, design, specs, tasks — /opsx:propose or the "
                 "openspec-propose skill), then implement it (/opsx:apply), revising the plan whenever the work needs "

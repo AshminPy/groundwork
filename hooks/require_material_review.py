@@ -70,8 +70,13 @@ except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook — no dirty
     # changes found means no review candidates, the same safe outcome as every other
     # fail-open path below.
-    def dirty_change_names(cwd: str) -> set[str]:
+    def dirty_change_names(cwd: str, base: str | None = None) -> set[str]:
         return set()
+try:
+    from groundwork_shared import openspec_location  # in-repo openspec/, or the configured OpenSpec store
+except Exception:
+    def openspec_location(root: str) -> tuple[Path, str, str]:
+        return Path(root), "", ""
 try:
     from groundwork_shared import TEST_CMD  # shared with groundwork_telemetry.py
 except Exception:
@@ -99,18 +104,19 @@ REVIEW_RESULT_FIELD = re.compile(r"^\s*(?:[-*]\s*)?\**\s*([A-Za-z][A-Za-z -]*?)\
 def find_complete_unreviewed_changes(cwd: str) -> list[str]:
     """Return names of openspec changes that are fully task-complete AND look like
     this session's own uncommitted work (not old, already-reviewed, committed work)."""
-    changes_dir = Path(cwd) / "openspec" / "changes"
+    base, _store, prefix = openspec_location(cwd)
+    changes_dir = base / "openspec" / "changes"
     if not changes_dir.is_dir():
         return []
 
-    dirty = dirty_change_names(cwd)
+    dirty = dirty_change_names(cwd, str(base))
     if not dirty:
         return []  # nothing uncommitted under openspec/changes, or not a git repo — nothing to gate
 
     candidates = []
     for entry in sorted(changes_dir.iterdir()):
-        if not entry.is_dir() or entry.name == "archive":
-            continue
+        if not entry.is_dir() or entry.name == "archive" or not entry.name.startswith(prefix):
+            continue  # a store holds every repository's changes: gate this one's only
         tasks_file = entry / "tasks.md"
         if not tasks_file.is_file():
             continue

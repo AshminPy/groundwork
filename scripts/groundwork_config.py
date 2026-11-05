@@ -237,6 +237,19 @@ def load_config(path: Path = DEFAULT_PATH) -> dict:
         return default_config("minimal")
 
 
+# `openspec store setup` accepts kebab-case ids only (OpenSpec 1.13.2: "lowercase letters, numbers, and single
+# hyphen separators").
+STORE_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def openspec_store(cfg: dict) -> str:
+    """The optional top-level `openspec_store`: the id of a store registered with `openspec store setup`.
+    When set, a repository without its own openspec/ keeps Groundwork's OpenSpec changes in that store
+    instead of <repo>/openspec/. Unset, empty or invalid means today's in-repo behaviour."""
+    val = cfg.get("openspec_store") if isinstance(cfg, dict) else None
+    return val if isinstance(val, str) and STORE_ID_RE.match(val) else ""
+
+
 def save_config(cfg: dict, path: Path = DEFAULT_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -313,6 +326,9 @@ def validate_config(cfg: dict) -> list[str]:
                 problems.append(f"routines: unknown routine '{name}' (known: {sorted(KNOWN_ROUTINES)})")
                 continue
             _validate_routine(name, rc, problems)
+    store = cfg.get("openspec_store")
+    if store not in (None, "") and not (isinstance(store, str) and STORE_ID_RE.match(store)):
+        problems.append(f"openspec_store: '{store}' is not a store id (kebab-case: lowercase letters, numbers, single hyphens)")
     for secret_word in ("token", "password", "secret", "api_key", "apikey", "credential", "cookie"):
         if secret_word in json.dumps(cfg).lower():
             problems.append(f"config appears to contain a '{secret_word}'-like key — never store credentials here")

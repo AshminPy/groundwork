@@ -941,10 +941,100 @@ def test_security_scan_regressions() -> None:
     finish()
 
 
+def _store_probe(e: Env, repo: Path, xdg: dict) -> dict:
+    """The snapshot's and review gate's view of the repository's OpenSpec changes, run as the hooks run."""
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import groundwork_session_snapshot as s, "
+            "require_material_review as r; print(json.dumps({'facts': s.openspec_facts(sys.argv[2]), "
+            "'gate': r.find_complete_unreviewed_changes(sys.argv[2])}))")
+    out = subprocess.run([sys.executable, "-c", code, str(HOOKS), str(repo)], capture_output=True, text=True,
+                         timeout=60, env={**e.env, **xdg})
+    return json.loads(out.stdout or "{}")
+
+
+def test_openspec_store() -> None:
+    print("openspec_store: changes go to a registered OpenSpec store; the repository is never written")
+    if not HAS_OPENSPEC:
+        print("  skip (the openspec CLI is not on PATH)")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        e = Env(tmp)
+        # The store registry lives under the XDG directories: keep it inside the temporary directory.
+        xdg = {"XDG_CONFIG_HOME": str(tmp / "xdg-config"), "XDG_DATA_HOME": str(tmp / "xdg-data")}
+        e.env.update(xdg)
+        store = tmp / "store"
+        r = subprocess.run(["openspec", "store", "setup", "gw-test", "--path", str(store)], cwd=tmp,
+                           capture_output=True, text=True, timeout=60, env=e.env)
+        check("store: `openspec store setup` registers a store that is its own git repository",
+              (store / "openspec" / "changes").is_dir() and (store / ".git").is_dir(), r.stdout + r.stderr)
+        (e.cfg / "groundwork").mkdir(parents=True)
+        (e.cfg / "groundwork" / "config.json").write_text(json.dumps({"openspec_store": "gw-test"}))
+
+        repo = make_repo(tmp, openspec=False)
+        ctx = context(e.prompt(repo, "COR-200: Deploy a GoldenGate VM in GCP."))
+        t = e.task(repo, "COR-200") or {}
+        prefix = gt.repo_key(gt.repo_root(repo)) + "-"
+        change = t.get("change", "")
+        check("store: the change name carries the repository key", change == prefix + "cor-200-deploy-goldengate-vm-gcp",
+              change)
+        check("store: the change is created in the store", (store / "openspec" / "changes" / change / ".openspec.yaml").is_file(),
+              str(t.get("openspec_intake")))
+        check("store: the repository is untouched (no openspec init, no change directory)",
+              not (repo / "openspec").exists() and git(repo, "status", "--porcelain", "--untracked-files=all") == "",
+              git(repo, "status", "--porcelain", "--untracked-files=all"))
+        check("store: intake context names the change in the store",
+              f"/openspec/changes/{change}/ (created)" in ctx and f"openspec/changes/{change}" not in
+              ctx.replace(f"/openspec/changes/{change}", "") and "pass --store gw-test to every openspec command" in ctx,
+              ctx[:600])
+
+        # Another repository's change in the same store is never listed or gated here.
+        other = store / "openspec" / "changes" / "other-repo-0123456789-cor-9-x"
+        other.mkdir()
+        (other / "tasks.md").write_text("- [x] 1.1 done\n")
+        (store / "openspec" / "changes" / change / "tasks.md").write_text("- [x] 1.1 done\n")
+        seen = _store_probe(e, repo, xdg)
+        facts = "\n".join(seen.get("facts", []))
+        check("store: the snapshot lists this repository's change from the store",
+              "(store gw-test)" in facts and change in facts and "other-repo" not in facts, facts)
+        check("store: the review gate sees this repository's complete, uncommitted change only",
+              seen.get("gate") == [change], str(seen))
+        out = e.cli(repo, "status")
+        check("store: status reads the plan from the store", "1/1 tasks" in out.stdout, out.stdout + out.stderr)
+
+        # A repository that keeps its own openspec/ stays in-repo even with a store configured.
+        inrepo = make_repo(tmp, "inrepo")
+        e.prompt(inrepo, "COR-201: Deploy a GoldenGate VM in GCP.")
+        t2 = e.task(inrepo, "COR-201") or {}
+        check("store: a repository with its own openspec/ keeps the in-repo change",
+              t2.get("change") == "cor-201-deploy-goldengate-vm-gcp"
+              and (inrepo / "openspec" / "changes" / t2.get("change", "-")).is_dir()
+              and not (store / "openspec" / "changes" / t2.get("change", "-")).exists(), str(t2))
+
+        # An unregistered store never falls back to writing the repository.
+        (e.cfg / "groundwork" / "config.json").write_text(json.dumps({"openspec_store": "not-registered"}))
+        repo3 = make_repo(tmp, "repo3", openspec=False)
+        ctx = context(e.prompt(repo3, "COR-202: Deploy a GoldenGate VM in GCP."))
+        t3 = e.task(repo3, "COR-202") or {}
+        check("store: an unregistered store creates nothing and says why",
+              "not registered" in str(t3.get("openspec_intake")) and "--store not-registered" in ctx
+              and not (repo3 / "openspec").exists()
+              and git(repo3, "status", "--porcelain", "--untracked-files=all") == "", str(t3.get("openspec_intake")))
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import groundwork_config as gc
+    check("config: openspec_store unset or invalid means in-repo",
+          gc.openspec_store({}) == "" and gc.openspec_store({"openspec_store": "Bad_Id"}) == ""
+          and gc.openspec_store({"openspec_store": "gw-tasks"}) == "gw-tasks")
+    check("config: validate reports an invalid openspec_store",
+          any("openspec_store" in p for p in gc.validate_config({"openspec_store": "Bad_Id"}))
+          and not any("openspec_store" in p for p in gc.validate_config({"openspec_store": "gw-tasks"})))
+    finish()
+
+
 if __name__ == "__main__":
     for test in (test_classifier, test_plan_reader, test_authorization_classes, test_shell_parser_regressions,
                  test_security_scan_regressions, test_material_lifecycle,
-                 test_archive_completes_and_recovery, test_tracking_and_boundaries):
+                 test_archive_completes_and_recovery, test_tracking_and_boundaries, test_openspec_store):
         try:
             test()
         except AssertionError:

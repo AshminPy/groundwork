@@ -48,8 +48,13 @@ try:
     from groundwork_shared import dirty_change_names  # shared with require_material_review.py
 except Exception:
     # Fail-open: an incomplete/partial install must never crash this hook.
-    def dirty_change_names(cwd: str) -> set[str]:
+    def dirty_change_names(cwd: str, base: str | None = None) -> set[str]:
         return set()
+try:
+    from groundwork_shared import openspec_location  # in-repo openspec/, or the configured OpenSpec store
+except Exception:
+    def openspec_location(root: str) -> tuple[Path, str, str]:
+        return Path(root), "", ""
 try:
     from groundwork_tasks import open_task_lines  # task ledger (openspec/changes/add-task-lifecycle-gate/)
 except Exception:
@@ -340,14 +345,15 @@ def worktree_facts(cwd: str, budget: int | None = None) -> list[str]:
 
 
 def openspec_facts(cwd: str) -> list[str]:
-    changes_dir = Path(cwd) / "openspec" / "changes"
+    base, store, prefix = openspec_location(cwd)
+    changes_dir = base / "openspec" / "changes"
     if not changes_dir.is_dir():
         return []
-    dirty = dirty_change_names(cwd)
+    dirty = dirty_change_names(cwd, str(base))
     rows = []
     for entry in sorted(changes_dir.iterdir()):
-        if not entry.is_dir() or entry.name == "archive":
-            continue
+        if not entry.is_dir() or entry.name == "archive" or not entry.name.startswith(prefix):
+            continue  # a store holds every repository's changes: list this one's only
         tasks = entry / "tasks.md"
         if tasks.is_file():
             try:
@@ -364,12 +370,12 @@ def openspec_facts(cwd: str) -> list[str]:
             note = "no tasks.md yet" + (f" ({', '.join(present)} present)" if present else "")
         rows.append(f"  {clip(entry.name, 60)}: {note}")
     if not rows:
-        return ["openspec: root present, no active changes"]
+        return [f"openspec (store {store}): no active changes" if store else "openspec: root present, no active changes"]
     extra = len(rows) - MAX_CHANGES
     rows = rows[:MAX_CHANGES]
     if extra > 0:
         rows.append(f"  … {extra} more (run: openspec list)")
-    return ["openspec active changes:"] + rows
+    return [f"openspec active changes (store {store}):" if store else "openspec active changes:"] + rows
 
 
 def signal_facts(cwd: str) -> list[str]:
