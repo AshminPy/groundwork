@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
+  and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the
+  context-window % at task end (`observed.ctx_pct`, from the session's latest statusLine reading, if under 15 minutes
+  old). Older tasks are matched to the statusLine log, which is kept about 8 days. The section states its limits:
+  association, not cause; outcome is self-declared; low-data bands are marked. No session ids reach the page.
+  (`openspec/changes/add-context-band-view/`)
+
 - **OpenSpec store for task files** (opt-in). Set `openspec_store` (a store id from `openspec store setup`) in
   `~/.claude/groundwork/config.json` and a repository without its own `openspec/` keeps Groundwork's OpenSpec changes
   in that store, named `<repo>-<hash>-<change>`. The repository is never written: no `openspec init`, no
