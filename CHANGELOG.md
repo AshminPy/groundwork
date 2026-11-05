@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **OpenSpec store for task files** (opt-in). Set `openspec_store` (a store id from `openspec store setup`) in
+  `~/.claude/groundwork/config.json` and a repository without its own `openspec/` keeps Groundwork's OpenSpec changes
+  in that store, named `<repo>-<hash>-<change>`. The repository is never written: no `openspec init`, no
+  `openspec/changes/`. The task snapshot, the review gate and task status read the store and show only that
+  repository's changes. Repositories that already have `openspec/` and setups without the key behave as before. The
+  intake message names the store so the `/opsx:*` skills pass `--store`. See `docs/TASK-LIFECYCLE.md`.
+
 - **Compact reply format** (`openspec/changes/compact-reply-format/`). Replies are easier to scan in the Claude app:
   - Harness metadata is one line at the end instead of a four-line fenced block. Telemetry reads it into the same
     fields; the old block is still accepted.

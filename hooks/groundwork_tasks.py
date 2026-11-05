@@ -32,6 +32,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from groundwork_shared import openspec_location  # in-repo openspec/, or the configured OpenSpec store
+except Exception:  # fail-open: a partial install keeps the in-repo behaviour
+    def openspec_location(root: str) -> tuple[Path, str, str]:
+        return Path(root), "", ""
+
 try:
     import fcntl  # POSIX; Groundwork supports macOS and Linux only
 except ImportError:  # pragma: no cover
@@ -368,20 +375,35 @@ def next_gw_key(root: str) -> str:
     return f"GW-{n + 1}"
 
 
+def changes_root(root: str) -> Path:
+    """Where the repository's OpenSpec changes live: <root>/openspec/changes, or the configured store's."""
+    return openspec_location(root)[0] / "openspec" / "changes"
+
+
+def openspec_cmd(root: str, *args: str) -> str:
+    """An `openspec` command line for messages, with --store when the changes live in a store."""
+    store = openspec_location(root)[1]
+    return " ".join(["openspec", *args] + (["--store", store] if store else []))
+
+
 def ensure_openspec_change(root: str, change: str) -> str:
-    """Create the task's OpenSpec change with the OpenSpec CLI (never by hand). Returns a short status."""
-    target = Path(root) / "openspec" / "changes" / change
+    """Create the task's OpenSpec change with the OpenSpec CLI (never by hand). Returns a short status.
+    In store mode the change is created in the store and the repository is never written (no `openspec init`)."""
+    base, store, _prefix = openspec_location(root)
+    target = base / "openspec" / "changes" / change
     if target.is_dir():
         return "exists"
     exe = shutil.which("openspec")
     if not exe:
         return "not created: the openspec CLI is not on PATH"
+    if store and base == Path(root):
+        return f"not created: OpenSpec store '{store}' is not registered (openspec store setup {store})"
     try:
-        if not (Path(root) / "openspec").is_dir():
+        if not store and not (Path(root) / "openspec").is_dir():
             subprocess.run([exe, "init", "--tools", "none"], cwd=root, capture_output=True, text=True,
                            timeout=OPENSPEC_TIMEOUT, stdin=subprocess.DEVNULL)
-        r = subprocess.run([exe, "new", "change", change], cwd=root, capture_output=True, text=True,
-                           timeout=OPENSPEC_TIMEOUT, stdin=subprocess.DEVNULL)
+        r = subprocess.run([exe, "new", "change", change] + (["--store", store] if store else []), cwd=root,
+                           capture_output=True, text=True, timeout=OPENSPEC_TIMEOUT, stdin=subprocess.DEVNULL)
     except Exception as exc:
         return f"not created: {clip(exc, 160)}"
     if target.is_dir():
@@ -460,11 +482,11 @@ def intake(cwd: str, text: str, session_id: str = "") -> dict | None:
 
 
 def _new_change_name(root: str, key: str, title: str) -> str:
-    changes = Path(root) / "openspec" / "changes"
+    changes = changes_root(root)
 
     def taken(candidate: str) -> bool:  # live, or archived by an earlier task (change_dir would resolve to it)
         return (changes / candidate).exists() or any((changes / "archive").glob(f"????-??-??-{candidate}"))
-    name, n = change_name(key, title), 1
+    name, n = openspec_location(root)[2] + change_name(key, title), 1  # store mode: "<repo key>-" prefix
     while taken(name if n == 1 else f"{name}-{n}"):
         n += 1  # never adopt a directory an earlier (closed) task or another change already owns
     return name if n == 1 else f"{name}-{n}"
@@ -534,10 +556,11 @@ def _simple_command(cmd: str) -> bool:
 def change_dir(root: str, task: dict) -> Path:
     """The task's OpenSpec change directory; after a native `openspec archive` it is the archived copy."""
     name = task.get("change", "")
-    live = Path(root) / "openspec" / "changes" / name
+    changes = changes_root(root)
+    live = changes / name
     if not name or live.is_dir():
         return live
-    archived = sorted((Path(root) / "openspec" / "changes" / "archive").glob(f"????-??-??-{name}"))
+    archived = sorted((changes / "archive").glob(f"????-??-??-{name}"))
     return archived[-1] if archived else live
 
 
@@ -546,7 +569,11 @@ def is_archived(root: str, task: dict) -> bool:
 
 
 def plan_rel(root: str, task: dict) -> str:
-    return change_dir(root, task).relative_to(root).as_posix()
+    d = change_dir(root, task)
+    try:
+        return d.relative_to(root).as_posix()
+    except ValueError:  # store mode: the change lives outside the repository
+        return d.as_posix()
 
 
 def _md(path: Path) -> str:
@@ -716,7 +743,7 @@ def completion_problems(root: str, task: dict, plan: dict | None = None, state: 
     plan = plan or read_plan(root, task)
     problems = []
     if not plan["exists"]:
-        problems.append(f"no OpenSpec change {plan_rel(root, task)}/ (create it: openspec new change {task.get('change')})")
+        problems.append(f"no OpenSpec change {plan_rel(root, task)}/ (create it: {openspec_cmd(root, 'new', 'change', task.get('change', ''))})")
     elif plan["tasks_total"] == 0 or plan["tasks_done"] < plan["tasks_total"]:
         problems.append(f"tasks.md: {plan['tasks_done']}/{plan['tasks_total']} tasks checked")
     problems += plan["problems"]
@@ -761,7 +788,7 @@ def complete(root: str, key: str) -> tuple[bool, str]:
         if reviews:
             lines.append(f"  reviewed: {reviews[-1].get('reviewer')}, 0 MUST FIX")
         if not is_archived(root, task):
-            lines.append(f"  next: archive the change natively when ready (openspec archive {task.get('change')})")
+            lines.append(f"  next: archive the change natively when ready ({openspec_cmd(root, 'archive', task.get('change', ''))})")
     return True, "\n".join(lines)
 
 

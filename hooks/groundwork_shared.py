@@ -6,10 +6,12 @@ module on their default sys.path.
 Kept deliberately tiny: only what at least two hooks genuinely need identically. If a
 helper is used by only one hook, it stays in that hook.
 """
+import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -25,8 +27,11 @@ TEST_CMD = re.compile(
 )
 
 
-def dirty_change_names(cwd: str) -> set[str]:
+def dirty_change_names(cwd: str, base: str | None = None) -> set[str]:
     """Names of openspec/changes/<name> directories that git shows as modified or untracked.
+
+    `base` is the directory that holds openspec/ when it is not `cwd` (an OpenSpec store, see
+    openspec_location()); a store is its own git repository, so git runs there.
 
     Parses each porcelain line's path into segments instead of substring-matching the raw
     output: with `thing` (committed) and `add-thing` (dirty) in the same repo, a substring
@@ -36,7 +41,7 @@ def dirty_change_names(cwd: str) -> set[str]:
         status = subprocess.run(
             # --untracked-files=all: a brand-new change directory otherwise collapses to one
             # "?? openspec/changes/" line instead of listing its files (caught by the 1.0.0 tests).
-            ["git", "-C", cwd, "status", "--porcelain", "--untracked-files=all", "--", "openspec/changes"],
+            ["git", "-C", str(base or cwd), "status", "--porcelain", "--untracked-files=all", "--", "openspec/changes"],
             capture_output=True, text=True, timeout=5,
         )
     except Exception:
@@ -55,6 +60,74 @@ def dirty_change_names(cwd: str) -> set[str]:
         if len(parts) > 2 and parts[0] == "openspec" and parts[1] == "changes":
             names.add(parts[2])
     return names
+
+
+# ---- Where OpenSpec changes live ------------------------------------------------------------------
+# Default: <repo>/openspec/changes. Opt-in: with `openspec_store` (a store id registered with
+# `openspec store setup`) in ~/.claude/groundwork/config.json, a repository without its own openspec/
+# keeps its changes in that store, named "<repo key>-<change>" so repositories never clash. A repository
+# that has openspec/ keeps the in-repo behaviour.
+OPENSPEC_STORE_TIMEOUT = 5
+_STORE_ROOTS: dict[str, Path | None] = {}  # per hook process
+_TOPLEVELS: dict[str, str] = {}
+
+
+def repo_key(root: str) -> str:
+    """<slug>-<sha256(root)[:10]>: the same scheme as the task ledger and investigation files."""
+    root = os.path.abspath(root)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", os.path.basename(root.rstrip("/"))).strip("-").lower() or "repo"
+    return f"{slug}-{hashlib.sha256(root.encode('utf-8')).hexdigest()[:10]}"
+
+
+def openspec_store_id() -> str:
+    """The configured store id (scripts/groundwork_config.py owns the key), or "" when unset."""
+    for d in (_config_dir() / "groundwork" / "bin", Path(__file__).resolve().parent.parent / "scripts"):
+        if (d / "groundwork_config.py").is_file() and str(d) not in sys.path:
+            sys.path.append(str(d))
+    try:
+        import groundwork_config
+        return groundwork_config.openspec_store(
+            groundwork_config.load_config(_config_dir() / "groundwork" / "config.json"))
+    except Exception:
+        return ""
+
+
+def openspec_store_root(store_id: str) -> Path | None:
+    """The store's folder, from `openspec store list --json` ({"stores": [{"id", "root"}]}); None if unknown."""
+    if store_id not in _STORE_ROOTS:
+        root = None
+        try:
+            r = subprocess.run(["openspec", "store", "list", "--json"], capture_output=True, text=True,
+                               timeout=OPENSPEC_STORE_TIMEOUT, stdin=subprocess.DEVNULL)
+            for st in json.loads(r.stdout or "{}").get("stores", []):
+                if st.get("id") == store_id and st.get("root"):
+                    root = Path(st["root"])
+        except Exception:
+            root = None
+        _STORE_ROOTS[store_id] = root
+    return _STORE_ROOTS[store_id]
+
+
+def openspec_location(root: str) -> tuple[Path, str, str]:
+    """(base, store id, change-name prefix) for a repository: changes live in base/openspec/changes.
+    In-repo (today's behaviour): (root, "", ""). Store mode: (store folder, id, "<repo key>-"); the base
+    stays `root` when the store is not registered, so callers find nothing and create nothing there."""
+    if (Path(root) / "openspec").is_dir():
+        return Path(root), "", ""
+    store = openspec_store_id()
+    if not store:
+        return Path(root), "", ""
+    top = _TOPLEVELS.get(str(root))
+    if top is None:
+        try:
+            top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True,
+                                 text=True, timeout=5, stdin=subprocess.DEVNULL).stdout.strip()
+        except Exception:
+            top = ""
+        top = _TOPLEVELS[str(root)] = top or str(root)
+    if (Path(top) / "openspec").is_dir():
+        return Path(root), "", ""  # a subdirectory of a repository that keeps its own openspec/
+    return openspec_store_root(store) or Path(root), store, repo_key(top) + "-"
 
 
 # ---- Which tools did this turn use? ---------------------------------------------------------------

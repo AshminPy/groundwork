@@ -60,10 +60,29 @@ A new session sees each open task as one line: `KEY [phase n/m] title · evidenc
 
 ## Where state lives
 
-- The plan is the OpenSpec change in the repository.
+- The plan is the OpenSpec change in the repository, or in an OpenSpec store when one is configured (below).
 - The ledger is `~/.claude/groundwork/tasks/<repo>-<hash>/<KEY>.json`, outside the repository, so a cloned repository cannot ship evidence.
 - There is one ledger per repository. A separate `CLAUDE_CONFIG_DIR` (for example work and personal) has its own ledgers.
 - Uninstall keeps the ledger. Records from the earlier approval-code build are read as open tasks.
+
+### Keeping OpenSpec files out of the repository (opt-in)
+
+By default a MATERIAL task in a repository without `openspec/` runs `openspec init` there and adds `openspec/changes/<change>/`. To keep company or shared repositories clean, put the changes in one OpenSpec store instead:
+
+```bash
+openspec store setup gw-tasks --path ~/groundwork-tasks
+```
+
+```bash
+python3 -c 'import json,pathlib; p=pathlib.Path.home()/".claude/groundwork/config.json"; c=json.loads(p.read_text()) if p.exists() else {}; c["openspec_store"]="gw-tasks"; p.write_text(json.dumps(c, indent=2, sort_keys=True)+"\n")'
+```
+
+- `openspec_store` in `~/.claude/groundwork/config.json` is the store id (kebab-case). Unset means today's behaviour.
+- A repository without its own `openspec/` gets its changes in the store as `<repo>-<hash>-<key>-<slug>`, so repositories never clash. Groundwork runs `openspec new change … --store <id>` and never `openspec init` in the repository. The task snapshot, the review gate and `groundwork task status` read the store, and list only this repository's changes.
+- A repository that already has `openspec/` keeps its changes in-repo.
+- `openspec store setup` makes the store its own git repository (pass `--no-init-git` to skip). The review gate uses git there to see uncommitted changes, so keep it a git repository and commit finished changes in it.
+- If the store id is not registered, nothing is created and the intake message says so.
+- `/opsx:*`: the OpenSpec skills already pass `--store <id>` when told the work lives in a store (their "Store selection" rule). The intake message names the store, so Claude carries `--store` through propose, apply and archive. Running `openspec` by hand, add `--store <id>` yourself.
 
 ## Switching it off
 
