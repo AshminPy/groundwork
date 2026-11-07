@@ -115,10 +115,10 @@ struct ClaudeClient {
     /// Source links found in an assistant turn: citations first, then search results.
     static func sources(in content: [[String: Any]]) -> [(title: String, url: String)] {
         var seen = Set<String>()
-        var out: [(String, String)] = []
+        var out: [(title: String, url: String)] = []
         func add(_ title: String?, _ url: String?) {
             guard let url, !url.isEmpty, seen.insert(url).inserted else { return }
-            out.append((title ?? url, url))
+            out.append((title: title ?? url, url: url))
         }
         for block in content {
             for c in block["citations"] as? [[String: Any]] ?? [] {

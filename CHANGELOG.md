@@ -8,6 +8,10 @@
   advise, teach (asks for your proposal first, then challenges it) and review. It is a conversation style on top of
   the selected category, not a new one; evidence, review and safety rules are unchanged. `uninstall.sh` removes it.
 
+- **Architect Coach voice app** (`tools/architect-coach/`, macOS 14+, not yet compiled). A hands-free voice version of
+  the same coach: on-device speech-to-text, spoken replies, the four coach moves, a team knowledge folder, doc search
+  limited to official domains, session notes and ADR export. Replaces the earlier meeting-copilot prototype.
+
 - **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
   and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the
   context-window % at task end (`observed.ctx_pct`, from the session's latest statusLine reading, if under 15 minutes

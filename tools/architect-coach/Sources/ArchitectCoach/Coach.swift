@@ -47,8 +47,11 @@ final class Coach: ObservableObject {
     private var stopSpeakingThisReply = false
     private var sessionFile: URL?
     private var pendingDecisionRecord = false
+    /// True between Start talking and End. Phase alone is not enough: typed questions
+    /// outside a session also go through thinking.
+    @Published private(set) var sessionActive = false
 
-    var inSession: Bool { phase != .idle }
+    var inSession: Bool { sessionActive }
 
     init() {
         let d = UserDefaults.standard
@@ -64,6 +67,7 @@ final class Coach: ObservableObject {
         mic.onBuffer = { [listener] in listener.append($0) }
         listener.onPartial = { [weak self] text in MainActor.assumeIsolated { self?.partial = text } }
         listener.onUtterance = { [weak self] text in MainActor.assumeIsolated { self?.userSaid(text) } }
+        listener.onProblem = { [weak self] text in MainActor.assumeIsolated { self?.status = text } }
         speaker.onIdle = { [weak self] in MainActor.assumeIsolated { self?.replyFinishedSpeaking() } }
     }
 
@@ -80,8 +84,12 @@ final class Coach: ObservableObject {
             status = "Allow Speech Recognition in System Settings > Privacy & Security."
             return
         }
+        guard !requestRunning else { return }
         let knowledge = Storage.loadKnowledge()
         systemPrompt = CoachPrompt.system(coachName: coachName, knowledge: knowledge.text)
+        messages.removeAll()
+        turns.removeAll()
+        sentMode = nil
         sessionFile = Storage.newSessionFile()
         Storage.append("# Session with \(coachName) — \(Date().formatted())\n\n", to: sessionFile!)
         do {
@@ -90,12 +98,15 @@ final class Coach: ObservableObject {
             status = "Microphone error: \(error.localizedDescription)"
             return
         }
+        sessionActive = true
         status = "Knowledge: \(knowledge.files) file(s)\(knowledge.truncated ? " (cut to fit)" : ""). "
             + (listener.isOnDevice ? "Speech stays on this Mac." : "Speech uses Apple's servers.")
         startListening()
     }
 
     func endSession() {
+        sessionActive = false
+        stopSpeakingThisReply = true
         listener.pause()
         speaker.stop()
         mic.stop()
@@ -123,7 +134,7 @@ final class Coach: ObservableObject {
 
     /// Stop the coach talking and give the floor back to you.
     func interrupt() {
-        guard inSession else { return }
+        guard inSession, phase == .thinking || phase == .speaking else { return }
         stopSpeakingThisReply = true
         speaker.stop()
         if requestRunning {
@@ -148,11 +159,18 @@ final class Coach: ObservableObject {
 
     /// Typed message or a voice utterance.
     func send(_ text: String, spoken: Bool) {
-        guard !requestRunning, let key = Keychain.load(), !key.isEmpty else {
-            if !requestRunning { status = "Add your Anthropic API key in Settings (⌘,)." }
+        guard !requestRunning else { return }
+        guard let key = Keychain.load(), !key.isEmpty else {
+            status = "Add your Anthropic API key in Settings (⌘,)."
+            pendingDecisionRecord = false
             return
         }
+        if systemPrompt.isEmpty {
+            // Typed question before any session: build the persona on first use.
+            systemPrompt = CoachPrompt.system(coachName: coachName, knowledge: Storage.loadKnowledge().text)
+        }
         listener.pause()
+        speaker.stop()
         phase = .thinking
         stopSpeakingThisReply = false
 
@@ -197,13 +215,14 @@ final class Coach: ObservableObject {
         if spoken { speaker.beginReply() }
         var assistant: [[String: Any]] = []
         var continuations = 0
+        var failed = false
         do {
             while true {
                 let history = assistant.isEmpty ? messages : messages + [["role": "assistant", "content": assistant]]
                 let result = try await client.stream(system: systemPrompt, messages: history) { [weak self] chunk in
                     guard let self else { return }
                     self.turns[index].text += chunk
-                    if spoken && !self.stopSpeakingThisReply {
+                    if spoken && self.sessionActive && !self.stopSpeakingThisReply {
                         self.phase = .speaking
                         self.speaker.feed(chunk)
                     }
@@ -214,9 +233,9 @@ final class Coach: ObservableObject {
                 if result.stopReason == "refusal" {
                     turns[index].text += "\n\n[The model declined this request.]"
                 }
-                if result.stopReason == "pause_turn" && continuations < 3 {
-                    continuations += 1
-                    continue
+                if result.stopReason == "pause_turn" {
+                    if continuations < 3 { continuations += 1; continue }
+                    turns[index].text += "\n\n[The search ran long and stopped. Ask again to continue.]"
                 }
                 break
             }
@@ -228,14 +247,16 @@ final class Coach: ObservableObject {
             while let last = messages.last, (last["role"] as? String) != "assistant" { messages.removeLast() }
             sentMode = nil
             turns[index].text += "\n\nError: \(error.localizedDescription)"
+            failed = true
             stopSpeakingThisReply = true
+            speaker.stop()
         }
         requestRunning = false
         let reply = turns[index]
         if let file = sessionFile {
             let links = reply.sources.map { "- [\($0.title)](\($0.url))" }.joined(separator: "\n")
             Storage.append("**\(coachName):** \(reply.text)\n\(links.isEmpty ? "" : "\nSources:\n\(links)\n")\n", to: file)
-            if pendingDecisionRecord && !reply.text.hasPrefix("\n\nError") {
+            if pendingDecisionRecord && !failed {
                 let adr = file.deletingLastPathComponent()
                     .appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-ADR.md")
                 try? reply.text.write(to: adr, atomically: true, encoding: .utf8)
@@ -243,7 +264,7 @@ final class Coach: ObservableObject {
             }
         }
         pendingDecisionRecord = false
-        guard inSession else { return }
+        guard inSession else { phase = .idle; return }
         if spoken && !stopSpeakingThisReply {
             speaker.endReply()   // replyFinishedSpeaking() runs when the voice is done
         } else {

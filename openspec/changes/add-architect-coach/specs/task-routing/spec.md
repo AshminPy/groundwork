@@ -5,7 +5,11 @@ When the user asks to be coached, to brainstorm, or to learn to think like an ar
 
 #### Scenario: Coaching request
 - **WHEN** the user says "coach me on designing the CloudAMQP connection setup"
-- **THEN** the task is routed to one category (DESIGN), the coach mode is also read, and the reply asks for the user's own proposal before giving a recommendation
+- **THEN** the task is routed to one category (DESIGN), the coach mode is also read, and the reply uses one of the coach moves (brainstorm, advise, teach, review)
+
+#### Scenario: Teach request
+- **WHEN** the user says "teach me how to design this; coach me"
+- **THEN** the reply asks for the user's own proposal before giving a recommendation
 
 #### Scenario: Ordinary request
 - **WHEN** the user asks "Design readiness probes for our API" with no coaching words

@@ -24,3 +24,11 @@ forbids inventing new ones, so coaching cannot be an eleventh category.
 - No change to evidence, review, authorization or completion rules.
 - No voice interface here; the macOS voice coach is a separate tool (`tools/architect-coach/`).
 - No impersonation of a real person.
+
+## Compatibility with planned Groundwork 3
+
+Checked 2026-11-07: `main` is at `9f551a0`, the base of this change. The Groundwork 3 plan
+(`claude/groundwork-3-redesign`, `openspec/changes/groundwork-3-control-plane/`, not approved or merged) replaces
+`install.sh` and the ten-category router with a plugin and tier routing. If it lands, `modes/coach.md` moves into
+the plugin as an on-demand skill with the same content; nothing in this change blocks that. No other open branch
+edits the router; `claude/accuracy-signals` touches different lines of `uninstall.sh` and `tests/test_playbooks.py`.

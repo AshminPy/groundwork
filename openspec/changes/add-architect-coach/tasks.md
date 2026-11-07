@@ -9,5 +9,5 @@
 
 - [x] 2.1 Tests for the router line, coach file, install and uninstall; full suite green
 - [ ] 2.2 `openspec validate add-architect-coach --strict` (OpenSpec CLI not available in the build environment)
-- [ ] 2.3 Live check: a fresh session given "coach me on a CloudAMQP connection design" reads the coach mode and asks for the user's proposal first
+- [ ] 2.3 Live check: a fresh session given "teach me how to design the CloudAMQP connection setup; coach me" reads the coach mode and asks for the user's proposal first
 - [ ] 2.4 Independent review with zero MUST FIX

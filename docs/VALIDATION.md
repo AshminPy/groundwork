@@ -403,7 +403,7 @@ python3 tests/test_hooks.py     → 92 passed, 0 failed   (unchanged)
 python3 tests/test_playbooks.py → 76 passed, 0 failed
 python3 -m pytest tests -q      → 7 passed
 ```
-What they prove: the router is ≤ 60 lines, names the on-demand playbook path, contains the "existing rule wins" clause, the material-ambiguity rule and the output contract, and lists all ten categories; each playbook exists, has the six sections, is ≤ 4,000 bytes, and does not restate the category table; IMPLEMENT embeds the completion block; `install.sh` run twice into a temp `CLAUDE_CONFIG_DIR` (stubbed `claude`/`openspec`) installs the router under `rules/groundwork/` and all ten playbooks under `groundwork/playbooks/`, byte-identical to the repo, with nothing under `rules/`; `uninstall.sh` removes both.
+What they prove: the router is ≤ 60 lines, names the on-demand playbook path, contains the "existing rule wins" clause, the material-ambiguity rule and the output contract, and lists all ten categories; each playbook exists, has the six sections, is ≤ 4,000 bytes, and does not restate the category table; IMPLEMENT embeds the completion block; `install.sh` run twice into a temp `CLAUDE_CONFIG_DIR` (stubbed `claude`/`openspec`) installs the router under `rules/groundwork/` and all ten playbooks under `groundwork/playbooks/` and the coach mode under `groundwork/modes/`, byte-identical to the repo, with nothing under `rules/`; `uninstall.sh` removes them.
 What they do not prove: that Claude routes correctly — that is model behaviour, below.
 
 **Live install on this machine.** `./install.sh` → settings untouched ("already has all Groundwork entries"); `~/.claude/rules/groundwork/task-routing.md` and `~/.claude/groundwork/playbooks/*.md` (10) present.

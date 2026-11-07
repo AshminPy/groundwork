@@ -13,7 +13,5 @@
     <string>Architect Coach listens to you so you can talk with your coach.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Architect Coach converts your speech to text on this Mac.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Architect Coach takes a screenshot only when you press Show my screen, so the coach can see a diagram or console.</string>
 </dict>
 </plist>
