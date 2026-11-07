@@ -3,7 +3,7 @@ import Security
 
 /// Stores the Anthropic API key in the macOS login Keychain, not in a file or UserDefaults.
 enum Keychain {
-    private static let service = "dev.groundwork.meetingcopilot"
+    private static let service = "dev.groundwork.architectcoach"
     private static let account = "anthropic-api-key"
 
     static func save(_ value: String) {

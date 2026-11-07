@@ -92,6 +92,9 @@ cp "$HERE"/hooks/*.py "$CLAUDE_DIR/hooks/"
 # Task playbooks are read on demand by rules/task-routing.md; they live outside rules/ so
 # Claude Code never auto-loads them (see docs/ARCHITECTURE.md "Task routing").
 cp "$HERE"/playbooks/*.md "$CLAUDE_DIR/groundwork/playbooks/"
+# Conversation-style modifiers (COACH), read on demand by task-routing.md like the playbooks.
+mkdir -p "$CLAUDE_DIR/groundwork/modes"
+cp "$HERE"/modes/*.md "$CLAUDE_DIR/groundwork/modes/"
 chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/require_material_review.py \
          "$CLAUDE_DIR"/hooks/groundwork_session_snapshot.py \

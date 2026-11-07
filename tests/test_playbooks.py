@@ -19,6 +19,8 @@ ROUTER = REPO_ROOT / "rules" / "task-routing.md"
 CONTRACT = REPO_ROOT / "rules" / "output-contract.md"
 MAX_CONTRACT_LINES = 58  # was 50 pre-2.0; the Groundwork 2.0 "Review result" section (D3) needed a few more, still well under MAX_ROUTER_LINES's precedent of 60 for an always-loaded rule file
 PLAYBOOKS = REPO_ROOT / "playbooks"
+COACH = REPO_ROOT / "modes" / "coach.md"
+MAX_COACH_BYTES = 4500
 CATEGORIES = ["research", "explain", "design", "plan", "implement",
               "troubleshoot", "validate", "audit", "deploy", "document"]
 SECTIONS = ["## Goal", "## Workflow", "## Evidence", "## Ask Before Acting When",
@@ -98,6 +100,23 @@ def test_router_and_playbooks() -> None:
     finish()
 
 
+def test_coach_mode() -> None:
+    print("modes/coach.md (COACH conversation modifier)")
+    router = ROUTER.read_text()
+    check("router names the coach mode path", "~/.claude/groundwork/modes/coach.md" in router)
+    check("router says coaching is not a new category", "it is not a new category" in router)
+    check("coach mode exists and stays small", COACH.is_file() and len(COACH.read_bytes()) <= MAX_COACH_BYTES,
+          str(len(COACH.read_bytes())) if COACH.is_file() else "missing")
+    text = COACH.read_text() if COACH.is_file() else ""
+    for needle in ("## Goal", "## Conversation moves", "## Evidence", "## Guardrails", "## Output",
+                   "the existing rule wins", "**Brainstorm**", "**Advise**", "**Teach**", "**Review**",
+                   "UNVERIFIED", "Never pretend to be a specific real person",
+                   "https://docs.aws.amazon.com/wellarchitected/", "https://docs.cloud.google.com/architecture/framework"):
+        check(f"coach.md contains: {needle[:40]}", needle in text)
+    check("coach mode is not a playbook", not (PLAYBOOKS / "coach.md").exists())
+    finish()
+
+
 def test_install_copies_playbooks() -> None:
     print("install.sh / uninstall.sh (temp CLAUDE_CONFIG_DIR, stubbed claude/openspec)")
     if shutil.which("bash") is None:
@@ -133,6 +152,8 @@ def test_install_copies_playbooks() -> None:
             check(f"install run {i} exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-400:])
         installed = sorted(p.name for p in (cfg / "groundwork" / "playbooks").glob("*.md"))
         check("all ten playbooks installed", installed == sorted(f"{c}.md" for c in CATEGORIES), str(installed))
+        check("coach mode installed and identical to repo",
+              (cfg / "groundwork" / "modes" / "coach.md").is_file() and (cfg / "groundwork" / "modes" / "coach.md").read_bytes() == COACH.read_bytes())
         check("router installed under rules/groundwork", (cfg / "rules" / "groundwork" / "task-routing.md").is_file())
         check("output contract installed under rules/groundwork", (cfg / "rules" / "groundwork" / "output-contract.md").is_file())
         version_text = (cfg / "groundwork" / "VERSION").read_text().strip() if (cfg / "groundwork" / "VERSION").exists() else ""
@@ -152,6 +173,7 @@ def test_install_copies_playbooks() -> None:
                   (cfg / "groundwork" / "playbooks" / f"{cat}.md").read_bytes() == (PLAYBOOKS / f"{cat}.md").read_bytes())
         r = subprocess.run(["bash", str(REPO_ROOT / "uninstall.sh")], capture_output=True, text=True, env=env, timeout=60)
         check("uninstall exits 0", r.returncode == 0, r.stderr[-300:])
+        check("uninstall removes the coach mode", not (cfg / "groundwork" / "modes").exists())
         check("uninstall removes the playbooks and VERSION", not (cfg / "groundwork" / "playbooks").exists() and not (cfg / "groundwork" / "VERSION").exists())
         check("uninstall keeps telemetry records", (cfg / "groundwork" / "telemetry" / "events.jsonl").is_file())
         check("uninstall keeps investigation-continuity files (Decision D2, your data)", (cfg / "groundwork" / "investigations" / "some-repo-abc123.md").is_file())
@@ -310,7 +332,7 @@ def test_setup_node_still_too_old_after_install() -> None:
 
 
 if __name__ == "__main__":
-    for t in (test_router_and_playbooks, test_install_copies_playbooks, test_install_node_version_check,
+    for t in (test_router_and_playbooks, test_coach_mode, test_install_copies_playbooks, test_install_node_version_check,
               test_setup_node_still_too_old_after_install):
         try:
             t()

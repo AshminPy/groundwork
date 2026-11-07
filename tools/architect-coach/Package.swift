@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "MeetingCopilot",
+    name: "ArchitectCoach",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "MeetingCopilot",
-            path: "Sources/MeetingCopilot"
+            name: "ArchitectCoach",
+            path: "Sources/ArchitectCoach"
         )
     ]
 )

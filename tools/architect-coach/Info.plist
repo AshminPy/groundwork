@@ -2,18 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>dev.groundwork.meetingcopilot</string>
-    <key>CFBundleName</key><string>Meeting Copilot</string>
-    <key>CFBundleExecutable</key><string>MeetingCopilot</string>
+    <key>CFBundleIdentifier</key><string>dev.groundwork.architectcoach</string>
+    <key>CFBundleName</key><string>Architect Coach</string>
+    <key>CFBundleExecutable</key><string>ArchitectCoach</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Meeting Copilot transcribes your microphone so it can follow the conversation.</string>
+    <string>Architect Coach listens to you so you can talk with your coach.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Meeting Copilot converts meeting audio to text on this Mac.</string>
+    <string>Architect Coach converts your speech to text on this Mac.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Meeting Copilot captures meeting audio and, when you ask, a screenshot of your screen.</string>
+    <string>Architect Coach takes a screenshot only when you press Show my screen, so the coach can see a diagram or console.</string>
 </dict>
 </plist>

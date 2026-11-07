@@ -2,7 +2,7 @@
 # Groundwork uninstaller.
 #
 # Removes only what Groundwork added:
-#   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/ and VERSION
+#   - ~/.claude/rules/groundwork/ (the rule files), ~/.claude/groundwork/playbooks/, modes/ and VERSION
 #     (telemetry records under ~/.claude/groundwork/telemetry/ — including Routines' own run
 #      history, routines.jsonl — dashboards under reports/, and investigation-continuity notes
 #      under investigations/, and task briefs under briefs/ are all kept — they are your data; the launchd report job
@@ -69,7 +69,7 @@ doc_drift"
     fi
   done <<< "$routine_names"
 fi
-rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/bin"
+rm -rf "$CLAUDE_DIR/rules/groundwork" "$CLAUDE_DIR/groundwork/playbooks" "$CLAUDE_DIR/groundwork/modes" "$CLAUDE_DIR/groundwork/bin"
 rm -f "$CLAUDE_DIR/groundwork/config.json" \
       "$CLAUDE_DIR/groundwork/VERSION" \
       "$CLAUDE_DIR/groundwork/env" \
