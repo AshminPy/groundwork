@@ -943,9 +943,23 @@ def main(argv=None) -> int:
     s.add_argument("key")
     s.add_argument("reason", nargs="*")
     s.add_argument("--clear", action="store_true")
+    sub.add_parser("fingerprint", help="the content fingerprint and HEAD commit a reviewer reports as 'Reviewed:'")
     a = p.parse_args(argv)
     if not a.cmd:
         p.print_help()
+        return 0
+    if a.cmd == "fingerprint":
+        root = repo_root(os.getcwd())
+        if not root:
+            print("not inside a git repository", file=sys.stderr)
+            return 2
+        fp = fingerprint(root, {})
+        if fp.startswith("unavailable-"):
+            print("fingerprint unavailable: git could not hash the working tree", file=sys.stderr)
+            return 1
+        print(f"fingerprint: {fp}")
+        print(f"head: {(git(root, 'rev-parse', 'HEAD') or '').strip() or 'none'}")
+        print(f"A reviewer ends its result with a REVIEW RESULT block that includes 'Reviewed: {fp}'.")
         return 0
     if a.cmd == "list" and a.all:
         found = False
