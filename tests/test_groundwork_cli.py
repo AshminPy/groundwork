@@ -59,8 +59,10 @@ class Env:
         (bin_dir / "npm").write_text('#!/usr/bin/env bash\nexit 0\n')
         for f in ("claude", "openspec", "npm"):
             os.chmod(bin_dir / f, 0o755)
+        self.agents = root / "LaunchAgents"
         self.env = dict(os.environ, HOME=str(self.home), CLAUDE_CONFIG_DIR=str(self.cfg),
-                         PATH=f"{bin_dir}:{os.environ['PATH']}", NODE_USE_SYSTEM_CA="0")
+                         PATH=f"{bin_dir}:{os.environ['PATH']}", NODE_USE_SYSTEM_CA="0",
+                         GROUNDWORK_NO_LAUNCHCTL="1", GROUNDWORK_LAUNCH_AGENTS_DIR=str(self.agents))
 
     def run_install(self, *args) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(INSTALL), *args], capture_output=True, text=True,
@@ -131,6 +133,9 @@ def test_doctor_dispatches_not_reimplements() -> None:
         e = Env(Path(tmpdir))
         r = e.run_install()
         check("install.sh exits 0", r.returncode == 0, r.stdout[-1500:] + r.stderr[-800:])
+        if sys.platform == "darwin":
+            check("install.sh writes the report schedule into the sandboxed LaunchAgents dir",
+                  (e.agents / "com.groundwork.report.plist").is_file())
 
         # Direct: run the installed setup.sh copy's --doctor mode exactly as groundwork_cli.py does.
         installed_setup = e.cfg / "groundwork" / "bin" / "setup.sh"
