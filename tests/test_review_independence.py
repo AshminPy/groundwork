@@ -108,10 +108,89 @@ def test_review_independence() -> None:
     test_hooks.finish()
 
 
+GATE = HOOKS / "groundwork_task_gate.py"
+REVIEW_CHECK = HOOKS.parent / "scripts" / "review_check.py"
+
+
+def commit_fp(repo: Path, rev: str = "HEAD") -> str:
+    r = subprocess.run(["python3", str(TASKS), "fingerprint", "--commit", rev], cwd=repo, capture_output=True,
+                       text=True, timeout=30)
+    return r.stdout.split("fingerprint: ", 1)[1].split()[0]
+
+
+def pr_gate(repo: Path, transcript: Path, cmd: str, cfg: Path) -> str:
+    return run_hook(GATE, {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": cmd},
+                           "cwd": str(repo), "transcript_path": str(transcript)}, env={"CLAUDE_CONFIG_DIR": str(cfg)})
+
+
+def ci_check(repo: Path, body: str) -> subprocess.CompletedProcess:
+    import os
+    return subprocess.run(["python3", str(REVIEW_CHECK)], cwd=repo, capture_output=True, text=True, timeout=30,
+                          env={**os.environ, "PR_BODY": body})
+
+
+def test_pr_review() -> None:
+    print("review independence — pull requests, including committed changes")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        cfg = tmp / "cfg"
+        repo = make_repo(tmp)
+        (repo / "app.py").write_text("print('v1')\n")
+        write_tasks(repo, done=True)
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "v1")
+
+        reviewed = repo_fp(repo)
+        check("clean tree: the commit fingerprint equals the working-tree fingerprint", commit_fp(repo) == reviewed)
+        none = write_review_events(tmp, "pr-none.jsonl", [{"kind": "bash", "command": "echo work"}])
+        out = pr_gate(repo, none, "gh pr create --title t --body b", cfg)
+        check("gh pr create with no review -> deny", '"permissionDecision": "deny"' in out
+              and "no independent reviewer subagent" in out and reviewed in out, out)
+        check("draft PR before the review -> allowed", pr_gate(repo, none, "gh pr create --draft -t t -b b", cfg) == "")
+        skill = write_review_events(tmp, "pr-skill.jsonl", [{"kind": "review", "id": "s1", "review_name": "Skill",
+                                                               "input": {"skill": "code-review"}, "result": approve(reviewed)}])
+        out = pr_gate(repo, skill, "gh pr create -t t -b b", cfg)
+        check("gh pr create after an inline Skill review only -> deny", '"permissionDecision": "deny"' in out
+              and "inline as a Skill" in out, out)
+        good = write_review_events(tmp, "pr-good.jsonl", [{"kind": "review", "id": "r1", "result": approve(reviewed)}])
+        check("gh pr create after a review of the commit -> allowed", pr_gate(repo, good, "gh pr create -t t -b b", cfg) == "")
+        check("wrapped in cd && ... -> still checked", '"deny"' in pr_gate(tmp, none, f"cd {repo} && gh pr create -t t", cfg))
+
+        # A plan-only commit keeps the review current; a code commit after the review makes it stale.
+        (repo / "openspec" / "changes" / "add-thing" / "tasks.md").write_text("- [x] first\n- [x] second\n- [x] third\n")
+        git(repo, "commit", "-qam", "plan")
+        check("plan-only commit after the review -> still allowed", pr_gate(repo, good, "gh pr create -t t -b b", cfg) == "")
+        (repo / "app.py").write_text("print('v2')\n")
+        git(repo, "commit", "-qam", "v2")
+        out = pr_gate(repo, good, "gh pr create -t t -b b", cfg)
+        check("code commit after the review -> deny as stale", '"deny"' in out and "stale" in out
+              and reviewed in out and commit_fp(repo) in out, out)
+        must = write_review_events(tmp, "pr-must.jsonl", [{"kind": "review", "id": "r2", "result":
+                                   "REVIEW RESULT\nVerdict: changes-required\nMust-fix: 1\nReviewed: " + commit_fp(repo)}])
+        out = pr_gate(repo, must, "gh pr create -t t -b b", cfg)
+        check("review with a MUST FIX -> deny", '"deny"' in out and "1 unresolved MUST FIX" in out, out)
+        out = pr_gate(repo, must, "gh pr new --fill", cfg)
+        check("gh pr new (the built-in alias) is checked too", '"deny"' in out and "1 unresolved MUST FIX" in out, out)
+        check("other gh commands are not affected", pr_gate(repo, none, "gh pr list", cfg) == "")
+
+        # The CI check reads the review from the PR description and the fingerprint from the PR head commit.
+        r = ci_check(repo, "Summary.\n\n" + approve(commit_fp(repo)))
+        check("CI: description names the head fingerprint -> pass", r.returncode == 0, r.stdout + r.stderr)
+        r = ci_check(repo, "Summary.\n\n" + approve(reviewed))
+        check("CI: description names an older fingerprint -> fail as changed after review", r.returncode == 1
+              and "changed after the review" in r.stderr, r.stderr)
+        r = ci_check(repo, "Summary only.")
+        check("CI: no REVIEW RESULT block -> fail with the fix", r.returncode == 1 and commit_fp(repo) in r.stderr, r.stderr)
+        r = ci_check(repo, "REVIEW RESULT\nVerdict: changes-required\nMust-fix: 2\nReviewed: " + commit_fp(repo))
+        check("CI: MUST FIX in the recorded review -> fail", r.returncode == 1 and "2 unresolved" in r.stderr, r.stderr)
+    test_hooks.finish()
+
+
 if __name__ == "__main__":
-    try:
-        test_review_independence()
-    except AssertionError:
-        pass
+    for fn in (test_review_independence, test_pr_review):
+        try:
+            fn()
+        except AssertionError:
+            pass
     print(f"\n{test_hooks.PASS} passed, {test_hooks.FAIL} failed")
     sys.exit(1 if test_hooks.FAIL else 0)

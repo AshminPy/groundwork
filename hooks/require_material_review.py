@@ -341,6 +341,39 @@ def current_fingerprint(cwd: str) -> str | None:
     return fp if re.fullmatch(r"[0-9a-f]{16}", fp or "") else None
 
 
+def pr_review_problem(transcript_path: str, root: str, rev: str = "HEAD") -> str | None:
+    """Why a pull request for `rev` may not be opened yet, or None. Used by the task gate before `gh pr create`:
+    the most recent reviewer subagent must report Must-fix: 0 on exactly the commit's content. Self-review and
+    inline Skill reviews do not count. Fails open (None) when the commit or the transcript cannot be read."""
+    try:
+        from groundwork_tasks import commit_fingerprint
+        fp = commit_fingerprint(root, rev)
+        reviews, _edit, _test = scan_transcript(transcript_path)
+    except Exception:
+        return None
+    if not fp or reviews is None:
+        return None
+    how = (f"Dispatch a reviewer subagent (an Agent call, e.g. subagent_type ecc:code-reviewer) on the PR diff, give it "
+           f"the commit fingerprint {fp} (`groundwork task fingerprint --commit {rev}`), and ask it to end with a "
+           f"REVIEW RESULT block: Verdict, Must-fix: N, Reviewed: {fp}. Put that block in the PR description. "
+           "A draft PR (`gh pr create --draft`) can be opened before the review.")
+    subagent_reviews = [r for r in reviews if r["subagent"]]
+    if not subagent_reviews:
+        inline = " (the only review ran inline as a Skill, which is not independent)" if reviews else ""
+        return f"no independent reviewer subagent reviewed this change in this session{inline}. {how}"
+    last = subagent_reviews[-1]
+    if last["must_fix"] is None or last["reviewed"] is None:
+        return f"the most recent reviewer's result has no REVIEW RESULT block with Must-fix and Reviewed. {how}"
+    if last["must_fix"] > 0:
+        return (f"the most recent review reported {last['must_fix']} unresolved MUST FIX finding(s). Fix them, commit, "
+                f"and get a fresh review. {how}")
+    if last["reviewed"] != fp:
+        return (f"the most recent review covered {last['reviewed']}, but the commit for this PR is {fp}: the approval "
+                "is stale, or the reviewed working tree had changes that are not committed. Commit exactly what was "
+                f"reviewed, or get a fresh review of the commit. {how}")
+    return None
+
+
 def deny(reason: str) -> None:
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)

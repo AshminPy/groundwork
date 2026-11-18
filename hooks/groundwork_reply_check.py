@@ -18,7 +18,13 @@ final reply (`last_assistant_message`) must have:
     anywhere else is not enough (34 of 40 saved benchmark answers cited file:line only inline). Other
     turns follow the contract's "only when the conclusion depends on sources" (owner, 2026-10-31,
     openspec/changes/compact-reply-format: the section on every reply was noise);
-  - harness metadata: the one-line form or the older four-line block.
+  - harness metadata: the one-line form or the older four-line block;
+  - every repository citation outside code fences resolves: a `dir/file.ext` path whose top-level
+    directory exists in the repository must exist on disk or in HEAD, and a `:line` or `:a-b` must be
+    inside the file. A bare `file.ext:line` is range-checked when exactly one repository file has
+    that name. Absolute, `~/` and URL paths, and paths whose top directory is not in the repository,
+    are not checked, so citations of other checkouts or illustrative paths never block
+    (openspec/changes/harden-autonomy-evidence-review, evidence-validation).
 If anything is missing it returns `decision: "block"` once, naming the missing parts; Claude
 then adds them. It never asks twice: when `stop_hook_active` is true (Claude is already
 continuing because of a Stop hook) it does nothing, so it cannot loop
@@ -30,6 +36,7 @@ no output and exit 0. GROUNDWORK_REPLY_CHECK=off disables both events. Stores no
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -74,6 +81,86 @@ MISSING_TEXT = {
     "evidence": "an `Evidence & references` section listing at least one link or file:line for what changed (files changed this turn)",
     "metadata": "the one-line `Harness metadata · Groundwork <version> · <PLAYBOOK> · …` at the end",
 }
+
+# A repository citation: `path/to/file.ext`, `file.ext:12` or `path/file.ext:12-30`, starting at a token start.
+CITATION = re.compile(r"(?<![\w./~:@-])((?:[\w.-]{1,100}/){0,20}[\w-][\w.-]{0,100}\.[A-Za-z]\w{0,9})(?::(\d{1,7})(?:-(\d{1,7}))?)?")
+URL = re.compile(r"[A-Za-z][\w+.-]{0,20}://\S+")
+FENCE = re.compile(r"^[ \t]*```.*?^[ \t]*```[ \t]*$", re.MULTILINE | re.DOTALL)
+MAX_CITATIONS = 60
+MAX_LINES_FILE = 20_000_000  # bytes; larger files are not line-counted
+
+
+def _git(root: str, *args) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, errors="replace", timeout=5,
+                           stdin=subprocess.DEVNULL, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    except Exception:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _line_count(path: Path) -> int | None:
+    try:
+        if path.stat().st_size > MAX_LINES_FILE:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+
+
+def citation_problems(text: str, cwd: str) -> list:
+    """Cited repository files that do not exist, and cited lines outside the file (evidence-validation)."""
+    if not cwd or not os.path.isdir(cwd):
+        return []
+    root = (_git(cwd, "rev-parse", "--show-toplevel") or "").strip()
+    if not root:
+        return []
+    body = URL.sub(" ", FENCE.sub(" ", text or ""))
+    problems, seen, names = [], set(), None
+    for m in CITATION.finditer(body):
+        rel, start, end = m.group(1), m.group(2), m.group(3)
+        cite = m.group(0)
+        if cite in seen:
+            continue
+        seen.add(cite)
+        if len(seen) > MAX_CITATIONS:
+            break
+        rel = rel[2:] if rel.startswith("./") else rel
+        if "/" in rel:
+            top = rel.split("/", 1)[0]
+            if top in (".", "..") or not os.path.isdir(os.path.join(root, top)):
+                continue  # another checkout, an absolute-looking fragment or an illustrative path
+            path = Path(root, rel)
+            if not path.is_file():
+                if _git(root, "cat-file", "-e", f"HEAD:{rel}") is None:
+                    problems.append(f"`{cite}` (no such file in {os.path.basename(root)})")
+                continue
+        else:
+            if not start:
+                continue  # a bare name without a line is too ambiguous to check
+            if names is None:
+                names = {}
+                listed = _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard") or ""
+                for f in listed.split("\0"):
+                    if f:
+                        names.setdefault(f.rsplit("/", 1)[-1], []).append(f)
+            matches = names.get(rel, [])
+            if len(matches) != 1:
+                continue
+            path = Path(root, matches[0])
+        if not start:
+            continue
+        lines = _line_count(path)
+        if lines is None:
+            continue
+        a, b = int(start), int(end) if end else int(start)
+        if a < 1 or b < a:
+            problems.append(f"`{cite}` (not a valid line range)")
+        elif b > lines:
+            problems.append(f"`{cite}` (the file has {lines} line{'' if lines == 1 else 's'})")
+    return problems
+
 
 ROUTES = {  # one category must match alone; any overlap means "not confident" and routes nothing
     "TROUBLESHOOT": r"\b(?:debug\w*|crash\w*|errors?|exceptions?|traceback|stack trace|fail(?:s|ed|ing|ure)?|broken|not working|root cause|rca|incident|outage)\b",
@@ -172,12 +259,21 @@ def on_stop(data: dict) -> None:
     if not isinstance(text, str) or not text.strip():
         return  # no reply text to check (e.g. an older Claude Code without the field): fail open
     missing = check_reply(text, tools)
-    if not missing:
+    try:
+        cited = citation_problems(text, str(data.get("cwd") or "")) if real_tools(tools) else []
+    except Exception:
+        cited = []  # the citation check must never break the format check
+    if not missing and not cited:
         return
-    parts = "; ".join(MISSING_TEXT[m] for m in missing)
-    reason = (f"Groundwork reply check: this turn used tools, but the final reply is missing: {parts}. "
-              "Add only the missing parts in a short follow-up message. Do not repeat the rest of the "
-              "reply and do not re-run tools.")
+    reason = "Groundwork reply check: "
+    if missing:
+        parts = "; ".join(MISSING_TEXT[m] for m in missing)
+        reason += (f"this turn used tools, but the final reply is missing: {parts}. Add only the missing parts in "
+                   "a short follow-up message. Do not repeat the rest of the reply and do not re-run tools.")
+    if cited:
+        reason += ((" " if missing else "") + "These cited repository references do not resolve: " +
+                   "; ".join(cited) + ". Correct or remove each one in a short follow-up message (check the file "
+                   "and line first). For a file in another checkout, cite its absolute path.")
     print(json.dumps({"decision": "block", "reason": reason}))
 
 
