@@ -14,6 +14,8 @@
 - [x] 1.9 The task gate denies a non-draft `gh pr create` until the most recent reviewer subagent reported `Must-fix: 0` on the commit it publishes
 - [x] 1.10 `scripts/review_check.py` and `.github/workflows/review-check.yml` fail a PR whose description does not record an approval of the current head
 - [x] 1.11 PR cases in `tests/test_review_independence.py`: no review, draft, Skill-only, current, plan-only commit, code commit after review, MUST FIX, CI pass and fail
+- [x] 1.12 `gh pr edit` that sets the description is checked like `gh pr create`, since the description carries the recorded review
+- [x] 1.13 Ruleset definition requiring `review-check` from GitHub Actions on `main`, and what each layer proves (`docs/PERMISSIONS.md`); applying it is an owner action
 
 ## 2. Evidence validation
 - [x] 2.1 The reply check resolves cited repository paths and `path:line` / `path:a-b` ranges, flagging missing files and out-of-range lines
@@ -31,6 +33,7 @@
 ## 5. Coordination, models and benchmark
 - [x] 5.1 Runbook: coordinator plus background sessions, worktrees, Remote Control for governed work, and the cloud-parity limits (`docs/COORDINATION.md`)
 - [x] 5.2 Benchmark procedure (`benchmark.md`); the paid runs wait for the owner's budget approval
+- [ ] 5.3 End-to-end coordination demo: two dependent tasks in the ledger, one background session in its own worktree, results read back, dependency cleared
 
 ## 6. Integration
 - [x] 6.1 Full test suite, `openspec validate --all --strict`, and an integrated live run of the hooks together

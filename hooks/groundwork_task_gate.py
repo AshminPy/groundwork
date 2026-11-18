@@ -1201,11 +1201,12 @@ GH_VALUE_FLAGS = {"-R", "--repo", "-H", "--head", "-B", "--base", "-t", "--title
 
 def _pr_create(argv: list[str]) -> str | None:
     """For a non-draft `gh pr create` (or its alias `gh pr new`): the local revision it publishes (`--head` when it names a local branch, else
-    HEAD). None for anything else, including drafts, which may open before the review."""
+    HEAD). For `gh pr edit` that sets the description, where the recorded review lives: HEAD. None for anything else,
+    including drafts, which may open before the review."""
     i = next((n for n, w in enumerate(argv) if os.path.basename(w) == "gh"), None)
     if i is None:
         return None
-    rest, words, head, draft = argv[i + 1:], [], None, False
+    rest, words, head, draft, body = argv[i + 1:], [], None, False, False
     n = 0
     while n < len(rest):
         w = rest[n]
@@ -1216,17 +1217,21 @@ def _pr_create(argv: list[str]) -> str | None:
             value = inline if inline else (rest[n + 1] if n + 1 < len(rest) else "")
             if flag in ("-H", "--head"):
                 head = value.split(":", 1)[-1]
+            body = body or flag in ("-b", "--body", "-F", "--body-file")
             n += 0 if inline else 1
         elif not w.startswith("-"):
             words.append(w)
         n += 1
+    if words[:2] == ["pr", "edit"] and body:
+        return "HEAD"
     if words[:2] not in (["pr", "create"], ["pr", "new"]) or draft:  # `new` is gh's built-in alias
         return None
     return head or "HEAD"
 
 
 def check_pr_review(segs: list[dict], cwd: str, transcript_path: str) -> None:
-    """Deny a non-draft `gh pr create` until a reviewer subagent approved exactly the commit it publishes."""
+    """Deny a non-draft `gh pr create`, or a `gh pr edit` of the description, until a reviewer subagent approved
+    exactly the commit it publishes."""
     if pr_review_problem is None or not transcript_path:
         return
     dirs = [cwd]
@@ -1241,7 +1246,7 @@ def check_pr_review(segs: list[dict], cwd: str, transcript_path: str) -> None:
                     rev = "HEAD"  # a remote-only --head branch: the local HEAD is the best available evidence
                 problem = pr_review_problem(transcript_path, root, rev)
                 if problem:
-                    deny(f"Groundwork review check: this opens a pull request, but {problem}")
+                    deny(f"Groundwork review check: this opens or describes a pull request, but {problem}")
         target = _cd_target(s["argv"])
         if target:
             dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))[:32]

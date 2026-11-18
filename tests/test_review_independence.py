@@ -171,6 +171,10 @@ def test_pr_review() -> None:
         check("review with a MUST FIX -> deny", '"deny"' in out and "1 unresolved MUST FIX" in out, out)
         out = pr_gate(repo, must, "gh pr new --fill", cfg)
         check("gh pr new (the built-in alias) is checked too", '"deny"' in out and "1 unresolved MUST FIX" in out, out)
+        out = pr_gate(repo, must, "gh pr edit 7 --body-file body.md", cfg)
+        check("gh pr edit of the description -> checked like pr create", '"deny"' in out and "1 unresolved MUST FIX" in out, out)
+        check("gh pr edit -b with no review -> denied", '"deny"' in pr_gate(repo, none, "gh pr edit 7 -b text", cfg))
+        check("gh pr edit without a description change -> allowed", pr_gate(repo, none, "gh pr edit 7 --add-label x", cfg) == "")
         check("other gh commands are not affected", pr_gate(repo, none, "gh pr list", cfg) == "")
 
         # The CI check reads the review from the PR description and the fingerprint from the PR head commit.

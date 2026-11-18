@@ -6,8 +6,9 @@
   - A review counts only from a reviewer subagent whose REVIEW RESULT block reports `Must-fix: 0` and names the
     content fingerprint it reviewed (`groundwork task fingerprint`). A code change afterwards makes it stale. Inline
     Skill reviews and the author's own text do not count. Background reviewers are read from their own transcript.
-  - A non-draft `gh pr create` is denied until such a review covers the commit it publishes. A new `review-check`
-    workflow fails a PR whose description does not record a review of the current head.
+  - A non-draft `gh pr create`, and a `gh pr edit` of the description, are denied until such a review covers the
+    commit being published. A new `review-check` workflow fails a PR whose description does not record a review of
+    the current head. `docs/PERMISSIONS.md` states what the check proves and how to make it required on `main`.
   - The reply check asks once when a cited repository file is missing or a cited line is out of range.
   - `groundwork task note` records unrelated findings; `show` and `complete` warn about changed files the plan never
     names and TODOs added during the task.

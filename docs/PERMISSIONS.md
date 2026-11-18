@@ -19,8 +19,10 @@ permission mode, auto mode included (code.claude.com/docs/en/hooks, code.claude.
   `--force-with-lease`), `--all`, `--mirror`, and pushes the hook cannot resolve (`block_protected_push.py`).
 - A non-draft `gh pr create` unless the most recent reviewer subagent in the session reported `Must-fix: 0` on
   exactly the commit being published (`require_material_review.py` `pr_review_problem`, called by the task gate).
-  `gh pr new` is the same command. A draft PR may open before the review, and `gh pr ready` is not checked locally;
-  the GitHub `review-check` workflow checks every PR update, including `ready_for_review`.
+  `gh pr new` is the same command, and `gh pr edit` that sets the description (`-b`, `--body`, `-F`, `--body-file`)
+  is checked the same way, because the description carries the recorded review. A draft PR may open before the
+  review, and `gh pr ready` is not checked locally; the GitHub `review-check` workflow checks every PR update,
+  including `ready_for_review`.
 
 ## HUMAN APPROVAL
 
@@ -51,6 +53,29 @@ Groundwork task CLI.
   locks a session; the review checks fail open only when git or the transcript cannot be read.
 - No new deny rules were needed for this change: every tier above was already enforced, except the review check
   before a PR.
+
+## What the pull request review check proves
+
+| Layer | Proves | Does not prove |
+|---|---|---|
+| Local task gate (`gh pr create`, `gh pr new`, `gh pr edit` of the description) | In this Claude Code session, the most recent reviewer subagent reported `Must-fix: 0` on the content fingerprint of the commit being published | That the review was thorough; anything done outside Claude Code |
+| `review-check` workflow | The description records `Must-fix: 0` for the fingerprint of the PR head, recomputed by CI from the commit | Who wrote the block: anyone who can edit the description can type it, and the fingerprint is public |
+| Required status check on `main` (ruleset `protect-main`, source GitHub Actions) | A PR cannot merge unless `review-check` passed on its head, and only GitHub Actions can set that status | That the workflow itself was not changed by the PR: a `pull_request` workflow runs from the PR's own code |
+
+So the check is an enforced, independently recomputable record, not a hard guarantee of independence. A hard
+guarantee needs a second identity that the author does not control, such as a required approving review from
+another GitHub account or app.
+
+To require the check on `main` (owner only; it changes a repository setting), add a `required_status_checks` rule
+for `review-check` with integration 15368 (GitHub Actions) to the existing `protect-main` ruleset, resending its
+existing rules:
+
+```bash
+gh api -X PUT repos/AshminPy/groundwork/rulesets/25349960 --input .github/rulesets/protect-main.json
+```
+
+Then confirm it: `gh api repos/AshminPy/groundwork/rulesets/25349960 --jq '[.rules[].type]'` lists
+`required_status_checks`. Every open PR then needs a recorded review of its head before it can merge.
 
 ## Limits
 
