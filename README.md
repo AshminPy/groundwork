@@ -342,7 +342,11 @@ groundwork/
 │   ├── test_groundwork_cli.py         the `groundwork` command and its installation
 │   ├── test_groundwork_update.py      update/rollback (release validation, safe archive extraction)
 │   ├── test_groundwork_copilot.py     `groundwork copilot explain` (read-only terminal help)
-│   └── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
+│   ├── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
+│   ├── test_review_independence.py    review bound to the reviewed content, including pull requests
+│   ├── test_evidence_validation.py    cited files and lines resolve
+│   ├── test_scope_control.py          task notes and scope warnings
+│   └── test_permission_boundaries.py  hard deny, human approval and autonomous probes through the real hooks
 ├── .claude/ · .agents/                OpenSpec slash commands and skills for developing this repository itself; install.sh does not ship them
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
@@ -363,6 +367,8 @@ groundwork/
     ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
     ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
     ├── TASK-LIFECYCLE.md              task tracking: intake, plan, evidence, completion, what asks for authorization, pilot scope
+    ├── PERMISSIONS.md                 the three permission tiers and what enforces each
+    ├── COORDINATION.md                running several tasks with background sessions, worktrees and the task ledger
     └── images/                        overview diagram and dashboard screenshot
 ```
 

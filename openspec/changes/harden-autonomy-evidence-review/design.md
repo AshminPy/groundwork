@@ -17,7 +17,9 @@ tests/
   fixtures/<safeguard>/           file inputs, only when a test needs them
 ```
 
-Each safeguard ships as its own PR, in the order in `tasks.md`, so each can be reviewed and reverted alone.
+All safeguards ship in one PR, at the owner's request, as separate commits in the order of `tasks.md`, so each can
+still be read and reverted alone. Operator docs live in `docs/PERMISSIONS.md` and `docs/COORDINATION.md`; the
+benchmark procedure is `benchmark.md` in this folder.
 
 ## Architecture questions (architecture-quality.md §2)
 
@@ -60,3 +62,24 @@ WHY                 Without this, a correct background review could never clear 
 TRADEOFFS           It relies on an undocumented transcript layout. If the layout changes, the gate blocks with a correctable message rather than allowing.
 VALIDATION METHOD   Fixture test with the same layout, plus a replay of the real transcript and a live `claude -p` run.
 UNCERTAINTY         The layout is observed, not documented.
+
+DECISION            Enforce PR review twice: locally before `gh pr create`, and in a GitHub workflow on every PR update.
+EVIDENCE            The Stop gate runs only while the change is uncommitted (`hooks/require_material_review.py` find_complete_unreviewed_changes). A PreToolUse `deny` applies in every permission mode (code.claude.com/docs/en/hooks). `commit_fingerprint` of the committed review head equals the reviewed working-tree fingerprint (checked on this branch: both `7e4d6c4df9f91e2d`).
+WHY                 The local check proves the approval came from a fresh-context subagent, which CI cannot see. The CI check proves the recorded approval still matches the head after later pushes, which the local check cannot see.
+TRADEOFFS           The review block must be copied into the PR description. A draft PR may open first. The CI check blocks merging only once the owner marks it as a required status check.
+VALIDATION METHOD   Fixture tests for both checks; the workflow runs on this PR.
+UNCERTAINTY         The CI check cannot tell who wrote the PR description; independence rests on the local check.
+
+DECISION            Citation and scope checks warn or ask once; they never hard-block.
+EVIDENCE            The reply check already asks once and stops when `stop_hook_active` is set (`hooks/groundwork_reply_check.py`). A changed file outside the plan can be a legitimate blocker fix.
+WHY                 A wrong deterministic block costs more than a missed warning, and the owner asked to avoid false blocks.
+TRADEOFFS           A determined agent can ignore a warning; the independent review still sees the diff.
+VALIDATION METHOD   Fixture tests: valid citations, other checkouts and illustrative paths pass; drift completes with a warning.
+UNCERTAINTY         None material.
+
+DECISION            Secrets stay HUMAN APPROVAL, and no new deny rules are added.
+EVIDENCE            The task gate already asks for credential reads through Read and the shell (`tests/test_permission_boundaries.py`). Every HARD DENY item was already enforced except the PR review check.
+WHY                 A deny rule cannot be approved case by case, and the owner sometimes needs metadata checks or rotation.
+TRADEOFFS           An approved prompt can still expose a secret; the owner's rule against printing secret values applies.
+VALIDATION METHOD   Tier probes through the real hooks.
+UNCERTAINTY         `/auto-mode-setup` is not a command in Claude Code 2.1.316; `claude auto-mode config` shows built-in defaults only, so there is no custom auto-mode rule to assess.

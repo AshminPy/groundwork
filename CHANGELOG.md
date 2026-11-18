@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Reliability, evidence and review hardening** (`openspec/changes/harden-autonomy-evidence-review/`):
+  - A review counts only from a reviewer subagent whose REVIEW RESULT block reports `Must-fix: 0` and names the
+    content fingerprint it reviewed (`groundwork task fingerprint`). A code change afterwards makes it stale. Inline
+    Skill reviews and the author's own text do not count. Background reviewers are read from their own transcript.
+  - A non-draft `gh pr create` is denied until such a review covers the commit it publishes. A new `review-check`
+    workflow fails a PR whose description does not record a review of the current head.
+  - The reply check asks once when a cited repository file is missing or a cited line is out of range.
+  - `groundwork task note` records unrelated findings; `show` and `complete` warn about changed files the plan never
+    names and TODOs added during the task.
+  - One definition of the permission tiers (`docs/PERMISSIONS.md`) with probes through the real hooks, a coordination
+    runbook (`docs/COORDINATION.md`), and a prepared benchmark procedure.
+  - Six finished OpenSpec changes are archived, and every spec now passes strict validation.
+
 - **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
   and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the
   context-window % at task end (`observed.ctx_pct`, from the session's latest statusLine reading, if under 15 minutes

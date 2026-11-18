@@ -10,3 +10,7 @@ Groundwork SHALL provide a way to record an unrelated discovery against the curr
 #### Scenario: Changed file outside the plan
 - **WHEN** completion finds a changed file that the plan never mentions
 - **THEN** completion lists it as a warning and does not block
+
+#### Scenario: TODO added during the task
+- **WHEN** the change adds a TODO or FIXME line that was not there when the task started
+- **THEN** status and completion list it with its file and line, and a TODO that existed before the task is not listed
