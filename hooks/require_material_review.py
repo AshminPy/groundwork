@@ -22,8 +22,8 @@ self-declared "I reviewed it" claim, this hook uses facts it can check directly:
        deliberately NOT matched: "Review existing tests before implementing" on an
        Explore call is not a review, and matching it would let the gate be satisfied
        by coincidence (caught by independent review of 1.1.0);
-     - or a `Skill` call whose skill name contains "review".
-     This deliberately does not pin one specific reviewer name, so reviewer
+     A `Skill` call whose name contains "review" is recognised but does not count as
+     independent (point 4). This deliberately does not pin one specific reviewer name, so reviewer
      selection stays contextual per engineering-workflow.md.
   3. (2.0) Did that reviewer's OWN output contain a structured "REVIEW RESULT" block
      (`output-contract.md`, mirroring the already-proven "Harness metadata" block
@@ -35,16 +35,22 @@ self-declared "I reviewed it" claim, this hook uses facts it can check directly:
      result reports zero remaining findings (or approves) clears the gate, because the
      decision always looks at the transcript's *most recent* review result, so a
      second review is structurally required whenever the most recent one found a
-     problem. When a reviewer does not emit the block (most reviewers do not know
-     this format yet — RUNTIME VALIDATION REQUIRED, see docs/VALIDATION.md), this
-     degrades gracefully to the original presence-only check, never stricter than
-     before. What this hook genuinely CANNOT establish, and does not pretend to:
-     that the fix was semantically correct, or that a second reviewer's approval
-     without the block was independent — it only proves the review-shaped calls and
-     their own self-reported verdicts that actually appear in the transcript.
+     problem. A reviewer that does not emit the block does not clear the gate
+     (point 4). What this hook genuinely CANNOT establish, and does not pretend to:
+     that the fix was semantically correct, or that the reviewer actually read the
+     diff — it only proves the reviewer subagent calls and their own self-reported
+     verdicts that actually appear in the transcript.
 
-If (1) is true and no reviewer-shaped call exists, or the most recent one's own result
-reports unresolved MUST FIX findings, the Stop is blocked with the concrete change name
+  4. Is the review independent and current? Only an Agent/Task subagent call counts: a Skill
+     runs inside the author's own conversation, so it is self-review. The most recent subagent
+     review must emit a REVIEW RESULT block with `Reviewed: <fingerprint>`, and that fingerprint
+     must equal the current content fingerprint (`groundwork task fingerprint`, shared with the
+     task ledger). A code change after the review makes it stale. A review without the block no
+     longer passes on presence alone. The gate still cannot prove the reviewer read the diff;
+     it proves only that a fresh-context call reported on exactly the current code.
+
+If (1) is true and no qualifying review exists, the most recent one's own result reports
+unresolved MUST FIX findings, or it does not name the current fingerprint, the Stop is blocked with the concrete change name
 and exactly what has/hasn't been observed. It re-checks on every Stop, so once a
 qualifying review is dispatched the block clears itself — no state file, no
 self-declaration, no findings database. Claude Code itself caps a Stop hook at 8
@@ -92,9 +98,9 @@ AGENT_TOOLS = ("Task", "Agent")
 AGENT_REVIEW_FIELDS = ("subagent_type", "name")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
-# A reviewer may optionally emit this short structured block (same shape/tolerance as the
-# existing "Harness metadata" block groundwork_telemetry.py already parses) naming its
-# verdict and MUST-FIX count. Absence is handled gracefully — see module docstring point 3.
+# A reviewer must emit this short structured block (same shape/tolerance as the existing
+# "Harness metadata" block groundwork_telemetry.py already parses) naming its verdict, its
+# MUST-FIX count and the fingerprint it reviewed. Without it the review does not count (point 4).
 REVIEW_RESULT_HEADING = re.compile(r"^\s*(?:#+\s*|\*\*)?REVIEW RESULT(?:\*\*)?\s*$", re.MULTILINE | re.IGNORECASE)
 # Field names may contain a hyphen ("Must-fix") unlike the Harness metadata block's fields,
 # which never do — the char class is widened from that block's parser accordingly.
@@ -149,6 +155,11 @@ def is_review_call(name: str, tool_input) -> bool:
     return bool(REVIEW_PATTERN.search(target))
 
 
+def is_subagent_call(name: str) -> bool:
+    """A subagent starts with its own context; a Skill runs inside the calling conversation."""
+    return name in AGENT_TOOLS
+
+
 def parse_review_result(text: str) -> dict:
     """Fields of a reviewer's own 'REVIEW RESULT' block, if it emitted one.
 
@@ -158,9 +169,10 @@ def parse_review_result(text: str) -> dict:
     """
     if not text:
         return {}
-    m = REVIEW_RESULT_HEADING.search(text)
-    if not m:
+    matches = list(REVIEW_RESULT_HEADING.finditer(text))
+    if not matches:
         return {}
+    m = matches[-1]  # the contract puts the block at the end; an earlier quoted block is not the verdict
     fields = {}
     for line in text[m.end():].splitlines():
         if not line.strip():
@@ -183,6 +195,9 @@ def parse_review_result(text: str) -> dict:
     digits = re.search(r"\d+", must_fix_raw)
     if digits:
         result["must_fix"] = int(digits.group())
+    reviewed = re.search(r"\b[0-9a-f]{16}\b", fields.get("reviewed", "").lower())
+    if reviewed:
+        result["reviewed"] = reviewed.group()
     return result
 
 
@@ -207,8 +222,8 @@ def scan_transcript(transcript_path: str):
       edit_after / test_after — whether an Edit-family tool call / a TEST_CMD-shaped Bash call
         was observed after the most recent review that reported must_fix > 0 (diagnostic only,
         included in the block message; not itself part of the gating decision — see docstring).
-    Returns (None, False, False) on any read/parse failure — the caller fails open on None,
-    exactly as the original presence-only check did.
+    Returns (None, False, False) when the transcript cannot be read — the caller fails open on
+    None, because the guard itself cannot run.
     """
     if not transcript_path or not os.path.isfile(transcript_path):
         return None, False, False
@@ -243,12 +258,13 @@ def scan_transcript(transcript_path: str):
                     if btype == "tool_use":
                         name = block_.get("name", "")
                         if is_review_call(name, block_.get("input")):
-                            reviews.append({"must_fix": None})
+                            reviews.append({"must_fix": None, "reviewed": None,
+                                            "subagent": is_subagent_call(name)})
                             tid = block_.get("id")
                             if tid:
                                 # Correlatable with a later tool_result; if it never arrives (or
-                                # carries no parseable block) this entry just stays must_fix=None,
-                                # i.e. legacy presence-only for that call — never worse than before.
+                                # carries no parseable block) this entry stays must_fix=None, which
+                                # blocks with a correctable message (point 4).
                                 pending[tid] = len(reviews) - 1
                         elif have_problem and name in EDIT_TOOLS:
                             edit_after = True
@@ -261,10 +277,15 @@ def scan_transcript(transcript_path: str):
                         if tid in pending:
                             idx = pending.pop(tid)
                             parsed = parse_review_result(_tool_result_text(block_))
+                            if not parsed:
+                                # A background subagent's tool_result only says it launched; its own
+                                # final answer is in the transcript Claude Code writes for it.
+                                parsed = parse_review_result(subagent_final_text(transcript_path, tid))
                             mf = parsed.get("must_fix")
                             if mf is None and parsed.get("verdict") == "approve":
                                 mf = 0
                             reviews[idx]["must_fix"] = mf
+                            reviews[idx]["reviewed"] = parsed.get("reviewed")
                             if mf is not None and mf > 0:
                                 have_problem = True
                                 edit_after = False
@@ -272,6 +293,85 @@ def scan_transcript(transcript_path: str):
     except Exception:
         return None, False, False
     return reviews, edit_after, test_after
+
+
+def subagent_final_text(transcript_path: str, tool_use_id: str) -> str:
+    """The last assistant text of the subagent launched by `tool_use_id`, read from the transcript Claude Code
+    writes for it (<session>/subagents/agent-<id>.jsonl, matched through its .meta.json toolUseId), or ""."""
+    try:
+        sub_dir = Path(transcript_path).with_suffix("") / "subagents"
+        if not tool_use_id or not sub_dir.is_dir():
+            return ""
+        for meta in sub_dir.glob("agent-*.meta.json"):
+            try:
+                info = json.loads(meta.read_text(errors="ignore"))
+            except Exception:
+                continue
+            if not isinstance(info, dict) or info.get("toolUseId") != tool_use_id:
+                continue
+            log = meta.with_name(meta.name[: -len(".meta.json")] + ".jsonl")
+            last = ""
+            with open(log, "r", errors="ignore") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(entry, dict) or entry.get("type") != "assistant":
+                        continue
+                    content = (entry.get("message") or {}).get("content")
+                    texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"] \
+                        if isinstance(content, list) else []
+                    if any(t.strip() for t in texts):
+                        last = "\n".join(texts)
+            return last
+    except Exception:
+        return ""
+    return ""
+
+
+def current_fingerprint(cwd: str) -> str | None:
+    """The task ledger's content fingerprint of the repository at `cwd`, or None when it cannot be computed."""
+    try:
+        from groundwork_tasks import fingerprint, repo_root
+        root = repo_root(cwd)
+        fp = fingerprint(root, {}) if root else ""
+    except Exception:
+        return None
+    return fp if re.fullmatch(r"[0-9a-f]{16}", fp or "") else None
+
+
+def pr_review_problem(transcript_path: str, root: str, rev: str = "HEAD") -> str | None:
+    """Why a pull request for `rev` may not be opened yet, or None. Used by the task gate before `gh pr create`:
+    the most recent reviewer subagent must report Must-fix: 0 on exactly the commit's content. Self-review and
+    inline Skill reviews do not count. Fails open (None) when the commit or the transcript cannot be read."""
+    try:
+        from groundwork_tasks import commit_fingerprint
+        fp = commit_fingerprint(root, rev)
+        reviews, _edit, _test = scan_transcript(transcript_path)
+    except Exception:
+        return None
+    if not fp or reviews is None:
+        return None
+    how = (f"Dispatch a reviewer subagent (an Agent call, e.g. subagent_type ecc:code-reviewer) on the PR diff, give it "
+           f"the commit fingerprint {fp} (`groundwork task fingerprint --commit {rev}`), and ask it to end with a "
+           f"REVIEW RESULT block: Verdict, Must-fix: N, Reviewed: {fp}. Put that block in the PR description. "
+           "A draft PR (`gh pr create --draft`) can be opened before the review.")
+    subagent_reviews = [r for r in reviews if r["subagent"]]
+    if not subagent_reviews:
+        inline = " (the only review ran inline as a Skill, which is not independent)" if reviews else ""
+        return f"no independent reviewer subagent reviewed this change in this session{inline}. {how}"
+    last = subagent_reviews[-1]
+    if last["must_fix"] is None or last["reviewed"] is None:
+        return f"the most recent reviewer's result has no REVIEW RESULT block with Must-fix and Reviewed. {how}"
+    if last["must_fix"] > 0:
+        return (f"the most recent review reported {last['must_fix']} unresolved MUST FIX finding(s). Fix them, commit, "
+                f"and get a fresh review. {how}")
+    if last["reviewed"] != fp:
+        return (f"the most recent review covered {last['reviewed']}, but the commit for this PR is {fp}: the approval "
+                "is stale, or the reviewed working tree had changes that are not committed. Commit exactly what was "
+                f"reviewed, or get a fresh review of the commit. {how}")
+    return None
 
 
 def deny(reason: str) -> None:
@@ -307,22 +407,55 @@ def main() -> None:
         sys.exit(0)  # transcript unreadable/unparseable — fail open, as always
 
     names = ", ".join(candidates)
+    inline_only = bool(reviews) and not any(r["subagent"] for r in reviews)
+    reviews = [r for r in reviews if r["subagent"]]
+
+    if inline_only:
+        deny(
+            f"require_material_review: OpenSpec change(s) [{names}] have every task checked off, but the only "
+            "review this session ran inline as a Skill, inside this same conversation, so it is not independent. "
+            "Dispatch a reviewer subagent (an Agent call, e.g. subagent_type ecc:code-reviewer) on the diff. Give it "
+            "the output of `groundwork task fingerprint`, and ask it to end with a REVIEW RESULT block "
+            "(Verdict, Must-fix: N, Reviewed: <fingerprint>)."
+        )
+        return
 
     if not reviews:
         deny(
             f"require_material_review: OpenSpec change(s) [{names}] have every task checked off, "
             "but no independent fresh-context review was dispatched this session (looked for an "
-            "Agent/Task call whose subagent_type or name contains \"review\", or a "
-            "Skill call with \"review\" in its name — e.g. ecc:code-reviewer, ecc:security-reviewer, "
-            "ecc:python-reviewer, ecc:orch-review, or a reviewer teammate). Dispatch an appropriate "
-            "reviewer on the diff, fix any MUST FIX findings, then finish."
+            "Agent/Task call whose subagent_type or name contains \"review\" — e.g. ecc:code-reviewer, "
+            "ecc:security-reviewer, ecc:python-reviewer, or a reviewer teammate). Dispatch an appropriate "
+            "reviewer subagent on the diff with the output of `groundwork task fingerprint`, and ask it to end "
+            "with a REVIEW RESULT block (Verdict, Must-fix: N, Reviewed: <fingerprint>). Fix any MUST FIX "
+            "findings, then finish."
         )
         return
 
     most_recent_must_fix = reviews[-1]["must_fix"]
     if most_recent_must_fix is None or most_recent_must_fix == 0:
-        sys.exit(0)  # a review happened and either cleared it or didn't cooperate with the
-        # structured format — legacy presence-only pass, never stricter than before 2.0
+        reviewed = reviews[-1]["reviewed"]
+        current = current_fingerprint(cwd)
+        if current is None:
+            sys.exit(0)  # the working tree cannot be hashed: fail open rather than block on a broken guard
+        if most_recent_must_fix is None or reviewed is None:
+            deny(
+                f"require_material_review: OpenSpec change(s) [{names}] are complete, but the most recent reviewer "
+                "subagent's result has no REVIEW RESULT block with both Must-fix and Reviewed: <fingerprint>, so the review cannot be tied "
+                f"to the current code. The current fingerprint is {current} (`groundwork task fingerprint`). "
+                "Dispatch a fresh reviewer subagent on the diff and ask it to end with a REVIEW RESULT block: "
+                f"Verdict: approve/changes-required, Must-fix: N, Reviewed: {current}."
+            )
+            return
+        if reviewed != current:
+            deny(
+                f"require_material_review: OpenSpec change(s) [{names}] are complete, but the code changed after the "
+                f"most recent review: it reviewed {reviewed}, and the code is now {current}. That approval is stale. "
+                "Dispatch a fresh reviewer subagent on the current diff, ending with a REVIEW RESULT block that "
+                f"includes Reviewed: {current}."
+            )
+            return
+        sys.exit(0)
 
     # The most recent review's own result reports unresolved MUST FIX findings. An edit and a
     # re-run of validation afterward are not, by themselves, evidence of resolution (Decision
@@ -338,8 +471,9 @@ def main() -> None:
         f"independent review reported {most_recent_must_fix} unresolved MUST FIX finding(s) "
         f"({'; '.join(progress)}). An edit and a validation re-run are not, by themselves, evidence "
         "the finding was resolved — fix it, re-run the affected validation, then dispatch a FRESH "
-        "independent review (a new Agent/Task/Skill call) of the resulting change, asking it to end "
-        "its response with a REVIEW RESULT block (Verdict: approve/changes-required, Must-fix: N). "
+        "independent reviewer subagent (a new Agent/Task call) on the resulting change, asking it to end "
+        "its response with a REVIEW RESULT block (Verdict: approve/changes-required, Must-fix: N, "
+        "Reviewed: <output of `groundwork task fingerprint`>). "
         "Only when that fresh review reports zero remaining MUST FIX findings will this gate clear."
     )
 

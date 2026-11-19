@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## 2.6.0 — 2026-11-19
+
+Groundwork 2.6.0 binds independent review to the exact code it covered, checks it again in CI, checks cited files
+and lines in replies, and adds scope warnings and one definition of the permission tiers. Notes and evidence:
+[docs/RELEASE-REPORT-2.6.md](docs/RELEASE-REPORT-2.6.md).
+
+**Upgrade**: `groundwork update`, or `git pull` and `./setup.sh` (or `./install.sh`) from a clone. Then start a new
+Claude Code session.
+
+**Not yet verified**: the end-to-end coordination demo (`docs/COORDINATION.md`) and the comparative benchmark
+(`openspec/changes/harden-autonomy-evidence-review/benchmark.md`) have not run. Both are remaining work.
+
+- **Test isolation.** The CLI test suite no longer rewrites the real `~/Library/LaunchAgents` report job: it runs
+  with `GROUNDWORK_NO_LAUNCHCTL=1` and a temporary `GROUNDWORK_LAUNCH_AGENTS_DIR`.
+
+- **Reliability, evidence and review hardening** (`openspec/changes/harden-autonomy-evidence-review/`):
+  - A review counts only from a reviewer subagent whose REVIEW RESULT block reports `Must-fix: 0` and names the
+    content fingerprint it reviewed (`groundwork task fingerprint`). A code change afterwards makes it stale. Inline
+    Skill reviews and the author's own text do not count. Background reviewers are read from their own transcript.
+  - A non-draft `gh pr create`, and a `gh pr edit` of the description, are denied until such a review covers the
+    commit being published. A new `review-check` workflow fails a PR whose description does not record a review of
+    the current head. `docs/PERMISSIONS.md` states what the check proves and how to make it required on `main`.
+  - The reply check asks once when a cited repository file is missing or a cited line is out of range.
+  - `groundwork task note` records unrelated findings; `show` and `complete` warn about changed files the plan never
+    names and TODOs added during the task.
+  - One definition of the permission tiers (`docs/PERMISSIONS.md`) with probes through the real hooks, a coordination
+    runbook (`docs/COORDINATION.md`), and a prepared benchmark procedure.
+  - Six finished OpenSpec changes are archived, and every spec now passes strict validation.
 
 - **Outcome by context fill.** The health dashboard and the Markdown snapshot now show completion, verified outcome
   and gap rate in five context-fill bands (0–30, 30–50, 50–70, 70–85, 85–100%). The telemetry hook records the

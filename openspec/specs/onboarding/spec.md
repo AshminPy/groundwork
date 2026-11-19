@@ -1,7 +1,7 @@
 # onboarding Specification
 
 ## Purpose
-TBD - created by archiving change setup-wrapper. Update Purpose after archive.
+A single setup wrapper that installs Groundwork, checks the result, and can roll the install back safely.
 
 ## Requirements
 

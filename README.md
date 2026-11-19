@@ -8,7 +8,9 @@ Built and validated by Ashmin ([@AshminPy](https://github.com/AshminPy)). See [C
 
 ## Version history
 
-Groundwork 2.5 (current) makes the evidence and continuity rules enforced by hooks instead of only asked for, and fixes the security findings of the 2026-10-12 scan. Every tool-using reply is checked for a plain-language result, Technical details, an Evidence & references section with a link or file:line, and the metadata block, and Claude is asked once to add what is missing. A per-branch task brief and an append-only decision log are saved before every compaction and reloaded in every new session. `groundwork usage` shows which sessions used the plan. A new-machine checklist is in [docs/NEW-MACHINE-CHECKS.md](docs/NEW-MACHINE-CHECKS.md); see [docs/RELEASE-REPORT-2.5.md](docs/RELEASE-REPORT-2.5.md).
+Groundwork 2.6 (current) binds independent review to the exact code it covered, before a pull request opens and again in CI (`review-check`), checks that files and lines cited in replies exist, warns about changes outside a task's plan, and defines the permission tiers in one place. See [docs/RELEASE-REPORT-2.6.md](docs/RELEASE-REPORT-2.6.md).
+
+Groundwork 2.5 made the evidence and continuity rules enforced by hooks instead of only asked for, and fixes the security findings of the 2026-10-12 scan. Every tool-using reply is checked for a plain-language result, Technical details, an Evidence & references section with a link or file:line, and the metadata block, and Claude is asked once to add what is missing. A per-branch task brief and an append-only decision log are saved before every compaction and reloaded in every new session. `groundwork usage` shows which sessions used the plan. A new-machine checklist is in [docs/NEW-MACHINE-CHECKS.md](docs/NEW-MACHINE-CHECKS.md); see [docs/RELEASE-REPORT-2.5.md](docs/RELEASE-REPORT-2.5.md).
 
 Groundwork 2.5 also ships task tracking around native OpenSpec, as a controlled pilot. Engineering tasks are recorded automatically, kept across sessions, and completed only on evidence. OpenSpec stays the workflow. Sensitive actions show Claude Code's normal permission prompt. These actions are cloud, cluster and Terraform changes, destructive Git, credential access, recursive deletes outside the working directory, and settings and hook edits. See [Task tracking](#task-tracking), [docs/TASK-LIFECYCLE.md](docs/TASK-LIFECYCLE.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -342,7 +344,11 @@ groundwork/
 │   ├── test_groundwork_cli.py         the `groundwork` command and its installation
 │   ├── test_groundwork_update.py      update/rollback (release validation, safe archive extraction)
 │   ├── test_groundwork_copilot.py     `groundwork copilot explain` (read-only terminal help)
-│   └── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
+│   ├── test_task_lifecycle.py         task tracking (intake, authorization prompts, shell parsing, evidence, completion)
+│   ├── test_review_independence.py    review bound to the reviewed content, including pull requests
+│   ├── test_evidence_validation.py    cited files and lines resolve
+│   ├── test_scope_control.py          task notes and scope warnings
+│   └── test_permission_boundaries.py  hard deny, human approval and autonomous probes through the real hooks
 ├── .claude/ · .agents/                OpenSpec slash commands and skills for developing this repository itself; install.sh does not ship them
 ├── openspec/                          Groundwork's own spec-driven changes (dogfooding; archive/ holds finished ones)
 └── docs/
@@ -353,6 +359,7 @@ groundwork/
     ├── RELEASE-REPORT-2.2.md          Groundwork 2.2 release report
     ├── RELEASE-REPORT-2.3.md          Groundwork 2.3 release report
     ├── RELEASE-REPORT-2.5.md          Groundwork 2.5 release notes and report: scope, evidence, known limitations
+    ├── RELEASE-REPORT-2.6.md          Groundwork 2.6 release notes and report
     ├── NEW-MACHINE-CHECKS.md          10-minute live check of the 2.5 features on any laptop (step 0: managed-policy check)
     ├── RELEASE-REPORT-2.4.md          Groundwork 2.4 release notes and report: scope, evidence, known limitations
     ├── MACOS-SMOKE-TEST.md            short macOS smoke test for 2.4 (throwaway HOME, nothing of yours is touched)
@@ -363,6 +370,8 @@ groundwork/
     ├── INTEGRATIONS.md                MCP/CLI capability matrix per external system — documentation only, nothing installed
     ├── ROUTINES.md                    the six shipped Routines, safety contract, configuration, commands, telemetry
     ├── TASK-LIFECYCLE.md              task tracking: intake, plan, evidence, completion, what asks for authorization, pilot scope
+    ├── PERMISSIONS.md                 the three permission tiers and what enforces each
+    ├── COORDINATION.md                running several tasks with background sessions, worktrees and the task ledger
     └── images/                        overview diagram and dashboard screenshot
 ```
 

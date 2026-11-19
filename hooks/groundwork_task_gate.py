@@ -34,12 +34,19 @@ except Exception:  # partial install: fail open
 try:
     from require_material_review import is_review_call, parse_review_result  # reused, not copied
 except Exception:
+    pr_review_problem = None
+
     def is_review_call(name, tool_input):
         target = " ".join(str((tool_input or {}).get(f, "") or "") for f in ("subagent_type", "name"))
         return name in ("Agent", "Task") and re.search(r"(?<![a-zA-Z])review", target, re.I) is not None
 
     def parse_review_result(text):
         return {}
+else:
+    try:
+        from require_material_review import pr_review_problem
+    except Exception:
+        pr_review_problem = None
 
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 READ_TOOLS = {"Read", "NotebookRead", "Grep"}
@@ -1187,10 +1194,69 @@ def check_file(tool: str, path: str, cwd: str) -> None:
 PROTECTED_TEXT = ("disableAllHooks", "GROUNDWORK_TASK_GATE", "groundwork/tasks")
 
 
-def check_command(cmd: str, cwd: str) -> None:
+GH_VALUE_FLAGS = {"-R", "--repo", "-H", "--head", "-B", "--base", "-t", "--title", "-b", "--body", "-F", "--body-file",
+                  "-a", "--assignee", "-l", "--label", "-m", "--milestone", "-p", "--project", "-r", "--reviewer",
+                  "-T", "--template", "--recover"}
+
+
+def _pr_create(argv: list[str]) -> str | None:
+    """For a non-draft `gh pr create` (or its alias `gh pr new`): the local revision it publishes (`--head` when it names a local branch, else
+    HEAD). For `gh pr edit` that sets the description, where the recorded review lives: HEAD. None for anything else,
+    including drafts, which may open before the review."""
+    i = next((n for n, w in enumerate(argv) if os.path.basename(w) == "gh"), None)
+    if i is None:
+        return None
+    rest, words, head, draft, body = argv[i + 1:], [], None, False, False
+    n = 0
+    while n < len(rest):
+        w = rest[n]
+        flag, _, inline = w.partition("=")
+        if w in ("-d", "--draft") or (flag == "--draft" and inline.lower() != "false"):
+            draft = True
+        elif flag in GH_VALUE_FLAGS:
+            value = inline if inline else (rest[n + 1] if n + 1 < len(rest) else "")
+            if flag in ("-H", "--head"):
+                head = value.split(":", 1)[-1]
+            body = body or flag in ("-b", "--body", "-F", "--body-file")
+            n += 0 if inline else 1
+        elif not w.startswith("-"):
+            words.append(w)
+        n += 1
+    if words[:2] == ["pr", "edit"] and body:
+        return "HEAD"
+    if words[:2] not in (["pr", "create"], ["pr", "new"]) or draft:  # `new` is gh's built-in alias
+        return None
+    return head or "HEAD"
+
+
+def check_pr_review(segs: list[dict], cwd: str, transcript_path: str) -> None:
+    """Deny a non-draft `gh pr create`, or a `gh pr edit` of the description, until a reviewer subagent approved
+    exactly the commit it publishes."""
+    if pr_review_problem is None or not transcript_path:
+        return
+    dirs = [cwd]
+    for s in segs:
+        rev = _pr_create(s["argv"])
+        if rev:
+            for d in dirs:
+                root = gt.repo_root(d)
+                if not root:
+                    continue
+                if rev != "HEAD" and not (gt.git(root, "rev-parse", "--verify", "-q", rev) or "").strip():
+                    rev = "HEAD"  # a remote-only --head branch: the local HEAD is the best available evidence
+                problem = pr_review_problem(transcript_path, root, rev)
+                if problem:
+                    deny(f"Groundwork review check: this opens or describes a pull request, but {problem}")
+        target = _cd_target(s["argv"])
+        if target:
+            dirs = list(dict.fromkeys(dirs + [os.path.normpath(os.path.join(d, target)) for d in dirs]))[:32]
+
+
+def check_command(cmd: str, cwd: str, transcript_path: str = "") -> None:
     segs = split_segments(cmd)
     if segs is None:
         ask("this command could not be parsed, so Groundwork cannot tell what it does.")
+    check_pr_review(segs, cwd, transcript_path)
     for _s, _argv, label in checked_segments(segs, cwd):
         if label:
             ask(f"{label}.")
@@ -1364,7 +1430,7 @@ def on_pre(data: dict) -> None:
         if tool in FILE_TOOLS or tool in READ_TOOLS:
             check_file(tool, str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""), cwd)
         elif tool in COMMAND_TOOLS and isinstance(ti.get("command"), str):
-            check_command(ti["command"], cwd)
+            check_command(ti["command"], cwd, str(data.get("transcript_path") or ""))
         elif tool == "PowerShell" and isinstance(ti.get("command"), str):
             ask("PowerShell commands are not parsed, so Groundwork cannot tell what this one does.")
     except SystemExit:

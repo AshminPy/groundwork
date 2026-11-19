@@ -1,0 +1,25 @@
+name: review-check
+
+# The PR description must record an independent review of exactly the PR head (scripts/review_check.py).
+# Runs again on every push and description edit, so a code change after the review fails the check.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  review-check:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Check the recorded review
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/review_check.py

@@ -39,8 +39,9 @@ REVIEW RESULT
 Verdict:   approve | changes-required
 Must-fix:  <N>
 Findings:  <short labels, only when N > 0>
+Reviewed:  <fingerprint from `groundwork task fingerprint`>
 ```
-When reviewing a MATERIAL change (`engineering-workflow.md` §2.6) as the independent fresh-context reviewer, end with this block so `hooks/require_material_review.py` reads the verdict deterministically. Optional but load-bearing: without it the gate only detects a review happened; with it, the gate always evaluates the *most recent* review's own verdict — an edit plus revalidation after a MUST FIX finding is not enough by itself; a fresh review reporting `Must-fix: 0` is required.
+When reviewing a MATERIAL change (`engineering-workflow.md` §2.6) as the independent fresh-context reviewer, end with this block so `hooks/require_material_review.py` reads the verdict deterministically. Required: without it, or when `Reviewed:` is not the current fingerprint, the review does not count. The gate always evaluates the *most recent* reviewer subagent's own verdict. An edit plus revalidation after a MUST FIX finding is not enough by itself; a fresh review reporting `Must-fix: 0` on the current code is required.
 
 ## Always
 - Priority order never changes: accuracy · security · evidence · correct execution · validation · easy to understand · concise · traceability. Clean output never hides a security risk, a failed test, a failed validation, a blocker, important uncertainty, a destructive consequence, or material evidence.

@@ -680,6 +680,27 @@ def fingerprint(root: str, task: dict) -> str:
     return hashlib.sha256("\0".join([tree, *sorted(big)]).encode()).hexdigest()[:16] if big else tree[:16]
 
 
+def commit_fingerprint(root: str, rev: str = "HEAD") -> str | None:
+    """The fingerprint of a commit's content, computed the same way as fingerprint() (openspec/ and generated caches
+    excluded). For a clean working tree it equals fingerprint(), so a review of the working tree matches the commit
+    that records it; CI computes it for a pull request head. None when the commit cannot be read.
+    Built in a temporary index and object directory, so the repository itself is never written."""
+    sha = (git(root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}") or "").strip()
+    objects = (git(root, "rev-parse", "--git-path", "objects") or "").strip()
+    if not sha or not objects:
+        return None
+    with tempfile.TemporaryDirectory(prefix="gw-fp-") as tmp:
+        os.mkdir(os.path.join(tmp, "objects"))
+        env = {"GIT_INDEX_FILE": os.path.join(tmp, "index"), "GIT_OBJECT_DIRECTORY": os.path.join(tmp, "objects"),
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES": os.path.abspath(os.path.join(root, objects))}
+        if _git_in(root, env, "read-tree", sha) is None or _git_in(
+                root, env, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", "openspec",
+                *[f":(glob)**/{d}/**" for d in sorted(GENERATED_CACHE_DIRS)]) is None:
+            return None
+        tree = (_git_in(root, env, "write-tree") or "").strip()
+    return tree[:16] or None
+
+
 def record_verification(root: str, key: str, cmd: str, ok: bool, detail: str = "") -> None:
     def apply(t):
         ev = t.setdefault("evidence", {})
@@ -733,6 +754,97 @@ def evidence_state(root: str, task: dict, plan: dict | None = None) -> dict:
     return {"verify": verify, "review": current[-1]["must_fix"] if current else None}
 
 
+# ---------------------------------------------------------------------------------------------- scope
+
+TODO_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b")
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+MAX_SCOPE_ITEMS = 20
+SCAN_LIMIT = 1_000_000  # untracked files above this size are not scanned for TODOs
+
+
+def add_note(root: str, key: str, text: str) -> bool | None:
+    """Record a discovery that is not part of the task (an unrelated bug, a stale TODO) without acting on it."""
+    def apply(t):
+        t["notes"] = (t.get("notes", []) + [{"ts": now(), "text": clip(text, 300)}])[-MAX_EVIDENCE:]
+        add_history(t, "note", text)
+    return update_task(root, key, apply)
+
+
+def _scope_path(rel: str) -> bool:
+    return bool(rel) and not rel.startswith("openspec/") and not _generated(rel)
+
+
+def _plan_text(root: str, task: dict) -> str:
+    d = change_dir(root, task) if task.get("change") else None
+    parts = [str(task.get("mission") or "")]
+    if d and d.is_dir():
+        for p in sorted(d.rglob("*.md"))[:200]:
+            parts.append(_md(p))
+    return "\n".join(parts)
+
+
+def scope_report(root: str, task: dict) -> dict:
+    """Changed files the plan never names, and TODO-style markers added since the task started. Warnings only: a file
+    changed to clear a genuine blocker is legitimate once the plan says so, and nothing here ever blocks."""
+    base = task.get("base_commit") or EMPTY_TREE
+    tracked = [f for f in (git(root, "diff", "--name-only", "-z", base, "--") or "").split("\0") if _scope_path(f)]
+    untracked = [f for f in (git(root, "ls-files", "-z", "--others", "--exclude-standard") or "").split("\0")
+                 if _scope_path(f)]
+    outside = []
+    if task.get("change"):
+        plan = _plan_text(root, task)
+        for rel in sorted(set(tracked + untracked)):
+            parent = rel.rsplit("/", 1)[0] + "/" if "/" in rel else None
+            # A directory counts only when the plan names it on its own (`tests/fixtures/`), not as part of a path.
+            named_dir = bool(parent) and re.search(re.escape(parent) + r"(?![\w.-])", plan) is not None
+            if rel not in plan and os.path.basename(rel) not in plan and not named_dir:
+                outside.append(rel)
+    todos = []
+    current, lineno = None, 0
+    for ln in (git(root, "diff", "-U0", "--no-color", base, "--", ".", ":(exclude)openspec") or "").splitlines():
+        if ln.startswith("+++ "):
+            current = ln[6:] if ln.startswith("+++ b/") else None
+        elif ln.startswith("@@"):
+            m = HUNK_RE.match(ln)
+            lineno = int(m.group(1)) if m else 0
+        elif ln.startswith("+") and current:
+            if TODO_RE.search(ln) and _scope_path(current):
+                todos.append(f"{current}:{lineno}")
+            lineno += 1
+    for rel in untracked:
+        p = Path(root, rel)
+        try:
+            if p.is_symlink() or p.stat().st_size > SCAN_LIMIT:
+                continue
+            for i, line in enumerate(p.read_text(errors="strict").splitlines(), 1):
+                if TODO_RE.search(line):
+                    todos.append(f"{rel}:{i}")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return {"outside_plan": outside[:MAX_SCOPE_ITEMS], "outside_total": len(outside),
+            "new_todos": todos[:MAX_SCOPE_ITEMS], "todos_total": len(todos)}
+
+
+def scope_lines(root: str, task: dict, indent: str = "  ") -> list[str]:
+    """Scope warnings for status and completion output; empty when nothing drifted or the check cannot run."""
+    try:
+        found = scope_report(root, task)
+    except Exception:
+        return []
+    lines = []
+    if found["outside_total"]:
+        extra = found["outside_total"] - len(found["outside_plan"])
+        lines.append(f"{indent}scope warning: changed file(s) the plan never names: {', '.join(found['outside_plan'])}"
+                     f"{f' (+{extra} more)' if extra else ''}. If a change is needed for this task, say why in the "
+                     f"plan; if not, revert it and record it with `{task_cli()} note {task['key']} \"<what you found>\"`")
+    if found["todos_total"]:
+        extra = found["todos_total"] - len(found["new_todos"])
+        lines.append(f"{indent}scope warning: TODO/FIXME added since the task started: {', '.join(found['new_todos'])}"
+                     f"{f' (+{extra} more)' if extra else ''}. Finish it, or record it as a note instead of leaving "
+                     "it in the code")
+    return lines
+
+
 # ---------------------------------------------------------------------------------------------- transitions
 
 
@@ -782,6 +894,7 @@ def complete(root: str, key: str) -> tuple[bool, str]:
         add_history(t, "complete", "evidence passed" if t.get("tier") == MATERIAL else "marked complete")
     update_task(root, key, apply)
     lines = [f"{key} is complete."]
+    lines += scope_lines(root, task)
     if task.get("tier") == MATERIAL:
         lines += [f"  verified: `{cmd}` passed on the final code" for cmd in read_plan(root, task)["verify"]]
         reviews = (task.get("evidence") or {}).get("reviews", [])
@@ -876,6 +989,11 @@ def render(root: str, task: dict, detail: bool = False) -> str:
     if ev.get("operations"):
         op = ev["operations"][-1]
         lines.append(f"  last sensitive operation: {op.get('cmd')} at {iso(op.get('ts'))}")
+    if is_open(task):
+        lines += scope_lines(root, task)
+    if task.get("notes"):
+        lines.append("  notes (recorded, not acted on):")
+        lines += [f"    {iso(n.get('ts'))}  {n.get('text')}" for n in task["notes"][-8:]]
     if task.get("checklist") and is_open(task):
         lines.append("  intake checklist (settle each in the plan):")
         lines += [f"    - {c}" for c in task["checklist"]]
@@ -943,9 +1061,35 @@ def main(argv=None) -> int:
     s.add_argument("key")
     s.add_argument("reason", nargs="*")
     s.add_argument("--clear", action="store_true")
+    s = sub.add_parser("note", help="record an unrelated discovery against a task without acting on it")
+    s.add_argument("key")
+    s.add_argument("text", nargs="+")
+    s = sub.add_parser("fingerprint", help="the content fingerprint and HEAD commit a reviewer reports as 'Reviewed:'")
+    s.add_argument("--commit", metavar="REV", help="the fingerprint of a commit's content instead of the working tree")
     a = p.parse_args(argv)
     if not a.cmd:
         p.print_help()
+        return 0
+    if a.cmd == "fingerprint":
+        root = repo_root(os.getcwd())
+        if not root:
+            print("not inside a git repository", file=sys.stderr)
+            return 2
+        if a.commit:
+            fp = commit_fingerprint(root, a.commit)
+            if not fp:
+                print(f"fingerprint unavailable: {a.commit} is not a readable commit", file=sys.stderr)
+                return 1
+            print(f"fingerprint: {fp}")
+            print(f"commit: {(git(root, 'rev-parse', a.commit) or '').strip()}")
+            return 0
+        fp = fingerprint(root, {})
+        if fp.startswith("unavailable-"):
+            print("fingerprint unavailable: git could not hash the working tree", file=sys.stderr)
+            return 1
+        print(f"fingerprint: {fp}")
+        print(f"head: {(git(root, 'rev-parse', 'HEAD') or '').strip() or 'none'}")
+        print(f"A reviewer ends its result with a REVIEW RESULT block that includes 'Reviewed: {fp}'.")
         return 0
     if a.cmd == "list" and a.all:
         found = False
@@ -987,7 +1131,10 @@ def main(argv=None) -> int:
             return 1
         print(render(root, t, detail=True))
         return 0
-    if a.cmd == "complete":
+    if a.cmd == "note":
+        ok = add_note(root, key, " ".join(a.text)) is not None
+        msg = f"{key}: note recorded (not a task; nothing was changed)" if ok else f"no task {key} in this repository's ledger"
+    elif a.cmd == "complete":
         ok, msg = complete(root, key)
     elif a.cmd == "cancel":
         ok, msg = cancel(root, key)

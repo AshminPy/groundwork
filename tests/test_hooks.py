@@ -104,6 +104,13 @@ def write_tasks(repo: Path, done: bool, change: str = "add-thing") -> None:
     (repo / "openspec" / "changes" / change / "tasks.md").write_text(f"- [x] first\n- {box} second\n")
 
 
+def repo_fp(repo: Path) -> str:
+    """The content fingerprint a reviewer reports as `Reviewed:` (groundwork_tasks.py fingerprint)."""
+    out = subprocess.run(["python3", str(HOOKS / "groundwork_tasks.py"), "fingerprint"], cwd=repo,
+                         capture_output=True, text=True, timeout=30).stdout
+    return out.split("fingerprint: ", 1)[1].split()[0]
+
+
 def write_transcript(tmp: Path, name: str, tool_uses: list[dict] | None) -> Path:
     path = tmp / name
     lines = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
@@ -181,23 +188,37 @@ def test_review_gate() -> None:
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(empty_transcript)})
         check("complete + no review -> block", '"decision": "block"' in out and "add-thing" in out, out)
 
-        # 4. complete, Task-shaped reviewer in transcript -> allow
+        # 4. a Task-shaped reviewer whose result names no fingerprint no longer passes on presence alone
         t = write_transcript(tmp, "with-task-review.jsonl", [review_task])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
-        check("complete + Task reviewer -> allow", out == "", out)
-
-        # 5. complete, Skill-shaped reviewer in transcript -> allow
-        t = write_transcript(tmp, "with-skill-review.jsonl", [review_skill])
+        check("complete + Task reviewer without a REVIEW RESULT -> block", '"decision": "block"' in out
+              and "no REVIEW RESULT block" in out, out)
+        current = f"REVIEW RESULT\nVerdict: approve\nMust-fix: 0\nReviewed: {repo_fp(repo)}\n"
+        t = write_review_events(tmp, "with-task-review-current.jsonl", [{"kind": "review", "id": "r1", "result": current}])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
-        check("complete + Skill reviewer -> allow", out == "", out)
+        check("complete + Task reviewer naming the current fingerprint -> allow", out == "", out)
 
-        # 6. Agent Team reviewer teammate: Agent call with name, no subagent_type -> allow
-        teammate = {"type": "tool_use", "name": "Agent",
-                    "input": {"name": "security-reviewer", "prompt": "Audit src/auth for MUST FIX findings",
-                              "description": "Audit auth module"}}
-        t = write_transcript(tmp, "with-teammate-review.jsonl", [teammate])
+        # 5. a Skill review runs inside the author's own conversation: not independent, even with a valid block
+        t = write_review_events(tmp, "with-skill-review.jsonl", [
+            {"kind": "review", "id": "s1", "review_name": "Skill", "input": {"skill": "ecc:orch-review"}, "result": current}])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
-        check("complete + reviewer teammate by name -> allow", out == "", out)
+        check("complete + Skill review only -> block as not independent", '"decision": "block"' in out
+              and "inline as a Skill" in out, out)
+
+        # 6. Agent Team reviewer teammate: Agent call with name, no subagent_type, naming the current fingerprint -> allow
+        teammate_input = {"name": "security-reviewer", "prompt": "Audit src/auth for MUST FIX findings",
+                          "description": "Audit auth module"}
+        t = write_review_events(tmp, "with-teammate-review.jsonl", [
+            {"kind": "review", "id": "m1", "review_name": "Agent", "input": teammate_input, "result": current}])
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("complete + reviewer teammate by name, current fingerprint -> allow", out == "", out)
+
+        # 6b. the code changes after the review: the approval is stale
+        (repo / "app.py").write_text("print('changed after review')\n")
+        out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
+        check("code changed after review -> block as stale, naming both fingerprints", '"decision": "block"' in out
+              and "stale" in out and repo_fp(repo) in out, out)
+        (repo / "app.py").unlink()
 
         # 7. "review" only in the free-text description (e.g. an early Explore call) -> still BLOCK
         by_desc = {"type": "tool_use", "name": "Agent",
@@ -284,14 +305,15 @@ def test_review_gate_must_fix_strengthening() -> None:
             return repo
         fresh_repo.n = 0
 
-        clean_result = "Looks good.\n\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\n"
+        def clean_result(repo):
+            return f"Looks good.\n\nREVIEW RESULT\nVerdict: approve\nMust-fix: 0\nReviewed: {repo_fp(repo)}\n"
         problem_result = "Found issues.\n\nREVIEW RESULT\nVerdict: changes-required\nMust-fix: 2\nFindings: null check, timeout\n"
 
         # 1. Single review, structured block, Must-fix: 0 -> allow (explicit structured case,
         #    distinct from the legacy no-block cases already covered in test_review_gate).
         repo = fresh_repo()
         t = write_review_events(tmp, "clean.jsonl", [
-            {"kind": "review", "id": "r1", "result": clean_result},
+            {"kind": "review", "id": "r1", "result": clean_result(repo)},
         ])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
         check("structured Must-fix: 0 -> allow", out == "", out)
@@ -338,7 +360,7 @@ def test_review_gate_must_fix_strengthening() -> None:
             {"kind": "review", "id": "r1", "result": problem_result},
             {"kind": "edit"},
             {"kind": "test"},
-            {"kind": "review", "id": "r2", "result": clean_result},
+            {"kind": "review", "id": "r2", "result": clean_result(repo)},
         ])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
         check("MUST FIX -> edit -> test -> fresh clean review -> allow", out == "", out)
@@ -357,24 +379,25 @@ def test_review_gate_must_fix_strengthening() -> None:
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
         check("MUST FIX -> fresh review still finds 1 -> block with updated count", '"decision": "block"' in out and "1 unresolved MUST FIX" in out, out)
 
-        # 7. Reviewer does not emit a REVIEW RESULT block at all (most reviewers don't know this
-        #    format yet) -> degrades to legacy presence-only behavior -> allow, never stricter
-        #    than the pre-2.0 gate.
+        # 7. Reviewer does not emit a REVIEW RESULT block at all -> block: a review that names
+        #    no fingerprint cannot be tied to the current code.
         repo = fresh_repo()
         t = write_review_events(tmp, "no-block-at-all.jsonl", [
             {"kind": "review", "id": "r1", "result": "Looks fine to me, no notes."},
         ])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
-        check("reviewer emits no REVIEW RESULT block -> legacy allow", out == "", out)
+        check("reviewer emits no REVIEW RESULT block -> block, presence alone is not proof",
+              '"decision": "block"' in out and "no REVIEW RESULT block" in out, out)
 
         # 8. Reviewer's tool_result never appears in the transcript at all (e.g. truncated/lag) ->
-        #    same graceful legacy fallback, not a crash or an incorrect block.
+        #    block with the same correctable message, never a crash.
         repo = fresh_repo()
         t = write_review_events(tmp, "no-result-at-all.jsonl", [
             {"kind": "review", "id": "r1", "result": None},
         ])
         out = run_hook(REVIEW_HOOK, {"cwd": str(repo), "transcript_path": str(t)})
-        check("review call with no tool_result at all -> legacy allow, no crash", out == "", out)
+        check("review call with no tool_result at all -> block, no crash",
+              '"decision": "block"' in out and "no REVIEW RESULT block" in out, out)
 
         # 9. A non-test Bash command after a MUST FIX finding must NOT count as "validation re-run".
         repo = fresh_repo()

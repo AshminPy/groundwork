@@ -54,7 +54,13 @@ groundwork task complete COR-123
 groundwork task cancel COR-123
 groundwork task block COR-123 "waiting for the network team"   # or --clear
 groundwork task intake "deploy the cache to production"        # record work the intake missed
+groundwork task note COR-123 "the retry helper has a stale TODO"  # record an unrelated finding; no task, no change
+groundwork task fingerprint     # the content fingerprint a reviewer reports as `Reviewed:` (--commit REV for a commit)
 ```
+
+`show` and `complete` also print scope warnings: changed files the plan never names, and TODO or FIXME lines added
+since the task started. They are warnings only. A file changed to clear a genuine blocker is fine once the plan says
+why; otherwise revert it and record it as a note. Running several tasks at once: [COORDINATION.md](COORDINATION.md).
 
 A new session sees each open task as one line: `KEY [phase n/m] title · evidence: … · next: …`.
 
