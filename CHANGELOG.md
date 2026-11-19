@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 2.6.0 — 2026-11-19
+
+Groundwork 2.6.0 binds independent review to the exact code it covered, checks it again in CI, checks cited files
+and lines in replies, and adds scope warnings and one definition of the permission tiers. Notes and evidence:
+[docs/RELEASE-REPORT-2.6.md](docs/RELEASE-REPORT-2.6.md).
+
+**Upgrade**: `groundwork update`, or `git pull` and `./setup.sh` (or `./install.sh`) from a clone. Then start a new
+Claude Code session.
+
+**Not yet verified**: the end-to-end coordination demo (`docs/COORDINATION.md`) and the comparative benchmark
+(`openspec/changes/harden-autonomy-evidence-review/benchmark.md`) have not run. Both are remaining work.
+
+- **Test isolation.** The CLI test suite no longer rewrites the real `~/Library/LaunchAgents` report job: it runs
+  with `GROUNDWORK_NO_LAUNCHCTL=1` and a temporary `GROUNDWORK_LAUNCH_AGENTS_DIR`.
 
 - **Reliability, evidence and review hardening** (`openspec/changes/harden-autonomy-evidence-review/`):
   - A review counts only from a reviewer subagent whose REVIEW RESULT block reports `Must-fix: 0` and names the
