@@ -326,6 +326,20 @@ def validate_config(cfg: dict) -> list[str]:
                 problems.append(f"routines: unknown routine '{name}' (known: {sorted(KNOWN_ROUTINES)})")
                 continue
             _validate_routine(name, rc, problems)
+    dr = cfg.get("decision_records")
+    if dr is not None:
+        if not isinstance(dr, dict):
+            problems.append("decision_records must be an object")
+        else:
+            for k in dr:
+                if k not in ("work_dir", "personal_dir", "work_roots"):
+                    problems.append(f"decision_records: unknown key '{k}' (known: personal_dir, work_dir, work_roots)")
+            for k in ("work_dir", "personal_dir"):
+                if k in dr and not (isinstance(dr[k], str) and dr[k].strip()):
+                    problems.append(f"decision_records.{k} must be a non-empty path")
+            roots = dr.get("work_roots", [])
+            if not (isinstance(roots, list) and all(isinstance(r, str) and r.strip() for r in roots)):
+                problems.append("decision_records.work_roots must be a list of paths")
     store = cfg.get("openspec_store")
     if store not in (None, "") and not (isinstance(store, str) and STORE_ID_RE.match(store)):
         problems.append(f"openspec_store: '{store}' is not a store id (kebab-case: lowercase letters, numbers, single hyphens)")

@@ -5,13 +5,14 @@ settings file, without touching anything else the user has configured.
 Idempotent: safe to run repeatedly (on install, update, or re-run). Never overwrites
 the file wholesale — only adds/updates the specific keys Groundwork owns:
   - hooks.PreToolUse / hooks.Stop / hooks.SessionStart / hooks.PostToolUse /
-    hooks.PostToolUseFailure / hooks.UserPromptSubmit:
-    appends Groundwork's fifteen hook entries (seven hook scripts;
+    hooks.PostToolUseFailure / hooks.UserPromptSubmit /
+    hooks.PreCompact: appends Groundwork's nineteen hook entries (eight hook scripts;
     groundwork_telemetry.py is registered three times — Stop for its per-turn
     record, PostToolUse/PostToolUseFailure for its per-tool-call record —
     groundwork_task_gate.py four times, see TASK_GATE_EVENTS,
     groundwork_reply_check.py twice, see REPLY_CHECK_EVENTS, and
-    groundwork_brief.py three times, see BRIEF_EVENTS) if not already
+    groundwork_brief.py three times, see BRIEF_EVENTS, and groundwork_decisions.py four times,
+    see DECISIONS_EVENTS) if not already
     present (matched by command string, so re-running never duplicates). A task-gate
     entry left by an older install under an event no longer listed is removed.
   - permissions.deny: adds Groundwork's destructive-command deny patterns, skipping
@@ -76,6 +77,15 @@ BRIEF_EVENTS = (  # (event, timeout seconds, status message)
     ("SessionStart", 10, "Loading Groundwork task brief..."),
     ("PreCompact", 10, "Saving Groundwork task brief..."),
     ("Stop", 10, "Updating Groundwork task brief..."),
+)
+# Decision records (docs/DECISION-RECORDS.md): load, capture the owner's messages and gate Stop. The per-tool checks
+# run inside the task gate, so they add no process per tool call.
+DECISIONS_CMD = "python3 ~/.claude/hooks/groundwork_decisions.py"
+DECISIONS_EVENTS = (  # (event, timeout seconds, status message)
+    ("UserPromptSubmit", 10, "Loading Groundwork decision record..."),
+    ("SessionStart", 10, "Loading Groundwork decision record..."),
+    ("PreCompact", 20, "Saving owner messages to the decision record..."),
+    ("Stop", 10, "Checking Groundwork decision record..."),
 )
 STATUSLINE_CMD = "python3 ~/.claude/groundwork/bin/groundwork_statusline.py"
 STATUSLINE_VALUE = {"type": "command", "command": STATUSLINE_CMD}
@@ -275,6 +285,11 @@ def merge(data: dict, agent_teams: bool = False, profile: str | None = None) -> 
         if not has_command(groups, BRIEF_CMD):
             groups.append(hook_entry(BRIEF_CMD, message, timeout=timeout))
             changed.append(f"hooks.{event}: groundwork_brief.py")
+    for event, timeout, message in DECISIONS_EVENTS:
+        groups = hooks.setdefault(event, [])
+        if not has_command(groups, DECISIONS_CMD):
+            groups.append(hook_entry(DECISIONS_CMD, message, timeout=timeout))
+            changed.append(f"hooks.{event}: groundwork_decisions.py")
     for event in RETIRED_TASK_GATE_EVENTS:
         if has_command(hooks.get(event, []), TASK_GATE_CMD):
             drop_command(hooks, event, TASK_GATE_CMD)

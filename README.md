@@ -310,6 +310,7 @@ groundwork/
 │   ├── task-routing.md                one category per task → one playbook; Playbook/Routine/Role/Skill/Tool (§4)
 │   └── output-contract.md             three-layer response shape, checklist style, Harness metadata block
 ├── playbooks/                         ten per-category workflows, read on demand (installed to ~/.claude/groundwork/playbooks/)
+├── commands/decision.md               the `/decision` command (installed to ~/.claude/commands/)
 ├── hooks/
 │   ├── block_protected_push.py        denies push to main/master/production + force-push
 │   ├── require_material_review.py     denies finishing a MATERIAL change without a fresh independent review reporting Must-fix: 0
@@ -317,6 +318,7 @@ groundwork/
 │   ├── groundwork_telemetry.py        Stop: one schema-2 JSONL record per tool-using task (observed vs declared); PostToolUse/PostToolUseFailure: one minimal per-tool-call record (tool, category, success) to a sibling file — both fail-open
 │   ├── groundwork_task_gate.py        task tracking: intake on each prompt, Claude Code's permission prompt before sensitive actions, evidence recording
 │   ├── groundwork_tasks.py            task ledger, plan reader and the `groundwork task` CLI; imported by the task gate, not a hook itself
+│   ├── groundwork_decisions.py        per-task decision records and the `groundwork decision` CLI: load, owner-message capture, Stop and outward-action gates
 │   └── groundwork_shared.py           helpers shared by the hooks above (dirty-change detection, test-command detection); not a hook itself
 ├── scripts/
 │   ├── groundwork_cli.py              the `groundwork` command: one entry point that dispatches to the scripts below
@@ -333,6 +335,7 @@ groundwork/
 │   └── migrate_legacy_rules.py        moves a pre-Groundwork rules/harness copy to a backup
 ├── tests/                             deterministic, no model calls: run any file directly or `python3 -m pytest tests -q`
 │   ├── test_hooks.py                  hooks, settings merge/unmerge, legacy migration
+│   ├── test_decision_records.py       decision records (format, approval, capture, Stop and outward-action gates, brief link)
 │   ├── test_playbooks.py              routing rule, playbooks, output contract, install.sh / uninstall.sh
 │   ├── test_telemetry.py              telemetry hook (classifier, privacy, tail read, fail-open)
 │   ├── test_report.py                 dashboard generator (metrics, filters, Python↔JS parity, schedules)

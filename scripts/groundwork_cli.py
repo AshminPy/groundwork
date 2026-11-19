@@ -66,6 +66,8 @@ INSTALLED_COPILOT_PY = CLAUDE_DIR / "groundwork" / "bin" / "groundwork_copilot.p
 # `task` is the same kind of pass-through to the task ledger (openspec/changes/add-task-lifecycle-gate/). It lives in
 # hooks/ because the task gate hook imports it as a sibling module; one installed copy serves both.
 INSTALLED_TASKS_PY = CLAUDE_DIR / "hooks" / "groundwork_tasks.py"
+# `decision` passes through to the decision records (docs/DECISION-RECORDS.md), also a sibling of the hooks.
+INSTALLED_DECISIONS_PY = CLAUDE_DIR / "hooks" / "groundwork_decisions.py"
 
 
 def _read_version() -> str | None:
@@ -178,6 +180,15 @@ def cmd_task(extra_argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_decision(extra_argv: list[str]) -> int:
+    if not INSTALLED_DECISIONS_PY.exists():
+        print(f"decision: {INSTALLED_DECISIONS_PY} not found — is Groundwork installed? "
+              "(re-run install.sh, or run hooks/groundwork_decisions.py directly from a repo clone)", file=sys.stderr)
+        return 1
+    result = subprocess.run([sys.executable, str(INSTALLED_DECISIONS_PY), *extra_argv])
+    return result.returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="groundwork",
@@ -237,6 +248,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="engineering task tracking: list/show/complete/cancel/block (see 'groundwork task --help')",
         add_help=False,
     )
+    sub.add_parser(
+        "decision",
+        help="per-task decision records: create/add/state/waiting/close/show/list (see 'groundwork decision --help')",
+        add_help=False,
+    )
     return parser
 
 
@@ -260,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_copilot(argv[1:])
     if argv and argv[0] == "task":
         return cmd_task(argv[1:])
+    if argv and argv[0] == "decision":
+        return cmd_decision(argv[1:])
     if argv and argv[0] == "usage":
         return cmd_usage(argv[1:])
     parser = build_parser()

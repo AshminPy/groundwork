@@ -167,6 +167,13 @@ def git_facts(cwd: str, session_id: str, event: str, tools: list) -> list:
         facts.append(f"uncommitted files: {len([ln for ln in status.splitlines() if ln.strip()])}")
     if tools:
         facts.append("tools in the last turn: " + ", ".join(tools[:12]))
+    try:
+        from groundwork_decisions import active_record_path  # the task's decision record (docs/DECISION-RECORDS.md)
+        record = active_record_path(cwd, session_id)
+    except Exception:
+        record = None
+    if record:
+        facts.append(f"decision record: {clean(str(record))}")
     return facts
 
 

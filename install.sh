@@ -99,9 +99,13 @@ chmod +x "$CLAUDE_DIR"/hooks/block_protected_push.py \
          "$CLAUDE_DIR"/hooks/groundwork_task_gate.py \
          "$CLAUDE_DIR"/hooks/groundwork_tasks.py \
          "$CLAUDE_DIR"/hooks/groundwork_reply_check.py \
-         "$CLAUDE_DIR"/hooks/groundwork_brief.py
+         "$CLAUDE_DIR"/hooks/groundwork_brief.py \
+         "$CLAUDE_DIR"/hooks/groundwork_decisions.py
 # Earlier builds installed owner commands /gw-approve and /gw-cancel; task tracking no longer uses them.
 rm -f "$CLAUDE_DIR/commands/gw-approve.md" "$CLAUDE_DIR/commands/gw-cancel.md"
+# /decision: create a task's decision record, or append an owner-approved entry (docs/DECISION-RECORDS.md).
+mkdir -p "$CLAUDE_DIR/commands"
+cp "$HERE/commands/decision.md" "$CLAUDE_DIR/commands/decision.md"
 # Health dashboard generator (no server, no LLM): installed beside the playbooks; the configured
 # launchd schedule (default weekly) is applied idempotently — one job, replaced on every install.
 mkdir -p "$CLAUDE_DIR/groundwork/bin" "$CLAUDE_DIR/groundwork/reports"

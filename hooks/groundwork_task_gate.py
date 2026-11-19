@@ -47,6 +47,10 @@ else:
         from require_material_review import pr_review_problem
     except Exception:
         pr_review_problem = None
+try:
+    import groundwork_decisions as gd  # decision records: per-tool gate and bookkeeping (docs/DECISION-RECORDS.md)
+except Exception:
+    gd = None
 
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 READ_TOOLS = {"Read", "NotebookRead", "Grep"}
@@ -1274,12 +1278,14 @@ PROTECTED_READERS = {"cat", "ls", "grep", "rg", "head", "tail", "jq", "less", "w
 def _task_cli(argv: list[str]) -> bool:
     """Groundwork's own task CLI (`groundwork task …`, or python3 running the installed groundwork_tasks.py): it
     writes the ledger only through its own checks, so running it never asks (found in the live run)."""
-    if argv[:2] == ["groundwork", "task"]:
+    if argv[:2] in (["groundwork", "task"], ["groundwork", "decision"]):
         return True
     if len(argv) >= 2 and os.path.basename(argv[0]).startswith("python"):
         script = os.path.realpath(os.path.expanduser(os.path.expandvars(argv[1])))
-        return script in {os.path.realpath(str(gt.claude_dir() / "hooks" / "groundwork_tasks.py")),
-                          os.path.realpath(gt.__file__)}
+        mods = [gt] + ([gd] if gd else [])
+        return script in {os.path.realpath(str(gt.claude_dir() / "hooks" / n))
+                          for n in ("groundwork_tasks.py", "groundwork_decisions.py")} | {
+                              os.path.realpath(m.__file__) for m in mods}
     return False
 
 
@@ -1427,12 +1433,21 @@ def on_pre(data: dict) -> None:
     ti = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
     cwd = data.get("cwd") or os.getcwd()
     try:
+        try:
+            verdict = gd.pre_tool(data, split_segments) if gd else None
+        except Exception:
+            verdict = None  # decision records fail open; they never turn every tool call into a prompt
+        if verdict and verdict[0] == "deny":
+            deny(verdict[1])
+        # A decision-record "ask" waits until the checks below ran: their deny (or ask) wins.
         if tool in FILE_TOOLS or tool in READ_TOOLS:
             check_file(tool, str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""), cwd)
         elif tool in COMMAND_TOOLS and isinstance(ti.get("command"), str):
             check_command(ti["command"], cwd, str(data.get("transcript_path") or ""))
         elif tool == "PowerShell" and isinstance(ti.get("command"), str):
             ask("PowerShell commands are not parsed, so Groundwork cannot tell what this one does.")
+        if verdict:
+            ask(verdict[1])
     except SystemExit:
         raise
     except Exception as exc:
@@ -1453,17 +1468,19 @@ def _credential_read(label: str) -> bool:
 def on_post(data: dict) -> None:
     tool = str(data.get("tool_name") or "")
     event = str(data.get("hook_event_name") or "PostToolUse")
-    if tool not in COMMAND_TOOLS and tool not in ("Agent", "Task"):
-        return
+    try:
+        note = gd.post_tool(data) if gd else None
+    except Exception:
+        note = None  # bookkeeping must never break the evidence hook
     cwd = data.get("cwd") or os.getcwd()
-    root = gt.repo_root(cwd)
-    if not root:
-        return
-    tasks = gt.open_tasks(root)
+    root = gt.repo_root(cwd) if tool in COMMAND_TOOLS or tool in ("Agent", "Task") else None
+    tasks = gt.open_tasks(root) if root else []
     if not tasks:
+        if note:
+            add_context(event, "[Groundwork] " + note)
         return
     ti = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    notes = []
+    notes = [note] if note else []
     if isinstance(ti.get("command"), str):
         segs = split_segments(ti["command"]) or []
         resp = data.get("tool_response") if isinstance(data.get("tool_response"), dict) else {}

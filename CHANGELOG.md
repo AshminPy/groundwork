@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Decision records** (`docs/DECISION-RECORDS.md`): one Markdown record per task key, `<KEY> - <title> -
+  decisions.md`, in a configurable folder (`decision_records` in `config.json`). It holds the current state,
+  numbered append-only decisions, rejected options, what the task is waiting on, standing rules, and the owner's own
+  messages. Hooks enforce it:
+  - A turn on a task key (from the branch or a prompt) cannot end without a record, and a reply that ends waiting on
+    someone cannot end with Waiting on empty.
+  - The record loads at session start, after compaction and when a prompt first names the key.
+  - The owner's messages are copied into the record before compaction and after each turn, with secret-shaped text
+    redacted.
+  - Every entry Claude writes goes through Claude Code's permission prompt, and existing entries cannot be edited.
+  - git push, pull-request, Jira, email and chat actions are denied until the record is updated after the owner's
+    latest message; the denial lists the rejected options and standing rules.
+  - Moving a ticket to "Good for review" closes the record. The branch brief links to it.
+  - New `/decision` command and `groundwork decision` CLI. Turn it off with `GROUNDWORK_DECISIONS=off`.
+
 ## 2.6.0 — 2026-11-19
 
 Groundwork 2.6.0 binds independent review to the exact code it covered, checks it again in CI, checks cited files
