@@ -17,7 +17,9 @@ place.
   the review makes it stale. Inline Skill reviews and the author's own text do not count.
 - **Pull request review.** A non-draft `gh pr create` / `gh pr new`, or a `gh pr edit` that sets the description, is
   denied until such a review covers the commit being published. The new `review-check` workflow fails a PR whose
-  description does not record an approval of its head. `main` requires that check from GitHub Actions.
+  description does not record an approval of its head. It blocks merging only once the repository requires it as a
+  status check from GitHub Actions (`.github/rulesets/protect-main.json`, applied by the owner; see
+  `docs/PERMISSIONS.md`).
 - **Citation check.** When a reply cites a repository file that does not exist, or a line past the end of a file,
   Claude is asked once to correct it.
 - **Scope control.** `groundwork task note` records an unrelated finding without starting work on it. `show` and
